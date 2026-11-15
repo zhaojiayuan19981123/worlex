@@ -14884,6 +14884,7 @@ a { color: #176b87; }
           <span class="bk-name" title="${esc(b.name)}">${esc(fmtBackupName(b.name))}</span>
           <span class="bk-size">${fmtBytes(b.size)}</span>
           <button class="tb-btn" data-bkrestore="${esc(b.name)}">恢复</button>
+          <button class="tb-btn danger" data-bkdel="${esc(b.name)}" title="删除这份备份，释放磁盘空间">删除</button>
         </div>`).join('')}</div>`;
       wrap.querySelectorAll('[data-bkrestore]').forEach((btn) => btn.addEventListener('click', async () => {
         const name = btn.dataset.bkrestore;
@@ -14898,6 +14899,15 @@ a { color: #176b87; }
           await Promise.all([loadItems(), loadSettings(), loadCollections(), loadWorkbenchData(), loadModels()]);
           renderModelSwitcher(); render(); loadBackupList();
         } catch (e) { toast('恢复失败：' + e.message, 'error'); }
+      }));
+      wrap.querySelectorAll('[data-bkdel]').forEach((btn) => btn.addEventListener('click', async () => {
+        const name = btn.dataset.bkdel;
+        if (!confirm(`确认删除备份「${fmtBackupName(name)}」？\n\n备份里含附件时可能占几百 MB，删除后无法恢复。`)) return;
+        try {
+          await api('/api/backup/' + encodeURIComponent(name), { method: 'DELETE' });
+          toast('已删除备份', 'success');
+          loadBackupList();
+        } catch (e) { toast('删除失败：' + e.message, 'error'); }
       }));
     } catch (e) {
       wrap.innerHTML = `<div class="bk-empty">读取失败：${esc(e.message)}</div>`;
@@ -15206,7 +15216,10 @@ a { color: #176b87; }
     },
     isReaderOpen: () => !!pr.open,
     refreshItems: () => loadItems(),
-    /** 框选任意内容 → 附上图与文字 → 直接送进「AI 助读」提问 */
+    /**
+     * 框选任意内容 → 只把截图放进「AI 助读」的输入区，**不自动提问**。
+     * 用户要自己写问题、自己按发送，模型才开始分析（框选只是准备素材）。
+     */
     sendRegionToChat: (opts) => {
       const o = opts || {};
       if (!isLiteratureSource()) { toast('请先从文献中心打开一篇文献再框选送 AI', 'error'); return; }
@@ -15217,12 +15230,12 @@ a { color: #176b87; }
       }
       const input = $('prChatInput');
       if (input) {
-        input.value = `请分析我框选的内容（第 ${o.page || 1} 页）：\n${String(o.text || '').slice(0, 1500)}`;
-        input.style.height = 'auto';
-        input.style.height = Math.min(160, input.scrollHeight) + 'px';
+        input.focus();
+        // 光标放到末尾，不覆盖用户已经写了一半的问题
+        const n = input.value.length;
+        try { input.setSelectionRange(n, n); } catch (_) { /* 非文本框时忽略 */ }
       }
-      if (o.autoSend) Promise.resolve(sendPrChat()).catch(() => {});
-      else input?.focus();
+      toast(`已放入第 ${o.page || 1} 页的框选截图，写好问题后发送`, 'success');
     },
   };
   window.SelectionLayer?.bind?.();

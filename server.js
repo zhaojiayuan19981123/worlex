@@ -19,7 +19,7 @@ import {
   DOC_TYPE_LABELS as DOC_TYPE_LABEL_MAP,
 } from './src/aiExtractor.js';
 // v2.1.0 本地知识库：跨文库统一索引、主题聚类、文献关系图
-import { buildIndex, searchEntries, buildEvidenceBlock, readKnowledgeFullText } from './src/knowledgeBase.js';
+import { buildIndex, searchEntries, buildEvidenceBlock, createFullTextReader } from './src/knowledgeBase.js';
 import { buildGraph, mergeTags } from './src/knowledgeGraph.js';
 import { createParseTracker } from './src/parseProgress.js';
 import { detectDocLanguage } from './src/docLanguage.js';
@@ -1467,21 +1467,49 @@ export function createApp({
   let kbGraphCache = buildGraph(kbIndex);
   let kbTimer = null;
 
+  function knowledgeFile() {
+    return path.join(store.getDataDir(), 'knowledge-base.json');
+  }
+
   function persistKnowledge() {
     try {
-      const file = path.join(store.getDataDir(), 'knowledge-base.json');
+      const file = knowledgeFile();
       const tmp = file + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify({ index: kbIndex, graph: kbGraphCache }, null, 2), 'utf8');
+      // 派生数据不必美化：compact 比 2 空格缩进少 30% 体积，写盘也更快
+      fs.writeFileSync(tmp, JSON.stringify({ index: kbIndex, graph: kbGraphCache }), 'utf8');
       fs.renameSync(tmp, file);
     } catch (_) { /* 索引是可重建的派生数据，写盘失败不影响使用 */ }
+  }
+
+  /** 启动时先读现成索引：省掉一次几秒的全量重建，窗口能立刻用。 */
+  function loadPersistedKnowledge() {
+    try {
+      const data = JSON.parse(fs.readFileSync(knowledgeFile(), 'utf8'));
+      if (!data || !data.index || !Array.isArray(data.index.entries)) return false;
+      kbIndex = data.index;
+      kbGraphCache = data.graph && Array.isArray(data.graph.nodes) ? data.graph : buildGraph(kbIndex);
+      return true;
+    } catch (_) { return false; }
+  }
+
+  /** 持久化索引是否落后于 literature.json（离线期间改过文献 → 后台补一次重建）。 */
+  function knowledgeStale() {
+    try {
+      const dir = store.getDataDir();
+      const kbAt = fs.statSync(knowledgeFile()).mtimeMs;
+      const litAt = fs.statSync(path.join(dir, 'literature.json')).mtimeMs;
+      return litAt > kbAt;
+    } catch (_) { return true; }
   }
 
   function rebuildKnowledge() {
     try {
       const dir = store.getDataDir();
+      // 读取器复用同一个 layout 目录索引：107 篇文献从 4.5s 降到百毫秒级
+      const readFullText = createFullTextReader(dir);
       kbIndex = buildIndex(store.listLiterature(), {
         now: new Date().toISOString(),
-        readFullText: (it) => readKnowledgeFullText(dir, it),
+        readFullText,
       });
       kbGraphCache = buildGraph(kbIndex);
       persistKnowledge();
@@ -1521,7 +1549,13 @@ export function createApp({
     res.json({ hits: searchEntries(kbIndex, q, limit) });
   });
   app.get('/api/knowledge/graph', (_req, res) => res.json(kbGraphCache));
-  rebuildKnowledge();
+  // 先尝试用上次的索引直接可用；只有「没有索引」或「索引落后于文献」才重建。
+  // 落后时放到事件循环空闲处重建，不挡启动（旧版在 listen 之前同步跑 5 秒）。
+  if (!loadPersistedKnowledge()) {
+    rebuildKnowledge();
+  } else if (knowledgeStale()) {
+    setTimeout(() => { try { rebuildKnowledge(); } catch (_) { /* 已在上层兜底 */ } }, 1500).unref?.();
+  }
 
   const browserUpdateStatus = {
     supported: false,
@@ -4086,6 +4120,16 @@ export function createApp({
     res.json({ ok: true, dir, backups: store.listBackups() });
   });
 
+  // 删除某个旧备份：备份里带着 600MB 附件时，攒十几份会吃掉几 GB 磁盘
+  app.delete('/api/backup/:name', (req, res) => {
+    try {
+      store.deleteBackup(req.params.name);
+      res.json({ ok: true, backups: store.listBackups() });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   app.post('/api/backup/restore', (req, res) => {
     const name = String(req.body?.name || '');
     if (!name) return res.status(400).json({ error: '请指定要恢复的备份' });
@@ -5049,13 +5093,17 @@ export async function startServer(options = {}) {
 
   // 启动时自动做一份数据快照：覆盖安装 / 升级 / 误操作后都能从「设置 → 数据备份」找回。
   // 至少间隔 6 小时才再建一份，避免频繁重启把备份位刷掉。
-  try {
-    const backups = store.listBackups();
-    const newest = backups[0];
-    const recent = newest && (Date.now() - new Date(fs.statSync(newest.path).mtime).getTime() < 6 * 3600 * 1000);
-    if (!recent) store.createBackup('startup');
-  } catch (e) {
-    console.error('[备份] 启动自动备份失败（忽略）：', e.message);
+  // 注意：这一步**必须等服务起来之后**再做。以前它在 app.listen 之前同步跑，
+  // 备份里含 uploads（600MB+），窗口已经显示但请求全部排队，表现就是「打开就卡」。
+  function startupBackup() {
+    try {
+      const backups = store.listBackups();
+      const newest = backups[0];
+      const recent = newest && (Date.now() - fs.statSync(newest.path).mtimeMs < 6 * 3600 * 1000);
+      if (!recent) store.createBackup('startup');
+    } catch (e) {
+      console.error('[备份] 启动自动备份失败（忽略）：', e.message);
+    }
   }
 
   app.get('/', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
@@ -5072,6 +5120,8 @@ export async function startServer(options = {}) {
 
   return new Promise((resolve) => {
     const server = app.listen(port, '127.0.0.1', () => {
+      // 空闲时再做启动快照，别和首屏请求抢主线程与磁盘
+      setTimeout(startupBackup, 2500).unref?.();
       resolve({
         server, port: server.address().port, app,
         gateway: startGateway ? localGatewayServer : null,

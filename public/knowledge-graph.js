@@ -13,14 +13,17 @@
   'use strict';
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
-  const FRAMES = 180;            // 稳定前迭代帧数
+  const FRAMES = 120;            // 稳定前迭代帧数（180 帧时大图要晃 6 秒，缩到 120 更跟手）
   const REPULSION = 5200;        // 库仑斥力系数
   const SPRING_K = 0.018;        // 弹簧系数
   const DAMPING = 0.84;          // 速度阻尼
   const MAX_V = 14;              // 单帧最大位移
-  const CLUSTER_K = 0.008;       // 向簇中心引力
+  const CLUSTER_K = 0.022;       // 向簇中心引力（簇要收得紧，才不会糊成一团）
   const CENTER_K = 0.0012;       // 向画布中心引力
   const TOPIC_COLORS = 8;        // 主题色数量（与 CSS 的 .t0~.t7 对应）
+  const LABEL_MAX = 14;          // 主题标签最多显示几个字（超出以省略号收尾）
+  const LABEL_GAP = 6;           // 标签与簇边界的最小间距
+  const LABEL_LINE = 15;         // 标签行高，用于避让时上下错开
 
   // ==================== 全局桥与兜底 ====================
 
@@ -468,12 +471,20 @@
     for (const c of S.clusters) {
       const hull = svg('circle', { class: 'kg-hull', r: 60 });
       const label = svg('text', { class: 'kg-topic-label', 'text-anchor': 'middle' });
-      label.textContent = c.label;
+      // 长标签截断显示，完整名称放进 title：图谱里一行放不下两串长中文
+      c.labelText = labelTextOf(c.label);
+      c.labelW = estTextWidth(c.labelText);
+      label.textContent = c.labelText;
+      const tip = svg('title');
+      tip.textContent = `${c.label}（${c.count} 篇）`;
+      label.appendChild(tip);
       r.clustersG.appendChild(hull);
       r.clustersG.appendChild(label);
       c.hull = hull;
       c.labelEl = label;
     }
+    // 节点多的时候把连线压淡，否则一层网把主题分区糊掉
+    S.root?.classList.toggle('kg-dense', S.nodes.length > 70);
 
     // 关系边
     for (const e of S.edges) {
@@ -519,33 +530,75 @@
 
   // ==================== 力导向布局 ====================
 
+  /** 文字宽度估算（12px UI 字体）：只为标签避让服务，不必精确到像素。 */
+  function estTextWidth(text) {
+    let w = 0;
+    for (const ch of String(text || '')) {
+      w += /[\u2e80-\u9fff\uff00-\uffef]/.test(ch) ? 12 : 6.6;
+    }
+    return w;
+  }
+
+  function labelTextOf(label) {
+    const s = String(label || '').trim();
+    if (!s) return '未命名主题';
+    return s.length > LABEL_MAX ? `${s.slice(0, LABEL_MAX)}…` : s;
+  }
+
+  /**
+   * 簇的位置与「自家地盘半径」：按成员数开方定半径，再按行列网格分配到画布。
+   *
+   * 旧版把所有簇中心摆在同一个半径 0.3·min(W,H) 的圆上，簇半径却有 200px，
+   * 结果所有簇互相重叠、标签全挤在画面中间。改成网格分区后，每个簇各占一格，
+   * 节点被限制在自家半径内，标签自然分开。
+   */
   function layoutCenters() {
     const W = S.W || 800;
     const H = S.H || 600;
-    const cx = W / 2;
-    const cy = H / 2;
-    const m = S.clusters.length;
-    const ring = m <= 1 ? 0 : Math.max(60, Math.min(W, H) * 0.3);
-    S.clusters.forEach((c, i) => {
-      const a = (2 * Math.PI * i) / Math.max(1, m) - Math.PI / 2;
-      c.x = cx + ring * Math.cos(a);
-      c.y = cy + ring * Math.sin(a);
+    const active = S.clusters.filter((c) => c.nodes && c.nodes.length);
+    const m = active.length;
+    if (!m) return;
+    const padX = 24;
+    const padY = 30; // 上方多留一点给主题标签
+    const cols = Math.max(1, Math.ceil(Math.sqrt(m)));
+    const rows = Math.max(1, Math.ceil(m / cols));
+    const cellW = Math.max(120, (W - padX * 2) / cols);
+    const cellH = Math.max(120, (H - padY * 2) / rows);
+    active.forEach((c, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      c.x = padX + cellW * (col + 0.5);
+      c.y = padY + cellH * (row + 0.5);
+      // 30 是「看起来像个簇」的下限，sqrt 保证文献多的主题占更大一块
+      const byCount = 30 + Math.sqrt(Math.max(1, c.nodes.length)) * 24;
+      const byCell = Math.min(cellW, cellH) / 2 - 26;
+      c.rTarget = Math.max(34, Math.min(byCount, byCell));
+    });
+    // 没有成员的兜底簇（「其他」）不占格子，放在画布中心但不参与布局
+    S.clusters.forEach((c) => {
+      if (c.nodes && c.nodes.length) return;
+      c.x = W / 2;
+      c.y = H / 2;
+      c.rTarget = 32;
     });
   }
 
   function layoutInit() {
     layoutCenters();
-    let seed = 987654321;
-    const rnd = () => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed / 0x7fffffff;
-    };
     const cx = (S.W || 800) / 2;
     const cy = (S.H || 600) / 2;
+    // 按簇分配初始位置：黄金角螺旋铺在自家地盘里，避免所有节点从中心一个点炸开
+    const seat = new Map();
     S.nodes.forEach((n) => {
       const c = n.cluster;
-      n.x = (c ? c.x : cx) + (rnd() - 0.5) * 90;
-      n.y = (c ? c.y : cy) + (rnd() - 0.5) * 90;
+      const cx0 = c ? c.x : cx;
+      const cy0 = c ? c.y : cy;
+      const k = (seat.get(c) || 0) + 1;
+      seat.set(c, k);
+      const radius = (c && c.rTarget ? c.rTarget * 0.72 : 45) * Math.sqrt(k / Math.max(4, c ? c.nodes.length : 8));
+      const angle = k * 2.399963; // 黄金角，分布均匀且确定
+      n.x = cx0 + Math.cos(angle) * radius;
+      n.y = cy0 + Math.sin(angle) * radius;
       n.vx = 0;
       n.vy = 0;
       n.fixed = false;
@@ -589,7 +642,9 @@
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const rest = 110 - Math.min(50, e.w * 16);
+      // 静止长度跟着簇的地盘走：小簇里还用 110px 会把节点全顶到边上
+      const base = Math.min(110, Math.max(46, (a.cluster && a.cluster.rTarget ? a.cluster.rTarget * 0.8 : 110)));
+      const rest = base - Math.min(28, e.w * 10);
       const f = SPRING_K * (d - rest) * alpha * (0.7 + 0.3 * Math.min(3, e.w));
       const fx = (dx / d) * f;
       const fy = (dy / d) * f;
@@ -616,6 +671,20 @@
       if (sp > MAX_V) { n.vx = n.vx / sp * MAX_V; n.vy = n.vy / sp * MAX_V; }
       n.x += n.vx;
       n.y += n.vy;
+      // 收在自家簇的半径内：簇与簇之间才拉得开，主题标签也不会互相压住
+      if (n.cluster && n.cluster.rTarget) {
+        const c = n.cluster;
+        const dx = n.x - c.x;
+        const dy = n.y - c.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const lim = Math.max(10, c.rTarget - n.r - 2);
+        if (d > lim) {
+          n.x = c.x + (dx / d) * lim;
+          n.y = c.y + (dy / d) * lim;
+          n.vx *= 0.35;
+          n.vy *= 0.35;
+        }
+      }
       if (n.x < pad) { n.x = pad; n.vx *= -0.3; }
       if (n.x > S.W - pad) { n.x = S.W - pad; n.vx *= -0.3; }
       if (n.y < pad) { n.y = pad; n.vy *= -0.3; }
@@ -627,7 +696,9 @@
     if (!S.sim.running) return;
     const alpha = Math.max(0.03, 1 - S.sim.frame / Math.max(1, S.sim.frames));
     stepPhysics(alpha);
-    render();
+    // 节点多的时候隔帧画一次：物理每帧都算，但 DOM 写入减半，动画明显更顺
+    const stride = S.nodes.length > 60 ? 2 : 1;
+    if (S.sim.frame % stride === 0 || S.sim.frame === S.sim.frames - 1) render();
     S.sim.frame += 1;
     if (S.sim.frame < S.sim.frames) {
       S.raf = window.requestAnimationFrame(tick);
@@ -677,6 +748,11 @@
       if (!n.g) continue;
       n.g.setAttribute('transform', `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
     }
+    // 主题标签：先算出每个簇的圈与标签位置，再做一次上下避让，
+    // 避免两个相邻簇的标签落在同一行、糊成一串字。
+    const W = S.W || 800;
+    const occupied = [];
+    const labels = [];
     for (const c of S.clusters) {
       if (!c.hull) continue;
       let max = 46;
@@ -687,14 +763,36 @@
         const d = Math.sqrt(dx * dx + dy * dy) + n.r + 12;
         if (d > max) max = d;
       }
+      // 圈不能大过自家地盘，否则又会压到邻居的节点上
+      if (c.rTarget) max = Math.min(max, c.rTarget + 4);
       c.r = max;
       c.hull.setAttribute('cx', c.x.toFixed(1));
       c.hull.setAttribute('cy', c.y.toFixed(1));
       c.hull.setAttribute('r', max.toFixed(1));
-      if (c.labelEl) {
-        c.labelEl.setAttribute('x', c.x.toFixed(1));
-        c.labelEl.setAttribute('y', Math.max(16, c.y - max - 10).toFixed(1));
+      if (!c.labelEl || c.labelEl.classList.contains('is-hidden')) continue;
+      const lw = Math.min(c.labelW || estTextWidth(c.labelText), W - 24);
+      labels.push({
+        c,
+        lx: Math.min(Math.max(lw / 2 + 8, c.x), W - lw / 2 - 8),
+        ly: Math.max(14, c.y - max - LABEL_GAP),
+        lw,
+      });
+    }
+    labels.sort((a, b) => b.ly - a.ly);
+    for (const L of labels) {
+      let finalY = null;
+      for (let k = 0; k < 5; k++) {
+        const y = L.ly - k * LABEL_LINE;
+        if (y < 12) break;
+        const box = { x1: L.lx - L.lw / 2 - 4, x2: L.lx + L.lw / 2 + 4, y1: y - 12, y2: y + 3 };
+        const hit = occupied.some((o) => box.x1 < o.x2 && box.x2 > o.x1 && box.y1 < o.y2 && box.y2 > o.y1);
+        if (!hit) { finalY = y; occupied.push(box); break; }
       }
+      // 真的放不下就先把这一条藏起来（图谱本身就是按主题分区的，标签只是辅助）
+      L.c.labelEl.classList.toggle('is-crowded', finalY === null);
+      if (finalY === null) continue;
+      L.c.labelEl.setAttribute('x', L.lx.toFixed(1));
+      L.c.labelEl.setAttribute('y', finalY.toFixed(1));
     }
   }
 

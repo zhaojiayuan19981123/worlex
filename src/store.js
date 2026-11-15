@@ -30,6 +30,7 @@ let PAPER_CHATS_FILE = path.join(DATA_DIR, 'paper-chats.json');
 
 export function configure({ dataDir }) {
   if (dataDir) {
+    fileCache.clear(); // 换了数据目录，旧缓存一律作废
     DATA_DIR = dataDir;
     DATA_FILE = path.join(DATA_DIR, 'literature.json');
     SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
@@ -61,11 +62,34 @@ function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+/**
+ * 解析结果缓存（按 文件路径 + mtime + 大小 判定是否还有效）。
+ * literature.json 已有 4MB，一次 JSON.parse 约 20ms；一个请求里
+ * store.listLiterature() 会被调用好几次，逐次重读就是上百毫秒的卡顿来源。
+ * 文件每次都是「写 tmp → rename」，mtime 一定变化，所以缓存不会读到旧数据。
+ */
+const fileCache = new Map();
+
+function fileStamp(file) {
+  try {
+    const st = fs.statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch { return ''; }
+}
+
 function loadFile(file, fallback) {
   try {
-    if (fs.existsSync(file)) {
-      return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (!fs.existsSync(file)) {
+      fileCache.delete(file);
+      return fallback;
     }
+    const stamp = fileStamp(file);
+    const hit = fileCache.get(file);
+    if (hit && hit.stamp === stamp) return Array.isArray(hit.data) ? hit.data.slice() : hit.data;
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    fileCache.set(file, { stamp, data });
+    // 数组浅拷贝：调用方偶尔会就地 sort / splice，别让它改到缓存本身
+    return Array.isArray(data) ? data.slice() : data;
   } catch (e) {
     console.error(`[store] 读取 ${file} 失败：`, e.message);
   }
@@ -75,8 +99,11 @@ function loadFile(file, fallback) {
 function saveFile(file, data) {
   ensureDir();
   const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  const text = JSON.stringify(data, null, 2);
+  fs.writeFileSync(tmp, text, 'utf-8');
   fs.renameSync(tmp, file);
+  // 刚写下去的内容就是最新版，直接回填缓存，省掉下一次读盘 + 解析
+  fileCache.set(file, { stamp: fileStamp(file), data: Array.isArray(data) ? data.slice() : data });
 }
 
 // ==================== 数据备份（防止重装/升级/误操作丢数据） ====================
@@ -145,6 +172,26 @@ function backupFileList() {
   return dataFilePaths().filter((f) => f && fs.existsSync(f));
 }
 
+/**
+ * 递归「复制」目录，优先用硬链接：跨盘 / 文件系统不支持时退回真实复制。
+ * 备份目录与数据目录通常在同一块盘上，链接失败只是慢一点，不会丢数据。
+ */
+function linkTreeSync(src, dst) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const d of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, d.name);
+    const to = path.join(dst, d.name);
+    if (d.isDirectory()) { linkTreeSync(from, to); continue; }
+    if (!d.isFile()) continue;
+    if (fs.existsSync(to)) continue; // 重复备份时保留已有链接
+    try {
+      fs.linkSync(from, to);
+    } catch (_) {
+      try { fs.copyFileSync(from, to); } catch (_) { /* 单个失败跳过 */ }
+    }
+  }
+}
+
 // 生成一份时间戳备份目录，返回目录路径（无数据可备份时返回 null）
 export function createBackup(label = 'auto') {
   try {
@@ -157,10 +204,12 @@ export function createBackup(label = 'auto') {
     for (const f of files) {
       try { fs.copyFileSync(f, path.join(dir, path.basename(f))); } catch (_) { /* 单个失败不影响其他 */ }
     }
-    // 同时把上传的 PDF 目录复制一份（文献附件丢失同样很致命），体积大所以单独 try
+    // 同时把上传的 PDF 目录备份一份（附件丢失同样很致命）。
+    // 用硬链接而不是复制：uploads 有 600MB+，复制一份要几秒并多占 600MB，
+    // 而附件写入后从不修改，硬链接既不占空间也几乎不耗时（同一磁盘内）。
     const uploads = path.join(DATA_DIR, 'uploads');
     if (fs.existsSync(uploads)) {
-      try { fs.cpSync(uploads, path.join(dir, 'uploads'), { recursive: true }); } catch (_) { /* 忽略 */ }
+      try { linkTreeSync(uploads, path.join(dir, 'uploads')); } catch (_) { /* 忽略 */ }
     }
     pruneBackups();
     return dir;
@@ -188,6 +237,33 @@ function pruneBackups() {
   }
 }
 
+/** 目录实际占用（含 uploads 子目录）；硬链接按一次计，避免把共享附件重复算账。 */
+function dirUsage(full) {
+  const seen = new Set();
+  let total = 0;
+  const walk = (dir) => {
+    let list;
+    try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of list) {
+      const p = path.join(dir, d.name);
+      if (d.isDirectory()) { walk(p); continue; }
+      if (!d.isFile()) continue;
+      try {
+        const st = fs.statSync(p);
+        // 硬链接指向同一份数据，只算一次；某些文件系统不给 inode（恒为 0），那就别去重
+        if (st.ino) {
+          const id = `${st.dev}:${st.ino}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
+        total += st.size;
+      } catch { /* 忽略 */ }
+    }
+  };
+  walk(full);
+  return total;
+}
+
 export function listBackups() {
   try {
     const root = getBackupDir();
@@ -196,17 +272,20 @@ export function listBackups() {
       .filter((d) => d.isDirectory())
       .map((d) => {
         const full = path.join(root, d.name);
-        let size = 0;
-        try {
-          size = fs.readdirSync(full).reduce((a, n) => {
-            const st = fs.statSync(path.join(full, n));
-            return a + (st.isFile() ? st.size : 0);
-          }, 0);
-        } catch (_) { /* 忽略 */ }
-        return { name: d.name, path: full, size };
+        return { name: d.name, path: full, size: dirUsage(full) };
       })
       .sort((a, b) => b.name.localeCompare(a.name));
   } catch (_) { return []; }
+}
+
+/** 删除指定备份目录（用户主动清理旧备份用）。 */
+export function deleteBackup(name) {
+  const safe = String(name || '').trim();
+  if (!safe || /[\\/]|\.\./.test(safe)) throw new Error('备份名不合法');
+  const dir = path.join(getBackupDir(), safe);
+  if (!fs.existsSync(dir)) throw new Error('备份不存在');
+  fs.rmSync(dir, { recursive: true, force: true });
+  return safe;
 }
 
 // 从指定备份目录恢复：把其中的 JSON 覆写回数据目录（恢复前会先备份当前状态）
@@ -224,6 +303,7 @@ export function restoreBackup(name) {
   if (fs.existsSync(up)) {
     try { fs.cpSync(up, path.join(DATA_DIR, 'uploads'), { recursive: true }); } catch (_) { /* 忽略 */ }
   }
+  fileCache.clear(); // 覆盖写回的 mtime 可能与被覆盖文件同秒，直接清缓存最稳
   return n;
 }
 

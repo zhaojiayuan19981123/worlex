@@ -80,7 +80,9 @@ test('AI 助手：两个前置按钮收进 ＋ 菜单，界面直接以输入框
 });
 
 test('本地知识库：跨文库索引、自动重建、问答参考文献与知识图谱接口齐全', () => {
-  assert.match(server, /import \{ buildIndex, searchEntries, buildEvidenceBlock, readKnowledgeFullText \}/);
+  // 全文读取改成「一次扫描 layout 目录」，别再退回到逐篇 readdir + 读 manifest 的慢路径
+  assert.match(server, /import \{ buildIndex, searchEntries, buildEvidenceBlock, createFullTextReader \}/);
+  assert.match(server, /const readFullText = createFullTextReader\(dir\)/);
   assert.match(server, /app\.get\('\/api\/knowledge\/graph'/);
   assert.match(server, /app\.post\('\/api\/knowledge\/rebuild'/);
   assert.match(server, /scheduleKbRebuild\(\)/);

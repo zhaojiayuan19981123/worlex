@@ -115,8 +115,27 @@
   stroke-width: 1;
   stroke-dasharray: 4 6;
 }
-.kg-topic-label { fill: var(--text-3); font-family: var(--font-ui); font-size: 12px; }
+/* 标签压在节点与连线之上时也要读得清：白色描边 + 500 字重 */
+.kg-topic-label {
+  fill: var(--text-2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
 .kg-root.kg-hide-labels .kg-topic-label { display: none; }
+/* 位置实在放不下（会和别的标签重叠）时先不画，别叠成一团 */
+.kg-topic-label.is-crowded { display: none; }
+
+/* 文献多的时候：连线更淡、簇的底色更浅，先看清分区再看关系 */
+.kg-root.kg-dense .kg-edge { stroke: color-mix(in srgb, var(--ink) 14%, transparent); stroke-width: 0.9; }
+.kg-root.kg-dense .kg-edge.e-weak { stroke: color-mix(in srgb, var(--ink) 8%, transparent); }
+.kg-root.kg-dense .kg-edge.e-strong { stroke: color-mix(in srgb, var(--ink) 22%, transparent); }
+.kg-root.kg-dense .kg-hull { fill: color-mix(in srgb, var(--ink) 2.5%, transparent); }
 .kg-hull.is-hidden, .kg-topic-label.is-hidden, .kg-edge.is-hidden, .kg-node.is-hidden { display: none; }
 
 /* 关系边：按 kind 分三档透明度 / 虚线 */

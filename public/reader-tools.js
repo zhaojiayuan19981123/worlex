@@ -374,7 +374,8 @@
     if (mode === 'ai') {
       const send = bridge('sendRegionToChat');
       if (!send) { notify('AI 助读通道不可用', 'error'); return; }
-      send({ image, text: items.map((it) => it.text).join('\n'), page: pageNum, autoSend: true });
+      // 只把截图放进对话框，**不自动发送**：用户写好问题再按发送才分析
+      send({ image, text: items.map((it) => it.text).join('\n'), page: pageNum });
       return;
     }
     if (mode === 'table') openTableModal(buildGrid(items), pageNum, image);
