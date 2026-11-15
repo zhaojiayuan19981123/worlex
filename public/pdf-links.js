@@ -313,6 +313,10 @@
             left: Math.min(r[0], r[2]), top: Math.min(r[1], r[3]),
             w: Math.abs(r[2] - r[0]), h: Math.abs(r[3] - r[1]),
           };
+          // 很多 PDF 的 FitR 目标只是一条基线（y1 === y2），换算出来高度是 0，
+          // 退化成一根几像素的细条，看着像误画的下划线而不是「跳到这里」。
+          // 不足一行文字时按一行补（10 个 PDF 单位 ≈ 一行正文的高度）。
+          if (box.h < 8) box.h = Math.max(10, Math.round(10 * (vp.scale || 1)));
         }
       } catch (_) { box = null; }
     }
