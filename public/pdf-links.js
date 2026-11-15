@@ -1,0 +1,429 @@
+/**
+ * PDF 链接层：把 pdf.js 注释链接与文中 URL / DOI 铺成可点热区。
+ * 内部跳页、外链新窗口、DOI 弹信息卡（可复制到剪贴板 / 添加到文献库）。
+ * 仅依赖 window.Worlex 全局桥，所有成员做存在性判断，缺失时优雅降级。
+ * 对外导出 render(page, viewport, wrap, pageNum) / clear(wrap)。
+ */
+(() => {
+  'use strict';
+
+  // 当前打开的 DOI 信息卡（全局只保留一张）。
+  let ACTIVE = null;
+
+  /* ------------------------------------------------------------------
+   * 全局桥与通用小工具
+   * ------------------------------------------------------------------ */
+
+  function bridge(name) {
+    const w = typeof window !== 'undefined' ? window.Worlex : null;
+    if (!w || typeof w[name] !== 'function') return null;
+    return (...args) => {
+      try { return w[name](...args); } catch (_) { return undefined; }
+    };
+  }
+
+  function toast(msg, kind) {
+    const fn = bridge('toast');
+    if (fn) fn(msg, kind);
+  }
+
+  function currentDocName() {
+    const el = document.getElementById('prFilename');
+    const t = el && el.textContent ? el.textContent.trim() : '';
+    if (t) return t;
+    const dt = typeof document !== 'undefined' && document.title ? document.title.trim() : '';
+    return dt || '阅读器文献';
+  }
+
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = String(text);
+    return node;
+  }
+
+  async function copyText(text) {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) { /* 退回 execCommand */ }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return !!ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /** 优先复用项目里的 DoiUtils；没有时用同样的规则本地归一化。 */
+  function normalizeDoi(raw) {
+    const utils = typeof window !== 'undefined' ? window.DoiUtils : null;
+    if (utils && typeof utils.normalizeDoi === 'function') {
+      try {
+        const v = utils.normalizeDoi(raw);
+        if (v) return String(v);
+      } catch (_) { /* 继续本地兜底 */ }
+    }
+    let s = String(raw == null ? '' : raw).trim();
+    s = s.replace(/^doi:\s*/i, '');
+    s = s.replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
+    s = s.replace(/[.,;)\]]+$/, '');
+    return s.trim();
+  }
+
+  function isDoi(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (/^https?:\/\/(dx\.)?doi\.org\//i.test(s)) return true;
+    if (/^doi:\s*10\./i.test(s)) return true;
+    return /^10\.\d{1,9}\/\S+/.test(normalizeDoi(s));
+  }
+
+  /* ------------------------------------------------------------------
+   * 热区
+   * ------------------------------------------------------------------ */
+
+  /** 视口矩形 [x1,y1,x2,y2] → 页内 CSS 像素盒，不再做二次换算。 */
+  function viewportBox(viewport, rect) {
+    if (!viewport || typeof viewport.convertToViewportRectangle !== 'function') return null;
+    let box;
+    try { box = viewport.convertToViewportRectangle(rect); } catch (_) { return null; }
+    if (!box || !Array.isArray(box) || box.length < 4) return null;
+    const a = Number(box[0]) || 0;
+    const b = Number(box[1]) || 0;
+    const c = Number(box[2]) || 0;
+    const d = Number(box[3]) || 0;
+    const x1 = Math.min(a, c);
+    const x2 = Math.max(a, c);
+    const y1 = Math.min(b, d);
+    const y2 = Math.max(b, d);
+    if (!(x2 - x1 > 0) || !(y2 - y1 > 0)) return null;
+    return { left: x1, top: y1, w: x2 - x1, h: y2 - y1 };
+  }
+
+  function overlaps(a, b) {
+    const iw = Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l));
+    const ih = Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+    const small = Math.min((a.r - a.l) * (a.b - a.t), (b.r - b.l) * (b.b - b.t));
+    return small > 0 && (iw * ih) / small > 0.6;
+  }
+
+  function addHot(layer, info, boxes) {
+    const a = document.createElement('a');
+    a.className = 'pl-hot';
+    a.setAttribute('role', 'link');
+    a.setAttribute('tabindex', '0');
+    // 不使用 href：避免 unsafeUrl 里的 javascript: 之类的伪协议造成注入。
+    a.setAttribute('aria-label', info.label || ('链接：' + (info.text || '未知目标')));
+    a.style.left = Math.max(0, Math.round(info.left)) + 'px';
+    a.style.top = Math.max(0, Math.round(info.top)) + 'px';
+    a.style.width = Math.max(1, Math.round(info.w)) + 'px';
+    a.style.height = Math.max(1, Math.round(info.h)) + 'px';
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onActivate(info, a);
+    });
+    a.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onActivate(info, a);
+      }
+    });
+    layer.appendChild(a);
+    boxes.push({ l: info.left, t: info.top, r: info.left + info.w, b: info.top + info.h });
+  }
+
+  /** 扫文字层 span，给文中裸 URL / DOI 也铺一个热区。 */
+  function addInlineHots(layer, wrap, pageNum, boxes) {
+    const textLayer = wrap.querySelector('.pr-text-layer');
+    if (!textLayer) return;
+    const wr = wrap.getBoundingClientRect();
+    const re = /(https?:\/\/\S+|10\.\d{4,9}\/\S+)/i;
+    const spans = textLayer.querySelectorAll('span');
+    for (let i = 0; i < spans.length; i++) {
+      const text = spans[i].textContent || '';
+      const m = re.exec(text);
+      if (!m) continue;
+      const raw = m[0].replace(/[.,;)\]]+$/, '').trim();
+      if (!raw) continue;
+      const sr = spans[i].getBoundingClientRect();
+      if (!sr.width || !sr.height) continue;
+      const box = {
+        l: sr.left - wr.left, t: sr.top - wr.top,
+        r: sr.right - wr.left, b: sr.bottom - wr.top,
+      };
+      let duplicate = false;
+      for (let j = 0; j < boxes.length; j++) {
+        if (overlaps(box, boxes[j])) { duplicate = true; break; }
+      }
+      if (duplicate) continue;
+      addHot(layer, {
+        url: raw,
+        text: text.trim(),
+        label: '文中链接：' + text.trim(),
+        left: box.l,
+        top: box.t,
+        w: box.r - box.l,
+        h: box.b - box.t,
+        pageNum,
+        inline: true,
+      }, boxes);
+    }
+  }
+
+  function onActivate(info, anchor) {
+    const raw = String(info.url || info.text || '').trim();
+    // DOI 优先于普通 http(s)：doi.org 链接要弹信息卡而不是直接跳走。
+    if (isDoi(raw)) {
+      if (ACTIVE && ACTIVE.anchor === anchor) { closeCard(); return; }
+      openDoiCard(raw, info, anchor);
+      return;
+    }
+    const m = /^#p(\d+)$/i.exec(raw) || /^#page=(\d+)$/i.exec(raw);
+    if (m) {
+      const go = bridge('gotoPage');
+      if (go) go(parseInt(m[1], 10));
+      else toast('无法跳转到第 ' + m[1] + ' 页', 'error');
+      return;
+    }
+    if (/^https?:\/\//i.test(raw)) {
+      try { window.open(raw, '_blank', 'noopener,noreferrer'); }
+      catch (_) { toast('无法打开链接', 'error'); }
+      return;
+    }
+    toast('暂不支持该链接类型', 'info');
+  }
+
+  /* ------------------------------------------------------------------
+   * DOI 信息卡
+   * ------------------------------------------------------------------ */
+
+  function closeCard() {
+    if (!ACTIVE) return;
+    document.removeEventListener('pointerdown', ACTIVE.onDown, true);
+    document.removeEventListener('keydown', ACTIVE.onKey, true);
+    if (ACTIVE.root && ACTIVE.root.parentNode) ACTIVE.root.remove();
+    ACTIVE = null;
+  }
+
+  function setMsg(text, isError) {
+    if (!ACTIVE) return;
+    const m = ACTIVE.msg;
+    m.textContent = String(text || '');
+    m.classList.toggle('error', !!isError);
+    m.classList.toggle('ok', !isError && !!text);
+  }
+
+  function cardRow(label, value, cls) {
+    const row = el('div', 'pl-card-row');
+    row.appendChild(el('span', 'pl-card-k', label));
+    row.appendChild(el('div', 'pl-card-v ' + cls, value == null ? '' : String(value)));
+    return row;
+  }
+
+  function cardBtn(text, cls, fn) {
+    const b = el('button', 'pl-btn' + (cls ? ' ' + cls : ''), text);
+    b.type = 'button';
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function positionCard(card, anchor) {
+    const r = anchor.getBoundingClientRect();
+    const cw = card.offsetWidth || 300;
+    const ch = card.offsetHeight || 200;
+    const vw = window.innerWidth || 1024;
+    const vh = window.innerHeight || 768;
+    let left = r.left;
+    let top = r.bottom + 8;
+    if (left + cw > vw - 12) left = Math.max(12, vw - cw - 12);
+    if (top + ch > vh - 12) top = Math.max(12, r.top - ch - 8);
+    card.style.left = Math.max(12, Math.round(left)) + 'px';
+    card.style.top = Math.max(12, Math.round(top)) + 'px';
+  }
+
+  function openDoiCard(raw, info, anchor) {
+    closeCard();
+    const stray = document.querySelector('.pl-card');
+    if (stray) stray.remove();
+
+    const doi = normalizeDoi(raw);
+    const openUrl = /^https?:\/\//i.test(raw) ? raw : 'https://doi.org/' + encodeURI(doi);
+    const origText = String(info.text || raw).trim();
+
+    const card = el('div', 'pl-card');
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', 'DOI 信息');
+
+    const head = el('div', 'pl-card-head');
+    head.appendChild(el('span', '', '文献 DOI'));
+    const close = cardBtn('关闭', 'pl-card-close', (e) => {
+      e.preventDefault();
+      closeCard();
+    });
+    close.setAttribute('aria-label', '关闭 DOI 信息卡');
+    head.appendChild(close);
+    card.appendChild(head);
+
+    card.appendChild(cardRow('原文链接文字', origText, 'pl-card-orig'));
+    card.appendChild(cardRow('规范化 DOI', doi || '（未识别）', 'pl-card-doi'));
+
+    const actions = el('div', 'pl-card-actions');
+    const bOpen = cardBtn('在浏览器打开', '', () => {
+      try { window.open(openUrl, '_blank', 'noopener,noreferrer'); }
+      catch (_) { setMsg('无法打开链接，请检查系统浏览器设置', true); }
+    });
+    const bCopy = cardBtn('复制', '', async () => {
+      const ok = await copyText(doi || raw);
+      setMsg(ok ? '已复制 DOI' : '复制失败，请手动选中复制', !ok);
+      toast(ok ? '已复制 DOI' : '复制失败', ok ? 'success' : 'error');
+    });
+    const bAdd = cardBtn('添加到文献库', 'primary', () => addToLibrary(doi, origText));
+    actions.append(bOpen, bCopy, bAdd);
+    card.appendChild(actions);
+
+    const msg = el('div', 'pl-card-msg');
+    msg.setAttribute('aria-live', 'polite');
+    card.appendChild(msg);
+
+    document.body.appendChild(card);
+    positionCard(card, anchor);
+
+    const onDown = (e) => {
+      if (card.contains(e.target)) return;
+      if (ACTIVE && ACTIVE.anchor && ACTIVE.anchor.contains(e.target)) return;
+      closeCard();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeCard(); }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    ACTIVE = { root: card, anchor, onDown, onKey, msg, addBtn: bAdd };
+    close.focus();
+  }
+
+  async function addToLibrary(doi, title) {
+    const api = bridge('api');
+    if (!api) {
+      setMsg('当前环境不支持添加到文献库', true);
+      toast('添加到文献库失败：接口不可用', 'error');
+      return;
+    }
+    if (ACTIVE && ACTIVE.addBtn) {
+      ACTIVE.addBtn.disabled = true;
+      ACTIVE.addBtn.textContent = '添加中…';
+    }
+    const payload = {
+      title: title || doi,
+      doi,
+      originalName: currentDocName(),
+    };
+    try {
+      let res = await api('/api/literature', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      let data = res;
+      if (res && typeof res.json === 'function') data = await res.json();
+      const failed = !res
+        || res.ok === false
+        || (data && (data.ok === false || data.success === false || data.error))
+        || (typeof res.status === 'number' && res.status >= 400);
+      if (failed) {
+        const why = (data && (data.message || data.error)) || (res && res.statusText) || '接口未返回成功';
+        throw new Error(String(why));
+      }
+      setMsg('已添加到文献库', false);
+      toast('已添加到文献库', 'success');
+      closeCard();
+    } catch (err) {
+      const why = err && err.message ? err.message : '网络异常';
+      // 接口失败必须给出可见的友好错误，不能静默。
+      setMsg('添加失败：' + why + '，请检查网络或稍后再试', true);
+      toast('添加到文献库失败：' + why, 'error');
+      if (ACTIVE && ACTIVE.addBtn) {
+        ACTIVE.addBtn.disabled = false;
+        ACTIVE.addBtn.textContent = '添加到文献库';
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------------
+   * 对外 API
+   * ------------------------------------------------------------------ */
+
+  /** 由 app.js 在每页渲染完成后调用；同一 wrap 重复渲染会先清掉旧层。 */
+  async function render(page, viewport, wrap, pageNum) {
+    if (!wrap) return;
+    clear(wrap);
+
+    const layer = el('div', 'pl-layer');
+    const w = viewport && Number(viewport.width) ? Number(viewport.width) : wrap.clientWidth;
+    const h = viewport && Number(viewport.height) ? Number(viewport.height) : wrap.clientHeight;
+    layer.style.width = Math.max(0, w || 0) + 'px';
+    layer.style.height = Math.max(0, h || 0) + 'px';
+
+    let annotations = [];
+    if (page && typeof page.getAnnotations === 'function') {
+      try {
+        annotations = await page.getAnnotations({ intent: 'display' });
+      } catch (_) {
+        try { annotations = await page.getAnnotations(); } catch (_) { annotations = []; }
+      }
+    }
+    if (!Array.isArray(annotations)) annotations = [];
+
+    const boxes = [];
+    for (let i = 0; i < annotations.length; i++) {
+      const a = annotations[i];
+      if (!a || a.subtype !== 'Link') continue;
+      const rect = a.rect;
+      if (!Array.isArray(rect) || rect.length !== 4) continue;
+      const vb = viewportBox(viewport, rect);
+      if (!vb) continue;
+      let raw = String(a.url || a.unsafeUrl || '').trim();
+      if (!raw && typeof a.dest === 'string') raw = a.dest.trim();
+      addHot(layer, {
+        url: raw,
+        text: raw,
+        label: '链接：' + (raw || '文档内部跳转'),
+        left: vb.left,
+        top: vb.top,
+        w: vb.w,
+        h: vb.h,
+        pageNum,
+      }, boxes);
+    }
+
+    addInlineHots(layer, wrap, pageNum, boxes);
+    if (layer.childNodes.length) wrap.appendChild(layer);
+  }
+
+  function clear(wrap) {
+    if (!wrap) return;
+    // 先判断卡片是否挂在本页 / 锚点是否已随页面重建被移除，再移除层
+    //（移除层之后 anchor 就脱离 wrap 了，contains 会失效）。
+    const anchorGone = !!(ACTIVE && ACTIVE.anchor && !document.body.contains(ACTIVE.anchor));
+    const inThisWrap = !!(ACTIVE && ACTIVE.anchor && wrap.contains(ACTIVE.anchor));
+    const shouldClose = anchorGone || inThisWrap;
+    const layers = wrap.querySelectorAll('.pl-layer');
+    for (let i = 0; i < layers.length; i++) layers[i].remove();
+    if (shouldClose) closeCard();
+  }
+
+  const api = { render, clear };
+  if (typeof window !== 'undefined') window.PdfLinks = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})();

@@ -1,0 +1,146 @@
+/* PDF 链接层与 DOI 信息卡样式。
+ * 颜色 / 字体一律取自 public/style.css 的 :root 变量，三套主题自动适配。
+ * 只对颜色类属性做过渡，绝不动画 width/height/top/left。 */
+
+/* 链接层：高于文字层(z=1)与高亮层(z=2)，低于挂在 body 上的工具浮层。 */
+.pl-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pl-hot {
+  position: absolute;
+  display: block;
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  background: transparent;
+  /* 平时只留一条极淡的下边框，提示「这里可点」。 */
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+  border-radius: 1px;
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.pl-hot:hover,
+.pl-hot:focus-visible {
+  border: 2px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  outline: none;
+}
+.pl-hot:focus-visible { box-shadow: 0 0 0 2px var(--ring); }
+
+/* ---------- DOI 信息卡 ---------- */
+.pl-card {
+  position: fixed;
+  z-index: 4300;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 12px 14px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.pl-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.pl-card-row { display: flex; flex-direction: column; gap: 4px; }
+.pl-card-k {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--text-3);
+}
+.pl-card-v {
+  max-height: 64px;
+  padding: 6px 8px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--text-1);
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.pl-card-doi { font-family: var(--font-mono); font-size: 11.5px; }
+
+.pl-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-btn {
+  padding: 5px 9px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.pl-btn:hover { background: var(--panel-2); border-color: var(--primary); color: var(--primary); }
+.pl-btn.primary,
+.pl-btn.primary:hover {
+  color: var(--on-primary);
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.pl-btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.pl-btn:disabled { opacity: .6; cursor: not-allowed; }
+.pl-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* 头部关闭按钮：复用 .pl-btn 的可聚焦样式，但外观更轻。 */
+.pl-card-close {
+  padding: 2px 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+  background: transparent;
+  border-color: transparent;
+}
+.pl-card-close:hover { background: var(--panel-2); color: var(--ink); border-color: var(--border); }
+
+.pl-card-msg {
+  min-height: 15px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.pl-card-msg.error {
+  padding: 5px 7px;
+  color: var(--red);
+  background: var(--red-soft);
+  border-radius: var(--radius-sm);
+}
+.pl-card-msg.ok {
+  padding: 5px 7px;
+  color: var(--green);
+  background: var(--green-soft);
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- 动效兜底 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .pl-hot,
+  .pl-btn {
+    transition: none !important;
+    animation: none !important;
+  }
+}

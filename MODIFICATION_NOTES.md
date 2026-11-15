@@ -1,3 +1,69 @@
+## v2.1.0：阅读器九项改造 + 本地知识库 / 知识图谱（2026-11-15）
+
+> 用户一次性提出 9 项要求：目录抽屉、双语标题、功能区精简、划词高亮、三个阅读器工具、
+> AI 助手重设计、本地知识库问答、主题聚类与知识图谱、文中超链接。全部实现并发版。
+
+### 架构决定
+
+- **新模块一律挂在 `window` 上，不塞进 app.js**：`LitDrawer` / `SelectionLayer` /
+  `ReaderTools` / `PdfLinks` / `GraphView` 各自独立文件，通过新增的 `window.Worlex` 最小桥
+  （`items / openLiterature / pdfDoc / scale / pageWrap / gotoPage / sendRegionToChat …`）
+  拿 app.js 内部状态。`app.js` 只做接线，避免这个已经一万五千行的文件继续膨胀。
+- **body 级抽屉**：`#prCmpMode` 打开时 `.pr-body` 是 `display:none`，任何挂在里面的浮层都弹不出来。
+  `.ld-panel` / `.ld-mask` 直接挂 `document.body`。
+- 新增前端文件：`lit-drawer.js`、`selection-layer.js`、`reader-tools.js/.css`、
+  `pdf-links.js/.css`、`knowledge-graph.js/.css`、`workbench-extras.css`；
+  新增后端：`src/knowledgeBase.js`、`src/knowledgeGraph.js`；`knowledge-base.json` 加入
+  `src/store.js` 的 `ALL_DATA_FILES`（备份 / 迁移才带得走）。
+
+### 踩过的坑（同类问题直接照这个查）
+
+1. **抽屉「点一下关、再点还是关」**：遮罩 / Esc / 点选另一篇都会调 `LitDrawer.close()`，
+   但 `pr.dirOpen` 没同步，按钮仍按旧状态取反。修法两处：`LitDrawer.open({ onClose })`
+   回调把 `pr.dirOpen` 置回 false；`prDirToggle` 的点击处理改以 `LitDrawer.isOpen()`
+   （抽屉真实状态）为准，而不是 `pr.dirOpen`。`close()` 只在 wasOpen 时回调一次，
+   否则 `setPrDir(false)` 再调 `close()` 会重入。
+2. **全新安装看不到 AI 欢迎页**：`#chatMsgs` 是空容器，`renderChatMsgs()` 只在
+   `openConversation` / `newConversation` / `sendChat` 里被调用；没有历史会话时
+   `switchView('ai')` 谁都不调，欢迎页与建议指令永远不出现。补在 `switchView` 的 ai 分支末尾：
+   `if (!chatMsgs.length) renderChatMsgs();`。
+3. **＋ 菜单跑到页面左下角**：`.ai-more-menu` 是 `position:absolute`，但它的父级
+   `.ai-composer` 没有 `position`，于是定位基准变成 `#viewAI .chat-wrap`（relative），
+   `left:0` 落到侧栏边上。给 `.ai-composer` 补 `position:relative`，菜单改
+   `bottom: calc(100% + 8px); right: 52px`。阅读器助读那个菜单的父级本来就 relative，没这问题。
+4. **中文主题标签全是碎片**：`tokenize()` 用 2-gram 切中文，权重最高的常常是
+   「不会 / 个非 / 会不」。`labelOf()` 现在优先用簇内 AI 解析出的完整关键词，
+   其次过滤含虚词字符的 2-gram、正反序去重，最后才退回单关键词 / 首篇短标题。
+5. **划词重叠的根因**：浏览器原生 `::selection` 对 `getClientRects()` 的每一行各画一块，
+   行高与 x 起点都不齐。改成把原生背景置透明，用 `mergeLineRects()` 统一行高后画 `.pr-sel-box`。
+6. `captureSelection()` 与 `renderAnnotations()` 两处都遍历 `displayRect(raw)`，
+   批量 patch 时锚点会出现 2 次 —— 必须把 `if (a.type === 'highlight')` 包进上下文才能唯一定位。
+
+### 后端
+
+- `server.js` 新增 `GET /api/knowledge/status|search|graph`、`POST /api/knowledge/rebuild`；
+  一个 `res.on('finish')` 中间件在 `literature / upload / parse / collections` 写操作成功后
+  防抖 800ms 触发重建，数据目录切换后也重建。
+- `/api/chat` 与 `/api/paper-chat` 都注入 `buildEvidenceBlock(kbHits)`，SSE 先发
+  `{ references }` 让前端先渲染参考文献，模型被要求用 `[编号]` 引用。
+- `EDITABLE` 补 `tags`，PATCH 时用 `mergeTags()` 规范化（去控制字符、去重、上限 12），
+  供图谱节点改标签。
+- 聚类 / 建图都是纯 JS 确定性算法（无外部服务），同输入同输出，可直接单测。
+
+### 验证
+
+- 全量 `node --test`：**772 / 772**（Node 20.10 `--test-concurrency=4`；
+  Node 22.22 `--test-concurrency=2`，默认并发在本机沙箱会被 SIGTERM）。
+- 新增 `test/knowledge-base.test.mjs`、`test/knowledge-graph.test.mjs`、
+  `test/v210-features.test.mjs`（静态接线一致性，10 项）。
+- 修改 `test/ai-extractor-fields.test.mjs`（`titleZh` 入字段集、列顺序比较过滤该字段）、
+  `test/parse-progress.test.mjs`（`cleanMetaFields` 新增 `titleZh: ''`）、
+  `test/reader-window.test.mjs` 相关的中文自动整理分支（补 `await waitReaderIdle()`，
+  静态断言要求它必须早于 `startLayoutParse()`）。
+- 真实浏览器冒烟 `~/.workbuddy/zotero-lit-e2e/smoke-v210.mjs`：**16 / 16**。
+  其中 AI 助手空态用 `page.route` 把 `GET /api/chat/conversations` 拦成 `[]` 模拟全新安装，
+  不写用户数据；对照精读下目录抽屉是核心回归项（`.pr-body` 隐藏 + 抽屉可见）。
+
 ## v2.0.1：修复悬停原文块时文字仍被盖住（v2.0.0 漏了第二层）（2026-11-13）
 
 > 用户复查截图反馈：点原文文字仍被盖住。新截图里左侧「正文」徽章 + 大块灰色空白、

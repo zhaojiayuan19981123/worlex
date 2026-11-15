@@ -117,6 +117,7 @@ const ALL_DATA_FILES = [
   'thesis-collections.json', // 学位论文阅读：分类
   'thesis-quotes.json', // 学位论文阅读：摘录素材库
   'thesis-bigpaper.json', // 学位论文阅读：关联的「我的大论文」框架与阶段
+  'knowledge-base.json', // v2.1.0 本地知识库索引 + 主题聚类 + 文献关系图
 ];
 
 export function dataFileNames() {

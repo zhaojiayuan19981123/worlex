@@ -1,0 +1,265 @@
+/* knowledge-graph.css —— 知识图谱视图样式
+ * 颜色 / 字体 / 动效一律走项目 :root 变量；半透明统一用
+ * color-mix(in srgb, var(--ink) X%, transparent)，组件层不出现字面量色值。
+ * 主题色仅派生自已有语义变量，再按 .t0~.t7 分配给节点。
+ */
+.kg-root {
+  /* 8 个主题色：全部由项目已有变量派生，不写死色值 */
+  --kg-c0: var(--primary);
+  --kg-c1: var(--rank-blue);
+  --kg-c2: var(--green);
+  --kg-c3: var(--accent-gold);
+  --kg-c4: var(--rank-pink);
+  --kg-c5: var(--rank-green);
+  --kg-c6: var(--accent-coral);
+  --kg-c7: var(--rank-yellow);
+
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.kg-root *, .kg-root *::before, .kg-root *::after { box-sizing: border-box; }
+.kg-root [hidden] { display: none; }
+
+/* ---------- 键盘焦点：所有交互元素 ---------- */
+.kg-root :where(button, input, select, [role="button"], [tabindex], a):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ---------- 顶部工具条 ---------- */
+.kg-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.kg-head { flex: 0 0 auto; }
+.kg-title { margin: 0; font-size: 19px; font-weight: 650; line-height: 1.3; color: var(--text); }
+.kg-sub { margin: 5px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-3); }
+
+.kg-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; flex: 1 1 auto; justify-content: flex-end; }
+.kg-stats { flex: 0 0 auto; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.kg-field { display: inline-flex; align-items: center; gap: 8px; }
+.kg-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.kg-field-label { font-size: 12.5px; color: var(--text-3); }
+.kg-input, .kg-select {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+.kg-input { width: 190px; }
+.kg-select { min-width: 132px; max-width: 230px; }
+.kg-input::placeholder { color: var(--text-3); }
+.kg-input:hover, .kg-select:hover { border-color: var(--ink-3); }
+
+.kg-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.kg-check input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+
+.kg-btn {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.kg-btn:hover:not(:disabled) { background: var(--row-hover); border-color: var(--ink-3); }
+.kg-btn:disabled { opacity: .5; cursor: not-allowed; }
+.kg-btn-primary:not(:disabled) { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+.kg-btn-primary:hover:not(:disabled) { background: var(--primary-hover); color: var(--on-primary); border-color: var(--primary-hover); }
+
+/* ---------- 主区 ---------- */
+.kg-main { position: relative; display: flex; flex: 1 1 0; min-height: 0; margin-top: 14px; }
+.kg-stage {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.kg-stage.is-panning { cursor: grabbing; }
+.kg-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+
+/* 主题簇：细线圈 + 灰色标签 */
+.kg-hull {
+  fill: color-mix(in srgb, var(--ink) 4%, transparent);
+  stroke: var(--border-soft);
+  stroke-width: 1;
+  stroke-dasharray: 4 6;
+}
+.kg-topic-label { fill: var(--text-3); font-family: var(--font-ui); font-size: 12px; }
+.kg-root.kg-hide-labels .kg-topic-label { display: none; }
+.kg-hull.is-hidden, .kg-topic-label.is-hidden, .kg-edge.is-hidden, .kg-node.is-hidden { display: none; }
+
+/* 关系边：按 kind 分三档透明度 / 虚线 */
+.kg-edge { stroke: color-mix(in srgb, var(--ink) 22%, transparent); stroke-width: 1; }
+.kg-edge.e-weak { stroke: color-mix(in srgb, var(--ink) 12%, transparent); stroke-dasharray: 3 4; }
+.kg-edge.e-strong { stroke: color-mix(in srgb, var(--ink) 34%, transparent); stroke-width: 1.5; }
+
+/* 文献节点 */
+.kg-node { cursor: pointer; }
+.kg-disc { fill: var(--ink-3); stroke: var(--surface); stroke-width: 1.5; }
+.kg-hit { fill: none; stroke: none; pointer-events: all; }
+.kg-node.t0 .kg-disc { fill: var(--kg-c0); }
+.kg-node.t1 .kg-disc { fill: var(--kg-c1); }
+.kg-node.t2 .kg-disc { fill: var(--kg-c2); }
+.kg-node.t3 .kg-disc { fill: var(--kg-c3); }
+.kg-node.t4 .kg-disc { fill: var(--kg-c4); }
+.kg-node.t5 .kg-disc { fill: var(--kg-c5); }
+.kg-node.t6 .kg-disc { fill: var(--kg-c6); }
+.kg-node.t7 .kg-disc { fill: var(--kg-c7); }
+.kg-node:hover .kg-disc { stroke: var(--ink); stroke-width: 2; }
+.kg-node.is-selected .kg-disc { stroke: var(--primary); stroke-width: 3; }
+.kg-node:focus-visible { outline: none; }
+.kg-node:focus-visible .kg-disc { stroke: var(--ring); stroke-width: 3; }
+
+/* ---------- Tooltip ---------- */
+.kg-tip {
+  position: absolute; left: 0; top: 0; z-index: 4;
+  max-width: 280px;
+  padding: 10px 12px;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.kg-tip.is-on { visibility: visible; opacity: 1; }
+.kg-tip-title { font-size: 12.5px; font-weight: 650; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.kg-tip-zh { margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--text-2); overflow-wrap: anywhere; }
+.kg-tip-meta { margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
+
+/* ---------- 状态层：加载中 / 空 / 失败 ---------- */
+.kg-status {
+  position: absolute; inset: 0; z-index: 3;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+.kg-status.is-off { display: none; }
+.kg-status-card { max-width: 460px; padding: 18px 22px; text-align: center; }
+.kg-status-line { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-2); }
+.kg-status-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--primary);
+  animation: kgPulse 1.2s var(--ease) infinite;
+}
+@keyframes kgPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.kg-status-text { margin: 0 0 12px; font-size: 13px; line-height: 1.7; color: var(--text-2); }
+
+/* ---------- 缩放控件 ---------- */
+.kg-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; flex-direction: column; gap: 6px; }
+.kg-zoom-btn {
+  width: 34px; min-height: 30px; padding: 0 6px;
+  font-family: var(--font-ui); font-size: 12px; line-height: 1;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.kg-zoom-btn:hover { background: var(--row-hover); color: var(--text); border-color: var(--ink-3); }
+
+/* ---------- 右侧详情面板（单一面板，不嵌套卡片） ---------- */
+.kg-detail {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 5;
+  width: 340px; max-width: 78%;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateX(14px);
+  pointer-events: none;
+  transition: transform var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+.kg-detail.is-open { visibility: visible; opacity: 1; transform: none; pointer-events: auto; }
+
+.kg-detail-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-soft); }
+.kg-detail-hint { font-size: 12px; color: var(--text-3); }
+.kg-icon-btn {
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-ui); font-size: 18px; line-height: 1;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.kg-icon-btn:hover { background: var(--row-hover); color: var(--text); border-color: var(--border); }
+
+.kg-detail-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 18px 22px; }
+.kg-d-en { margin: 0; font-size: 15px; font-weight: 650; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.kg-d-zh { margin: 8px 0 0; font-size: 13px; line-height: 1.65; color: var(--text-2); white-space: pre-line; overflow-wrap: anywhere; }
+
+.kg-d-meta { margin: 16px 0 0; border-top: 1px solid var(--border-soft); }
+.kg-d-row { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border-soft); }
+.kg-d-row dt { flex: 0 0 52px; margin: 0; font-size: 12px; color: var(--text-3); }
+.kg-d-row dd { flex: 1 1 auto; margin: 0; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
+
+.kg-d-section { margin: 16px 0 0; padding: 0 0 16px; border-bottom: 1px solid var(--border-soft); }
+.kg-d-label { margin: 0 0 9px; font-size: 12.5px; font-weight: 600; color: var(--text-3); }
+.kg-d-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.kg-chip {
+  display: inline-block; padding: 3px 9px;
+  font-size: 12px; color: var(--text-2);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+.kg-d-none { font-size: 12px; color: var(--text-3); }
+.kg-d-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+
+/* ---------- 本地兜底 toast（挂在 body 上，变量仍继承 :root） ---------- */
+.kg-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 9999;
+  padding: 9px 16px;
+  font-family: var(--font-ui); font-size: 12.5px;
+  color: var(--on-primary); background: var(--primary);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+}
+
+/* ---------- 减弱动态效果 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .kg-root *, .kg-root *::before, .kg-root *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .kg-detail { transition: none; }
+}

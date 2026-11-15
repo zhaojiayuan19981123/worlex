@@ -17,7 +17,7 @@ import { extractByRules } from './ruleExtractor.js';
 import { withThinking, stripThinking, looksLikeThinkingParamError, thinkingPayload } from './thinkingMode.js';
 
 // 公共字段（三类文献都要）
-const COMMON_FIELDS = ['title', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract'];
+const COMMON_FIELDS = ['title', 'titleZh', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract'];
 
 /**
  * 「科学问题」是三类文库共用的字段，但含义与「研究问题」不同：
@@ -82,7 +82,7 @@ export const FIELDS = [...new Set([
 
 export const FIELD_LABELS = {
   // 公共
-  title: '标题', authors: '作者', journal: '期刊/会议', year: '年份', doi: 'DOI',
+  title: '标题', titleZh: '中文译名', authors: '作者', journal: '期刊/会议', year: '年份', doi: 'DOI',
   keywords: '关键词', abstract: '摘要',
   // 实证 / 模型 / 算法共用
   researchQuestion: '研究问题', scienceQuestion: '科学问题', coreFindings: '核心结论',
@@ -123,14 +123,15 @@ export const DOC_TYPE_LABELS = { empirical: '实证类', model: '模型类', alg
 // 「列字段」（标题/作者/期刊/年份/DOI/关键词）在文献中心是表格列，要排序、筛选、查等级，
 // 所以要求只给值本身 —— 任何说明性文字都会被列宽和字符串匹配吃掉。
 const COMMON_SPEC = `【公共字段】（以下六个都是「列字段」：只给值本身，不要任何解释、注释、等级说明或前缀）
-- title：论文标题。原文标题照抄；若有中文官方译名就用官方译名，否则给直译并在译名后标「（译）」。保留副标题。
+- title：论文标题。必须**逐字照抄原文标题**，保留副标题、大小写与标点；英文文献就填英文原题，中文文献就填中文原题，绝不要替换成译名，也不要加「（译）」之类的后缀。
+- titleZh：论文标题的简体中文译名。英文标题必须给出准确、通顺的意译（术语用学界通行译法，公认缩写可保留英文）；中文标题、或确实拿不到时填空字符串 ""。只给译名本身，不要解释、不要加括号、不要换行、不要与 title 重复。
 - authors：全部可识别的作者，按原文顺序，姓名保留原文写法。只有原文明确标出时才写通讯作者或单位，不要凭作者位次推断。
 - journal：只写期刊 / 会议 / 工作论文 / 预印本的名称本身。禁止出现卷(期)、页码、文章号、「SSCI Q1」「影响因子 6.9」「CSSCI」「北大核心」这类等级或分区注释，不要「期刊：」前缀，不要书名号，不要「（译）」。仓库名不等于期刊名，投稿中不等于已发表。
 - year：只写四位数字年份，例如 2023。不要写「2023（在线优先），2024（正式出刊）」这种多段说明；预印本与正式出刊年份不同时，取你分析这一版的年份，差异写进 criticalThinking。
 - doi：只写 10.xxxx/xxxxx 这串本身。不要「DOI:」前缀，不要 https://doi.org/ 链接，不要句末标点。参考文献里别人的 DOI、arXiv 号、数据库登录号都不算。拿不到就写「原文未报告」。
 - keywords：先写「作者原列关键词」（忠实翻译并保留英文原词），再另起「AI 补充检索词：」给 5-8 个有原文依据的检索词（主题、构念、情境、方法）。原文没有关键词就直说，不要把自己的词当成作者的。
 - abstract：原文摘要的中文翻译，保留原有结构与限定语（样本、条件、边界），不加入你的评论与文外的发现。材料里没有摘要就写「所提供材料未包含摘要」，不要自己写一段冒充摘要。
-以上六个字段除 keywords 外，都必须是一行、无换行、无 markdown 标记；拿不到就写「原文未报告」，不要用解释代替值。`;
+以上列字段除 keywords / abstract 外，都必须是一行、无换行、无 markdown 标记；拿不到就写「原文未报告」（titleZh 拿不到写空字符串），不要用解释代替值。`;
 
 // 实证类提示词分三段：角色与规则（含语言）、逐字段要求、公共字段要求。
 // 拆开是为了拼装时能把「逐字段要求」放在公共字段之后，读起来是「规则 → 字段 → 格式」。
@@ -569,6 +570,16 @@ export function cleanTitle(raw) {
   return s;
 }
 
+/** 中文译名：去掉前缀与包裹引号，压成单行；与原始标题相同则留空 */
+export function cleanTitleZh(raw, originalTitle = '') {
+  let s = stripMetaNoise(raw, '中文译名|中文标题|译名|titleZh');
+  if (isMissingLabel(s)) return '';
+  s = s.replace(/^[《「『“"']+/, '').replace(/[》」』”"']+$/, '').trim();
+  s = s.replace(/\s*\n+\s*/g, ' ').replace(/[（(]?译[)）]?$/g, '').trim();
+  if (!s || s === String(originalTitle || '').trim()) return '';
+  return s.slice(0, 200);
+}
+
 /** 关键词：只去掉「关键词：」这种前缀，保留「作者原列 / AI 补充」两段结构 */
 export function cleanKeywords(raw) {
   const s = stripMetaNoise(raw, '关键词|关键字|keywords?');
@@ -584,6 +595,7 @@ export function cleanMetaFields(out) {
   return {
     ...out,
     title: cleanTitle(out.title),
+    titleZh: cleanTitleZh(out.titleZh, out.title),
     authors: cleanAuthors(out.authors),
     journal: cleanJournal(out.journal),
     year: cleanYear(out.year),

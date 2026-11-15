@@ -21,7 +21,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // 实证类的 24 个解析字段（不含导入时间与我的思考）
 const EMPIRICAL_KEYS = [
-  'title', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
+  // v2.1.0：titleZh 是英文标题的中文译名，作为标题单元格的第二行显示，不是独立列
+  'title', 'titleZh', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
   'researchQuestion', 'scienceQuestion', 'researchObject', 'coreFindings', 'mechanism', 'boundaryConditions',
   'method', 'researchDesign', 'constructs',
   'independentVar', 'dependentVar', 'moderatorVar', 'mediatorVar', 'controlVar',
@@ -168,6 +169,17 @@ test('算法类（CCF）提示词覆盖实验设计 / 消融 / 数据集 / 指�
   assert.match(p, /数据泄漏|数据泄露/, '批判性思考要点到数据泄漏这类算法论文专属问题');
 });
 
+test('v2.1.0：英文标题保留原文，中文译名单独成字段', () => {
+  for (const type of ['empirical', 'model', 'algorithm']) {
+    assert.ok(TYPE_FIELDS[type].includes('titleZh'), `${type} 缺中文译名字段`);
+  }
+  assert.ok(FIELDS.includes('titleZh'), '中文译名要能写进存储字段集');
+  assert.equal(FIELD_LABELS.titleZh, '中文译名');
+  const p = buildPrompt('empirical', '简体中文');
+  assert.match(p, /逐字照抄原文标题/, '提示词必须要求 title 保留英文原题');
+  assert.match(p, /titleZh：论文标题的简体中文译名/, '提示词必须要求 titleZh 给中文译名');
+});
+
 test('三种文献类型归一化：algorithm / ccf 都落到算法类', () => {
   assert.equal(normalizeDocType('algorithm'), 'algorithm');
   assert.equal(normalizeDocType('ccf'), 'algorithm');
@@ -179,7 +191,7 @@ test('三种文献类型归一化：algorithm / ccf 都落到算法类', () => {
 
 test('算法类字段集：书目 + 12 个专属字段，且不含实证类/模型类的独有字段', () => {
   assert.deepEqual(TYPE_FIELDS.algorithm, [
-    'title', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
+    'title', 'titleZh', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
     'researchQuestion', 'scienceQuestion', 'coreFindings', 'researchDesign', 'criticalThinking',
     'reviewUse', 'experimentalDesign', 'ablationDesign', 'researchGap',
     'dataset', 'metrics', 'researchField',
@@ -219,7 +231,8 @@ test('前端列顺序与后端字段顺序一致（两边各写一份，必须�
     .filter((k) => k !== 'importedAt' && k !== 'thoughts');
   assert.ok(m[1].includes("'importedAt'"), '前端应保留导入时间列');
   assert.ok(m[1].includes("'thoughts'"), '前端应保留我的思考列');
-  assert.deepEqual(front, EMPIRICAL_KEYS, '前端实证类列顺序与 src/aiExtractor.js 不一致');
+  // titleZh 只是标题单元格的第二行，不占一列，比较时从后端字段集里排除
+  assert.deepEqual(front, EMPIRICAL_KEYS.filter((k) => k !== 'titleZh'), '前端实证类列顺序与 src/aiExtractor.js 不一致');
 });
 
 test('前端三个文库的列顺序都与后端一致', () => {
@@ -230,7 +243,7 @@ test('前端三个文库的列顺序都与后端一致', () => {
     assert.ok(m, `public/app.js 里找不到 TYPE_ORDER.${type}`);
     const front = [...m[1].matchAll(/'([A-Za-z]+)'/g)].map((x) => x[1])
       .filter((k) => k !== 'importedAt' && k !== 'thoughts');
-    assert.deepEqual(front, TYPE_FIELDS[type], `前端 ${type} 列顺序与 src/aiExtractor.js 不一致`);
+    assert.deepEqual(front, TYPE_FIELDS[type].filter((k) => k !== 'titleZh'), `前端 ${type} 列顺序与 src/aiExtractor.js 不一致`);
   }
 });
 

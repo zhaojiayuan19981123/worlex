@@ -133,7 +133,7 @@ test('标题/作者：去前缀与包裹符号，但不动正文', () => {
   assert.equal(cleanTitle('标题：《平台治理研究：一个综述》'), '平台治理研究：一个综述');
   assert.equal(cleanAuthors('作者：张三、李四'), '张三、李四');
   assert.deepEqual(cleanMetaFields({ title: 'T', authors: '', journal: '原文未报告', year: '2023年', doi: '无', keywords: '关键词：平台经济' }), {
-    title: 'T', authors: '', journal: '', year: '2023', doi: '', keywords: '平台经济',
+    title: 'T', titleZh: '', authors: '', journal: '', year: '2023', doi: '', keywords: '平台经济',
   });
 });
 

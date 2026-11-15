@@ -210,6 +210,7 @@
     reviewer: { name: '模拟审稿', sub: '投稿前自查与审稿意见预演' },
     achievements: { name: '成果管理', sub: '论文、专利与获奖归档' },
     ai: { name: 'AI 助手', sub: '与已有文献对话、生成材料' },
+    graph: { name: '知识图谱', sub: '文献关系、主题聚类与标签管理' },
     worldlib: { name: '世图下载助手', sub: '批量检索与下载文献' },
   };
 
@@ -304,6 +305,15 @@
   }
   function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /** v2.1.0：英文标题 + 换行显示的中文译名（列表 / 目录 / 图谱共用）。
+      标题本身已是中文、或还没有译名时，不重复显示第二行。 */
+  function litTitleParts(it) {
+    const en = String(it?.title || it?.originalName || '').trim();
+    const rawZh = String(it?.titleZh || '').trim();
+    const zh = rawZh && rawZh !== en && !/[\u4e00-\u9fff]/.test(en) ? rawZh : '';
+    return { en, zh };
   }
 
   // ============ AI 解析进度 ============
@@ -906,7 +916,8 @@
         // 热力也可以直接染在标题底色上（mode=both / title）
         const heat = window.ReadingHeat;
         const tint = heat ? heat.titleStyle(it.id) : '';
-        return `<div class="clamp cell-title"${tint} data-open="${it.id}" data-field="title" title="点击查看全文解析">${highlight(v) || '<span class="cell-empty">（未命名）</span>'}</div>`;
+        const zhTitle = litTitleParts(it).zh;
+        return `<div class="clamp cell-title"${tint} data-open="${it.id}" data-field="title" title="点击查看全文解析">${highlight(v) || '<span class="cell-empty">（未命名）</span>'}${zhTitle ? `<div class="lit-title-zh">${esc(zhTitle)}</div>` : ''}</div>`;
       }
       case 'attach': return attachCell(it);
       case 'heat': {
@@ -6040,7 +6051,7 @@
     for (const type of PR_DIR_LIB_ORDER) {
       let list = items.filter((i) => (i.docType || 'empirical') === type && i.filename);
       if (q) {
-        list = list.filter((i) => [i.title, i.authors, i.journal, i.year, i.originalName]
+        list = list.filter((i) => [i.title, i.titleZh, i.authors, i.journal, i.year, i.originalName]
           .map((v) => String(v || '')).join(' ').toLowerCase().includes(q));
       }
       list = list.slice().sort((a, b) => String(a.title || a.originalName || '')
@@ -6068,8 +6079,10 @@
       <div class="pr-dir-group">${esc(LIB_META[type]?.label || '文献')}</div>
       ${list.map((it) => {
         const sub = [it.authors, it.journal, it.year].map((v) => String(v || '').trim()).filter(Boolean).join(' · ');
+        const zh = litTitleParts(it).zh;
         return `<div class="pr-dir-item${it.id === curId ? ' active' : ''}" data-prdir-id="${esc(it.id)}" title="${esc(it.title || it.originalName || '')}">
           <div class="pr-dir-name">${esc(it.title || it.originalName || '未命名')}</div>
+          ${zh ? `<div class="pr-dir-zh">${esc(zh)}</div>` : ''}
           ${sub ? `<div class="pr-dir-sub">${esc(sub)}</div>` : ''}
         </div>`;
       }).join('')}
@@ -6084,8 +6097,25 @@
   function setPrDir(on) {
     pr.dirOpen = !!on;
     const isEpub = pr.fileKind === 'epub';
-    $('prDir')?.classList.toggle('hidden', !pr.dirOpen || isEpub);
+    // v2.1.0：PDF 文献改用挂在 body 上的侧边抽屉 —— 对照精读会隐藏 .pr-body，
+    // 旧抽屉挂在其中必然弹不出来。EPUB 仍用原来的章节目录。
+    $('prDir')?.classList.add('hidden');
     $('prEpubToc')?.classList.toggle('hidden', !pr.dirOpen || !isEpub);
+    if (!isEpub) {
+      if (pr.dirOpen) window.LitDrawer?.open({
+        items,
+        currentId: pr.source?.kind === 'literature' ? pr.source.id : '',
+        docType: items.find((x) => x.id === pr.source?.id)?.docType || 'empirical',
+        onPick: (id) => openPdfReader(id),
+        // 遮罩 / Esc / 选中另一篇都会自行关抽屉，这里把内部状态同步回来，
+        // 避免下一次点「目录」变成关闭（对照精读下最容易踩到）。
+        onClose: () => {
+          pr.dirOpen = false;
+          $('prDirToggle')?.classList.remove('active');
+        },
+      });
+      else window.LitDrawer?.close();
+    } else window.LitDrawer?.close();
     const toggle = $('prDirToggle');
     if (toggle) {
       toggle.classList.toggle('active', pr.dirOpen);
@@ -6105,7 +6135,13 @@
   }
 
   function bindPrDir() {
-    $('prDirToggle')?.addEventListener('click', () => setPrDir(!pr.dirOpen));
+    // 以抽屉的真实可见状态为准：抽屉可能被遮罩 / Esc / 切换文献关掉，
+    // 只看 pr.dirOpen 会误判成「已展开」，点一下反倒把它关上。
+    $('prDirToggle')?.addEventListener('click', () => {
+      const isEpub = pr.fileKind === 'epub';
+      const opened = isEpub ? !!pr.dirOpen : (window.LitDrawer?.isOpen?.() ?? !!pr.dirOpen);
+      setPrDir(!opened);
+    });
     // 打印：可打当前页 / 指定页码 / 全部，交给本机打印机
     $('prPrint')?.addEventListener('click', () => openPrintDialog());
     bindPrintPreview();
@@ -6250,9 +6286,10 @@
     show($('prToggleCmp'), lit && !epub);
     show($('prToggleMd'), !epub);
     // 版面解析针对 PDF 版式，而且结果要写进文献记录（成果附件没有记录）→ 两处都要满足
-    show($('prLayoutBtn'), lit && !epub);
-    // 阅读模式对「文献」和「成果附件」都可用（都不依赖文献记录），只排除 EPUB
-    show($('prReadingBtn'), !epub);
+    // v2.1.0：打开文献即自动解析版面、自动翻译为中文，两个手动入口都不再出现
+    show($('prLayoutBtn'), false);
+    show($('prReadingBtn'), false);
+    show($('prToolStrip'), !epub);
     if (epub && pr.reading.on) exitReadingMode({ silent: true });
     show($('prTabAnalysis'), lit && !epub);
     // 停在 EPUB 不支持的页签上（解析结果读的是 PDF 版面）要退回到「笔记」
@@ -7252,6 +7289,7 @@
       }
       // 工具条引擎选择器（点段落即译 / 重译统一用）：完整提供方（跟随设置 + 各模型 + 各服务）
       const bar = cmpEl('cmpBarEngine');
+      if (bar) bar.value = 'auto';  // 固定跟随全局设置
       if (bar && !bar.dataset.filled) {
         bar.dataset.filled = '1';
         api('/api/translate/sources').then((d) => {
@@ -7304,7 +7342,7 @@
     const box = cmpEl('cmpStartSteps');
     if (box) box.innerHTML = steps.map((s) => `<li class="${s.cls}">${esc(s.text)}</li>`).join('');
     // 没有版面结果时，把「先识别版面」这个按钮露出来
-    cmpEl('cmpParseBtn')?.classList.toggle('hidden', hasLayout);
+    cmpEl('cmpParseBtn')?.classList.add('hidden'); // 打开文献即自动解析，不再给手动入口
     const desc = cmpEl('cmpStartDesc');
     if (desc) {
       desc.innerHTML = zhDoc
@@ -8302,7 +8340,9 @@
 
     const pairSel = cmpEl('cmpPairMode');
     if (pairSel) {
-      pairSel.value = window.CompareUtils?.getPairMode?.() || 'para';
+      // v2.1.0：逐句配对入口移除，固定按段；引擎固定跟随全局设置
+      window.CompareUtils?.setPairMode?.('para');
+      pairSel.value = 'para';
       pairSel.addEventListener('change', () => {
         window.CompareUtils?.setPairMode(pairSel.value);
         renderCmp();   // 只改显示粒度，不发任何翻译请求
@@ -8482,8 +8522,23 @@
     // ①.5 中文文献：整篇翻译没有收益（目标语言就是中文），自动管线到这里就收手 ——
     //     不自动跑版面识别、更不自动起翻译作业，只提示一句，用户想看结构可以自己点。
     if ((await docLangOf(recordId)) === 'zh') {
+      // v2.1.0：中文文献照样自动解析版面并进入对照视图（不必把中文再翻成中文），
+      // 不再一打开就停在普通阅读。
       if (pr.recordId !== recordId) return;
-      setCmpAutoChip('done', '中文文献，无需整篇翻译');
+      setCmpAutoChip('busy', '中文文献 · 正在整理版面');
+      if (pr.layoutFor !== recordId && !pr.layoutBusy) {
+        await waitReaderIdle();
+        if (pr.recordId !== recordId) return;
+        try { await startLayoutParse(); } catch (_) {
+          setCmpAutoChip('fail', '版面解析启动失败'); return;
+        }
+      }
+      const ok = await waitLayoutDone(recordId);
+      if (pr.recordId !== recordId) return;
+      if (ok) {
+        setCmpAutoChip('done', '中文文献 · 已自动整理');
+        try { await loadCmpAlign({ silent: true }); await openCmpMode(); } catch (_) {}
+      } else setCmpAutoChip('done', '中文文献，无需整篇翻译');
       return;
     }
     // ② 已有在跑的翻译作业（上次没等完就关了阅读器）→ 跟踪它而不是再起一篇
@@ -9016,6 +9071,10 @@
     pr.citePool = [];
     renderCitePool();
     pr.notesHit = -1;
+    window.LitDrawer?.close();
+    window.SelectionLayer?.clear?.();
+    // 清掉框选状态与查找命中，再立刻重建工具条（下次打开阅读器仍然可用）
+    try { window.ReaderTools?.destroy?.(); window.ReaderTools?.init?.(); } catch (_) {}
     $('pdfReader').classList.add('hidden');
     $('prPages').innerHTML = '';
   }
@@ -9353,6 +9412,10 @@
       wrap.appendChild(hlLayer);
       // 页面重建顺带清掉了对照精读画在这一页上的「选中块」方框，补回来
       cmpRepaintPdfPick();
+      // v2.1.0：文中超链接热区、全文查找命中框、整齐划词层（页面重建后补画）
+      try { window.PdfLinks?.render(page, viewport, wrap, pageNum); } catch (_) {}
+      try { window.ReaderTools?.repaintHits?.(wrap, pageNum); } catch (_) {}
+      try { window.SelectionLayer?.clear?.(); } catch (_) {}
     } catch (e) {
       if (isCurrentRender()) pr.rendered.delete(pageNum);
     } finally {
@@ -9465,7 +9528,12 @@
         const list = Array.isArray(a.rects) && a.rects.length
           ? a.rects.map((r) => (Array.isArray(r) ? r : [r.x1, r.y1, r.x2, r.y2]))
           : [rect];
-        for (const raw of list) {
+        // v2.1.0：历史批注 / 逐行 rects 也统一按行合并，边缘整齐不重叠
+        const merged = window.SelectionLayer?.mergeLineRects
+          ? window.SelectionLayer.mergeLineRects(list.map((r) => ({ x1: r[0], y1: r[1], x2: r[2], y2: r[3] })))
+          : list.map((r) => ({ x1: r[0], y1: r[1], x2: r[2], y2: r[3] }));
+        for (const m of merged) {
+          const raw = [m.x1, m.y1, m.x2, m.y2];
           const r = displayRect(raw);
           const div = document.createElement('div');
           div.style.position = 'absolute';
@@ -9823,9 +9891,14 @@
     const scale = pr.scale;
     const size = pr.pageSizes[pageNum - 1];
     const rotation = getPageExtraRotation(pageNum);
-    const normRects = rects.map((r) => pdfReaderUtils.toCanonicalRect({
-      x1: (r.left - wrapRect.left) / scale, y1: (r.top - wrapRect.top) / scale,
-      x2: (r.right - wrapRect.left) / scale, y2: (r.bottom - wrapRect.top) / scale,
+    // v2.1.0：先按行合并屏幕矩形，消除原生 ::selection 的行间重叠与参差行尾，
+    // 再换算到 PDF 坐标；划词工具条仍用原始 clientRects 定位。
+    const screenRects = rects.map((r) => ({ x1: r.left, y1: r.top, x2: r.right, y2: r.bottom }));
+    const merged = window.SelectionLayer?.mergeLineRects
+      ? window.SelectionLayer.mergeLineRects(screenRects) : screenRects;
+    const normRects = merged.map((r) => pdfReaderUtils.toCanonicalRect({
+      x1: (r.x1 - wrapRect.left) / scale, y1: (r.y1 - wrapRect.top) / scale,
+      x2: (r.x2 - wrapRect.left) / scale, y2: (r.y2 - wrapRect.top) / scale,
     }, size, rotation));
     return { text, pageNum, rects: normRects, clientRects: rects };
   }
@@ -11832,7 +11905,7 @@
   async function switchView(v) {
     view = v;
     document.querySelectorAll('.nav-item[data-view]').forEach((n) => n.classList.toggle('active', n.dataset.view === v));
-    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail' };
+    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
     for (const [key, id] of Object.entries(map)) $(id).classList.toggle('hidden', key !== v);
     // 顶栏「当前页面」指示：15 个模块靠它定位，避免在导航之间迷路
     const page = VIEW_META[v];
@@ -11857,6 +11930,7 @@
     // 否则它们挂在 body 上会一直盖着别的视图
     if (v !== 'thesis') window.ThesisView?.close?.();
     if (v !== 'achievements') window.AchievementView?.close?.();
+    if (v !== 'graph') window.GraphView?.close?.();
     // 顶栏搜索已移入侧边栏（只对文献中心生效），这里改用 CSS 控制整块搜索区的显隐
     const searchBox = document.querySelector('.side-search');
     if (searchBox) searchBox.classList.toggle('hidden', !isLib);
@@ -11882,12 +11956,17 @@
     if (v === 'achievements') await window.AchievementView?.mount();
     // 带 AI 能力的视图统一补上「模型切换」下拉（放在最后，保证容器已经显示）
     if (['ai', 'ideas', 'reviewer', 'notes', 'topjournals', 'papers'].includes(v)) renderAiModelRows();
+    // 知识图谱：DOM 由 knowledge-graph.js 自建，首次进入挂载、之后仅刷新
+    if (v === 'graph') await window.GraphView?.mount?.($('viewGraph'));
     if (v === 'ai') {
       renderChatMeta();
       if (!convLoaded) {
         await loadConversations();
         if (!activeConvId && conversations.length) await openConversation(conversations[0].id);
       }
+      // v2.1.0：全新安装 / 清空会话后 #chatMsgs 是空容器，没有任何地方调用 renderChatMsgs()，
+      // 设计好的欢迎页与建议指令就不会出现。这里补一次空态渲染。
+      if (!chatMsgs.length) renderChatMsgs();
     }
   }
 
@@ -13121,17 +13200,33 @@
       if (box) box.innerHTML = `<div class="empty error">读取本地知识库失败：${esc(e.message)}</div>`;
     }
   }
+  /** v2.1.0：回答下方列出可点击的参考文献，点一下直接打开阅读器 */
+  function chatRefsHtml(refs) {
+    if (!Array.isArray(refs) || !refs.length) return '';
+    const chips = refs.map((r, i) => `<button type="button" class="ai-ref-chip" data-chat-ref="${esc(r?.id || '')}" title="点击阅读这篇文献"><b>[${i + 1}]</b><span>${esc(r?.title || r?.titleZh || '未命名')}${r?.titleZh && r.titleZh !== r.title ? ' · ' + esc(r.titleZh) : ''}</span></button>`).join('');
+    return `<div class="ai-refs"><div class="ai-refs-head">参考文献</div><div class="ai-refs-list">${chips}</div></div>`;
+  }
+
   function renderChatMsgs() {
     const box = $('chatMsgs');
     if (!chatMsgs.length) {
-      box.innerHTML = `<div class="chat-welcome"><div class="chat-welcome-ico">${ico('robot')}</div><b>AI 科研助手已就绪</b><p>基于你的文献知识库、项目与任务进行定制化对话。<br />支持多会话与上下文记忆，试试右侧快捷指令，或直接输入问题。</p></div>`;
+      box.innerHTML = `<div class="chat-welcome"><b>有什么想弄清楚的？</b>` +
+        `<p>直接提问即可。回答基于你本地的全部文献，末尾会列出可点击的参考文献。</p>` +
+        `<div class="ai-suggest">` +
+        `<button type="button" data-quick="review">梳理文献综述</button>` +
+        `<button type="button" data-quick="gap">寻找研究空白</button>` +
+        `<button type="button" data-quick="innovation">构思创新点</button>` +
+        `<button type="button" data-quick="plan">制定研究计划</button>` +
+        `</div></div>`;
       return;
     }
     const summaryHint = activeSummary ? '<div class="chat-summary-hint">早期对话已压缩</div>' : '';
-    box.innerHTML = summaryHint + chatMsgs.map((m, index) =>
-      `<div class="chat-bubble ${m.role === 'user' ? 'user' : 'assistant'}${m.error ? ' error' : ''}">${m.role === 'user'
+    box.innerHTML = summaryHint + chatMsgs.map((m, index) => {
+      const bubble = `<div class="chat-bubble ${m.role === 'user' ? 'user' : 'assistant'}${m.error ? ' error' : ''}">${m.role === 'user'
         ? esc(m.content).replace(/\n/g, '<br />')
-        : `${prThinkHtml(m, { streaming: !!m.pending })}<div class="md md-render">${m.content ? chatMd(m.content) : ''}${m.pending ? '<span class="chat-cursor"></span>' : ''}</div>${(m.content && !m.pending) ? `<div class="chat-bubble-actions"><button class="pr-msg-act" data-chat-to-note="${index}" title="把这段回答导入 Markdown 笔记（可新建一篇，或追加到已有笔记）">${ico('download')}导入笔记</button></div>` : ''}${m.error ? `<button class="btn btn-sm md-retry" data-chat-retry="${index}">重试回答</button>` : ''}`}</div>`).join('');
+        : `${prThinkHtml(m, { streaming: !!m.pending })}<div class="md md-render">${m.content ? chatMd(m.content) : ''}${m.pending ? '<span class="chat-cursor"></span>' : ''}</div>${(m.content && !m.pending) ? `<div class="chat-bubble-actions"><button class="pr-msg-act" data-chat-to-note="${index}" title="把这段回答导入 Markdown 笔记">${ico('download')}导入笔记</button></div>` : ''}${m.error ? `<button class="btn btn-sm md-retry" data-chat-retry="${index}">重试回答</button>` : ''}`}</div>`;
+      return bubble + (m.role === 'assistant' && !m.pending ? chatRefsHtml(m.references) : '');
+    }).join('');
     box.scrollTop = box.scrollHeight;
   }
   async function sendChat(text, { retry = false } = {}) {
@@ -13157,6 +13252,7 @@
       onEvent(event) {
         if (event.error) errMsg = event.error;
         if (event.compressed) compressed = true;
+        if (event.references) holder.references = Array.isArray(event.references) ? event.references : [];
         // 思考过程：和正文分开收，渲染成折叠块（与阅读器里的 AI 助读同一套样式）
         if (event.reasoning) {
           holder.reasoning = (holder.reasoning || '') + event.reasoning;
@@ -14646,6 +14742,45 @@ a { color: #176b87; }
     });
 
     $('btnChatAttach').addEventListener('click', () => $('chatPdfInput').click());
+    $('btnChatMore')?.addEventListener('click', () => {
+      const menu = $('chatMoreMenu');
+      if (!menu) return;
+      menu.classList.toggle('hidden');
+      $('btnChatMore')?.setAttribute('aria-expanded', menu.classList.contains('hidden') ? 'false' : 'true');
+    });
+    $('chatMoreMenu')?.addEventListener('click', (e) => {
+      const it = e.target.closest('[data-chat-more]');
+      if (!it) return;
+      if (it.dataset.chatMore === 'attach') $('btnChatAttach')?.click();
+      if (it.dataset.chatMore === 'knowledge') $('btnChatKnowledge')?.click();
+      $('chatMoreMenu')?.classList.add('hidden');
+      $('btnChatMore')?.setAttribute('aria-expanded', 'false');
+    });
+    $('btnChatHistory')?.addEventListener('click', () => $('chatWrap')?.classList.toggle('history-open'));
+    $('btnChatNewTop')?.addEventListener('click', () => newConversation());
+    $('btnPrChatMore')?.addEventListener('click', () => {
+      const menu = $('prChatMoreMenu');
+      if (!menu) return;
+      menu.classList.toggle('hidden');
+      $('btnPrChatMore')?.setAttribute('aria-expanded', menu.classList.contains('hidden') ? 'false' : 'true');
+    });
+    $('prChatMoreMenu')?.addEventListener('click', (e) => {
+      const it = e.target.closest('[data-pr-chat-more]');
+      if (!it) return;
+      if (it.dataset.prChatMore === 'img') $('btnPrChatImg')?.click();
+      if (it.dataset.prChatMore === 'text') $('btnPrChatText')?.click();
+      $('prChatMoreMenu')?.classList.add('hidden');
+      $('btnPrChatMore')?.setAttribute('aria-expanded', 'false');
+    });
+    // 欢迎页建议指令 / 参考文献：动态注入，用委托而不是初始化时的静态绑定
+    $('chatMsgs')?.addEventListener('click', (e) => {
+      const quick = e.target.closest('[data-quick]');
+      if (quick) { sendChat(QUICK_PROMPTS[quick.dataset.quick]); return; }
+      const ref = e.target.closest('[data-chat-ref]');
+      if (ref && ref.dataset.chatRef) {
+        Promise.resolve(window.__openReader?.(ref.dataset.chatRef)).catch(() => toast('打开文献失败', 'error'));
+      }
+    });
     $('chatPdfInput').addEventListener('change', (e) => { const file = e.target.files?.[0]; if (file) uploadChatPdf(file); e.target.value = ''; });
     renderChatContext();
     $('chatContextPills').addEventListener('click', (e) => {
@@ -15051,6 +15186,47 @@ a { color: #176b87; }
     // 新邮件提醒：启动后即开始轮询收件箱（未配置邮箱时接口会立即返回，无额外开销）
     startMailNotify();
   }
+
+  // ============ v2.1.0：新模块共用的桥 ============
+  // 目录抽屉 / 框选工具 / 超链接 / 知识图谱都在独立文件里，只依赖这里暴露的最小接口。
+  window.Worlex = {
+    items: () => items,
+    openLiterature: (id) => openPdfReader(id),
+    setPrTab: (name) => switchPrTab(name),
+    reveal: (id, mode) => revealLitFile(id, mode),
+    toast, esc, api,
+    pdfDoc: () => pr.doc,
+    scale: () => pr.scale,
+    pageSizes: () => pr.pageSizes,
+    extraRotation: (n) => getPageExtraRotation(n),
+    pageWrap: (n) => document.querySelector(`.pr-page-wrap[data-page="${n}"]`),
+    gotoPage: (n) => {
+      const t = document.querySelector(`.pr-page-wrap[data-page="${n}"]`);
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    isReaderOpen: () => !!pr.open,
+    refreshItems: () => loadItems(),
+    /** 框选任意内容 → 附上图与文字 → 直接送进「AI 助读」提问 */
+    sendRegionToChat: (opts) => {
+      const o = opts || {};
+      if (!isLiteratureSource()) { toast('请先从文献中心打开一篇文献再框选送 AI', 'error'); return; }
+      switchPrTab('chat');
+      if (o.image) {
+        prChatImages.push({ name: `框选-P${o.page || 1}.jpg`, dataUrl: o.image });
+        renderPrAttach();
+      }
+      const input = $('prChatInput');
+      if (input) {
+        input.value = `请分析我框选的内容（第 ${o.page || 1} 页）：\n${String(o.text || '').slice(0, 1500)}`;
+        input.style.height = 'auto';
+        input.style.height = Math.min(160, input.scrollHeight) + 'px';
+      }
+      if (o.autoSend) Promise.resolve(sendPrChat()).catch(() => {});
+      else input?.focus();
+    },
+  };
+  window.SelectionLayer?.bind?.();
+  window.ReaderTools?.init?.();
 
   init();
 })();

@@ -13,6 +13,10 @@
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="thesis.css" />
   <link rel="stylesheet" href="achievements.css" />
+  <link rel="stylesheet" href="reader-tools.css" />
+  <link rel="stylesheet" href="pdf-links.css" />
+  <link rel="stylesheet" href="knowledge-graph.css" />
+  <link rel="stylesheet" href="workbench-extras.css" />
 </head>
 <body>
   <!-- ======================================================================
@@ -21,6 +25,7 @@
        这样既避免 emoji 的 AI 模板感与跨平台渲染差异，也让图标随主题文字色自动适配。
        ====================================================================== -->
   <svg class="icon-sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="5" cy="6.5" r="2"/><circle cx="18.5" cy="5" r="2"/><circle cx="12" cy="18.5" r="2"/><circle cx="19" cy="16" r="1.5"/><path d="M6.8 7.2 10.5 16.8M17 6.4l-3.6 10.5M6.9 7.6 17.3 15.4"/></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.2 12 3l9 7.2"/><path d="M5.5 9.3V20a1 1 0 0 0 1 1H10v-5.4h4V21h3.5a1 1 0 0 0 1-1V9.3"/></symbol>
     <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 4.5h5.2a2.6 2.6 0 0 1 2.6 2.6v12.4a2 2 0 0 0-2-2H4z"/><path d="M20 4.5h-5.2a2.6 2.6 0 0 0-2.6 2.6v12.4a2 2 0 0 1 2-2H20z"/></symbol>
     <symbol id="i-thesis" viewBox="0 0 24 24"><path d="M12 4.5 2.5 9 12 13.5 21.5 9z"/><path d="M5.6 11v4.4c0 1.5 2.9 2.8 6.4 2.8s6.4-1.3 6.4-2.8V11"/><path d="M21.5 9v5"/></symbol>
@@ -203,6 +208,7 @@
         <div class="nav-item" data-view="library"><svg class="ico" aria-hidden="true"><use href="#i-library"/></svg><span class="nav-label">文献中心</span></div>
         <div class="nav-item" data-view="thesis"><svg class="ico" aria-hidden="true"><use href="#i-thesis"/></svg><span class="nav-label">学位论文</span></div>
         <div class="nav-item" data-view="topjournals"><svg class="ico" aria-hidden="true"><use href="#i-journal"/></svg><span class="nav-label">顶刊追踪</span><span id="navTopJournalBadge" class="nav-badge hidden">0</span></div>
+        <div class="nav-item" data-view="graph"><svg class="ico" aria-hidden="true"><use href="#i-graph"/></svg><span class="nav-label">知识图谱</span></div>
         <div class="nav-item" data-view="papers"><svg class="ico" aria-hidden="true"><use href="#i-papers"/></svg><span class="nav-label">论文进度</span></div>
 
         <div class="nav-section-label">研究</div>
@@ -677,27 +683,34 @@
         </div>
       </section>
 
-      <!-- ===== 视图：AI 助手 ===== -->
+      <!-- ===== 视图：AI 助手（v2.1.0 重设计：一屏只留一个输入框，会话/资料收进抽屉） ===== -->
       <section id="viewAI" class="view hidden">
-        <div class="chat-wrap">
+        <div class="chat-wrap" id="chatWrap">
           <aside class="chat-conv">
             <button class="btn btn-primary w100" id="btnNewChat">＋ 新对话</button>
             <div id="convList" class="conv-list"></div>
           </aside>
           <div class="chat-main">
-            <div id="chatMsgs" class="chat-msgs">
-              <div class="chat-welcome">
-                <div class="chat-welcome-ico"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-ai"/></svg></div>
-                <b>AI 科研助手已就绪</b>
-              </div>
+            <div class="ai-topbar">
+              <span class="ai-topbar-title">AI 助手<span class="ai-topbar-sub">基于本地知识库回答，附参考文献</span></span>
+              <button class="ai-topbar-btn" id="btnChatHistory" type="button">历史会话</button>
+              <button class="ai-topbar-btn" id="btnChatNewTop" type="button">新对话</button>
             </div>
+            <div id="chatMsgs" class="chat-msgs"></div>
             <div id="chatContextPills" class="chat-context-pills" aria-live="polite"><span class="chat-context-empty"></span></div>
             <div class="ai-model-row" id="chatModelRow"></div>
             <div class="chat-input-row">
-              <textarea id="chatInput" rows="2" placeholder="输入问题…"></textarea>
-              <button id="btnChatAttach" class="btn btn-ghost" title="上传 PDF"><svg class="ico ico" aria-hidden="true"><use href="#i-link"/></svg></button>
-              <button id="btnChatKnowledge" class="btn btn-ghost" title="选择本地知识"><svg class="ico ico" aria-hidden="true"><use href="#i-brain"/></svg></button>
-              <button id="btnChatSend" class="btn btn-primary">发送</button>
+              <div class="ai-composer">
+                <textarea id="chatInput" rows="1" placeholder="就你的文献提问，Enter 发送 / Shift+Enter 换行"></textarea>
+                <button class="ai-more" id="btnChatMore" type="button" aria-label="添加资料" aria-expanded="false">＋</button>
+                <div class="ai-more-menu hidden" id="chatMoreMenu">
+                  <button class="ai-more-item" type="button" data-chat-more="attach">上传 PDF</button>
+                  <button class="ai-more-item" type="button" data-chat-more="knowledge">选择本地知识</button>
+                </div>
+                <button id="btnChatAttach" class="btn btn-ghost hidden" title="上传 PDF">上传 PDF</button>
+                <button id="btnChatKnowledge" class="btn btn-ghost hidden" title="选择本地知识">本地知识</button>
+                <button id="btnChatSend" class="btn btn-primary">发送</button>
+              </div>
             </div>
           </div>
           <aside class="chat-side">
@@ -711,18 +724,21 @@
             </div>
             <div class="card chat-quick">
               <div class="card-head"><b><svg class="ico ico-sm" aria-hidden="true"><use href="#i-zap"/></svg>快捷指令</b></div>
-              <button class="quick-btn" data-quick="innovation"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-ideas"/></svg>构思论文创新点</button>
-              <button class="quick-btn" data-quick="submission"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-papers"/></svg>投稿策略与期刊推荐</button>
-              <button class="quick-btn" data-quick="thesis"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-thesis"/></svg>大论文进度诊断</button>
-              <button class="quick-btn" data-quick="weekly"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-file"/></svg>生成本周科研周报</button>
-              <button class="quick-btn" data-quick="gap"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-search"/></svg>寻找研究空白</button>
-              <button class="quick-btn" data-quick="review"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-library"/></svg>文献综述思路</button>
-              <button class="quick-btn" data-quick="plan"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-calendar"/></svg>制定两周科研计划</button>
+              <button class="quick-btn" data-quick="innovation">构思论文创新点</button>
+              <button class="quick-btn" data-quick="submission">投稿策略与期刊推荐</button>
+              <button class="quick-btn" data-quick="thesis">大论文进度诊断</button>
+              <button class="quick-btn" data-quick="weekly">生成本周科研周报</button>
+              <button class="quick-btn" data-quick="gap">寻找研究空白</button>
+              <button class="quick-btn" data-quick="review">文献综述思路</button>
+              <button class="quick-btn" data-quick="plan">制定两周科研计划</button>
             </div>
             <button class="btn w100" id="btnClearChat"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-trash"/></svg>清空全部对话</button>
           </aside>
         </div>
       </section>
+
+      <!-- ===== 视图：知识图谱（DOM 由 knowledge-graph.js 自建） ===== -->
+      <section id="viewGraph" class="view hidden"></section>
 
     </div>
   </div>
@@ -1590,10 +1606,13 @@
         <button id="prToggleMd" class="btn btn-ghost pr-icobtn hidden" title="在 Markdown 译文与原文 PDF 之间切换"><svg class="ico" aria-hidden="true"><use href="#i-edit"/></svg><span class="pr-bt-t">查看译文</span></button>
         <button id="prToggleNote" class="btn btn-ghost pr-icobtn" title="笔记模式：左侧原文 / 中间划词翻译 / 右侧笔记（Markdown + 思维导图）"><svg class="ico" aria-hidden="true"><use href="#i-note"/></svg><span class="pr-bt-t">笔记模式</span></button>
         <button id="prToggleCmp" class="btn btn-ghost pr-icobtn" title="对照精读：大纲 / 原文 / 译文 / 助读"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg><span class="pr-bt-t">对照精读</span></button>
-        <button id="prLayoutBtn" class="btn btn-ghost pr-icobtn" title="版面解析：识别图表 / 表格 / 公式区域，悬停看类型、点击放大或送 AI 解释"><svg class="ico" aria-hidden="true"><use href="#i-puzzle"/></svg><span class="plb-text">版面</span></button>
-        <button id="prReadingBtn" class="btn btn-ghost pr-icobtn" title="阅读模式：把 PDF 重排成干净的文本流（双栏变单栏、字号行距可调、页眉页脚剔除、图表公式原样保留），与原页标注双向同步"><svg class="ico" aria-hidden="true"><use href="#i-book"/></svg><span class="pr-bt-t">阅读模式</span></button>
+        <!-- v2.1.0：版面识别改为打开文献即自动解析，阅读模式入口移除；保留 DOM 与逻辑兜底，避免旧绑定报错 -->
+        <button id="prLayoutBtn" class="btn btn-ghost pr-icobtn hidden" title="版面解析：识别图表 / 表格 / 公式区域"><svg class="ico" aria-hidden="true"><use href="#i-puzzle"/></svg><span class="plb-text">版面</span></button>
+        <button id="prReadingBtn" class="btn btn-ghost pr-icobtn hidden" title="阅读模式（已移除入口）"><svg class="ico" aria-hidden="true"><use href="#i-book"/></svg><span class="pr-bt-t">阅读模式</span></button>
         <!-- 自动对照管线状态：打开文献 → 自动版面识别 → 自动整篇翻译 → 自动进对照精读 -->
         <span id="cmpAutoChip" class="cmp-auto-chip hidden"></span>
+        <!-- 表格框选 / 任意框选送 AI / 全文查找（DOM 由 reader-tools.js 注入） -->
+        <div class="pr-tools" id="prToolStrip"></div>
       </div>
       <div class="pr-tools" id="prColorTools">
         <span class="tb-label">高亮</span>
@@ -1827,9 +1846,9 @@
           <label class="ml-switch cmp-start-switch"><input type="checkbox" id="cmpRefs" /> 参考文献也翻译</label>
           <button id="cmpStartClose" class="cmp-start-close hidden" title="收起，直接看四区对照"><svg class="ico ico" aria-hidden="true"><use href="#i-x"/></svg></button>
           <div class="cmp-start-actions">
-            <button id="cmpStartBtn" class="btn btn-primary">开始对照翻译</button>
+            <button id="cmpStartBtn" class="btn btn-primary">重新翻译</button>
             <button id="cmpLoadBtn" class="btn btn-ghost" title="不重新翻译，直接读取这篇已经生成过的对照数据">读取已有结果</button>
-            <button id="cmpParseBtn" class="btn btn-ghost hidden" title="先跑一次版面识别">先识别版面</button>
+            <button id="cmpParseBtn" class="btn btn-ghost hidden" title="先跑一次版面识别（打开文献即自动解析，通常无需点击）">先识别版面</button>
           </div>
           <div class="cmp-start-progress hidden" id="cmpStartProgress">
             <div class="ft-bar"><div class="ft-bar-inner" id="cmpBarInner"></div></div>
@@ -1856,18 +1875,19 @@
           <button class="pn-seg-btn active" data-cmpview="split" title="左原文页、右译文页；滚动不同步，点段落互相定位">原文译文</button>
           <button class="pn-seg-btn" data-cmpview="trans" title="只看译文页（版面与原页一致，图表表格保持原图）">仅译文</button>
         </div>
-        <select id="cmpBarEngine" class="cmp-bar-engine" title="点段落即译 / 重译统一用这个引擎，顶部设置一次即可">
+        <!-- v2.1.0：引擎一律跟随全局设置、配对固定按段；下拉保留在 DOM 里供旧逻辑读取默认值 -->
+        <select id="cmpBarEngine" class="cmp-bar-engine hidden" title="跟随全局设置">
           <option value="auto">引擎：跟随全局设置</option>
         </select>
-        <select id="cmpPairMode" class="cmp-bar-engine" title="对照笔记的配对粒度；逐句模式仍按段落发送一次翻译请求，不会变成上千次句级请求">
+        <select id="cmpPairMode" class="cmp-bar-engine hidden" title="逐段配对">
           <option value="para">逐段配对</option>
           <option value="sentence">逐句配对</option>
         </select>
         <span class="cmp-engine-state" id="cmpEngineState"></span>
         <span class="cmp-hint" id="cmpSyncHint"></span>
         <span class="cmp-bar-spacer"></span>
-        <button id="cmpExportNote" class="cmp-bar-btn" title="按当前配对方式导出对照笔记（Markdown，原文引用 + 译文）"><svg class="ico ico" aria-hidden="true"><use href="#i-download"/></svg>对照笔记</button>
-        <button id="cmpStartToggle" class="cmp-bar-btn" title="选择翻译引擎，把整篇按版面块逐段翻译"><svg class="ico ico" aria-hidden="true"><use href="#i-globe"/></svg>整篇翻译</button>
+        <button id="cmpExportNote" class="cmp-bar-btn hidden" title="导出对照笔记（入口已移除）"><svg class="ico ico" aria-hidden="true"><use href="#i-download"/></svg>对照笔记</button>
+        <button id="cmpStartToggle" class="cmp-bar-btn" title="重新翻译整篇：按版面块重新逐段翻译"><svg class="ico ico" aria-hidden="true"><use href="#i-globe"/></svg>重新翻译</button>
       </div>
 
       <div class="cmp-panes" id="cmpPanes">
@@ -2138,10 +2158,16 @@
           </div>
           <div id="prChatAttach" class="pr-chat-attach"></div>
           <div class="pr-chat-input-row">
-            <button id="btnPrChatImg" class="pr-chat-icon-btn" title="上传图片（截图 / 图表 / 手写笔记），AI 会看图回答"><svg class="ico ico" aria-hidden="true"><use href="#i-image"/></svg></button>
-            <button id="btnPrChatText" class="pr-chat-icon-btn" title="把当前页文字附给 AI"><svg class="ico ico" aria-hidden="true"><use href="#i-file"/></svg></button>
+            <button id="btnPrChatMore" class="pr-chat-icon-btn" type="button" title="添加图片或本页文字" aria-expanded="false">＋</button>
+            <div id="prChatMoreMenu" class="pr-chat-more-menu hidden">
+              <button type="button" data-pr-chat-more="img">上传图片</button>
+              <button type="button" data-pr-chat-more="text">附上本页文字</button>
+            </div>
+            <!-- v2.1.0：输入框前两个按钮收进「＋」菜单，界面直接以输入框开始 -->
+            <button id="btnPrChatImg" class="pr-chat-icon-btn hidden" title="上传图片"><svg class="ico ico" aria-hidden="true"><use href="#i-image"/></svg></button>
+            <button id="btnPrChatText" class="pr-chat-icon-btn hidden" title="把当前页文字附给 AI"><svg class="ico ico" aria-hidden="true"><use href="#i-file"/></svg></button>
             <input id="prChatFile" type="file" accept="image/*" multiple class="hidden" />
-            <textarea id="prChatInput" class="pr-chat-input" rows="1" placeholder="就这篇论文提问，Enter 发送 / Shift+Enter 换行。可粘贴或上传图片…"></textarea>
+            <textarea id="prChatInput" class="pr-chat-input" rows="1" placeholder="就这篇论文提问，Enter 发送 / Shift+Enter 换行"></textarea>
             <button id="btnPrChatSend" class="btn btn-primary pr-chat-send">发送</button>
           </div>
         </div>
@@ -2277,6 +2303,11 @@
   <script src="thesis-import-utils.js"></script>
   <script src="thesis.js"></script>
   <script src="achievements.js"></script>
+  <script src="selection-layer.js"></script>
+  <script src="lit-drawer.js"></script>
+  <script src="reader-tools.js"></script>
+  <script src="pdf-links.js"></script>
+  <script src="knowledge-graph.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
