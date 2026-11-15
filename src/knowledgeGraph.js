@@ -182,15 +182,103 @@ export function clusterTopics(entries, options = {}) {
 
 const MAX_DOCS = 400;
 const MAX_EDGES = 1200;
-const MAX_DEGREE = 8;
-const THRESHOLDS = { topic: 0.2, author: 0.5, collection: 0.4, citation: 0.8 };
+// 这里的度数按「不同对端文献」计，一篇最多和 6 篇相连；
+// 同两篇之间可以同时有「同关键词 / 同方法 / 同对象」多条边，不算重复占用额度。
+const MAX_DEGREE = 6;
+// 边只建立在内容交集上：同关键词、同研究方法、同研究对象。
+// 「同属分类」「共同作者」是元数据，不代表两篇文献讲的是同一件事，已不参与建边。
+const THRESHOLDS = { keyword: 0.4, method: 0.5, subject: 0.45, citation: 0.8 };
+
+/**
+ * 研究方法词表：[规范名, ...别名]。
+ * 关键词里常常没有方法，方法只写在摘要里（"we conducted a survey"），
+ * 所以匹配范围是标题 + 关键词 + 摘要，而不是只看 keywords。
+ * 中文别名按子串匹配，英文按词边界（允许复数），避免 sem 命中 semantic、did 命中助动词。
+ */
+const METHOD_LEXICON = [
+  ['问卷', '问卷', 'survey', 'questionnaire'],
+  ['实验', '实验', 'experiment', 'experimental'],
+  ['准实验', '准实验', 'quasi-experiment', 'natural experiment'],
+  ['结构方程模型', '结构方程', 'structural equation', 'sem', 'pls-sem'],
+  ['回归分析', '回归分析', '回归', 'regression', 'ols'],
+  ['离散选择模型', '离散选择', 'logit', 'probit', 'discrete choice'],
+  ['面板数据', '面板数据', 'panel data', '固定效应', 'fixed effect'],
+  ['双重差分', '双重差分', 'difference-in-differences'],
+  ['工具变量', '工具变量', 'instrumental variable'],
+  ['倾向得分匹配', '倾向得分', 'propensity score'],
+  ['元分析', '元分析', '荟萃分析', 'meta-analysis', 'meta analysis'],
+  ['内容分析', '内容分析', 'content analysis'],
+  ['文本挖掘', '文本挖掘', '文本分析', 'text mining', 'text analysis'],
+  ['主题模型', '主题模型', 'topic model', 'lda'],
+  ['机器学习', '机器学习', 'machine learning', '随机森林', 'random forest', 'xgboost', '支持向量机', 'svm'],
+  ['深度学习', '深度学习', 'deep learning', '神经网络', 'neural network', 'transformer', 'bert'],
+  ['大语言模型', '大语言模型', '大模型', 'large language model', 'llm', 'chatgpt', 'generative ai'],
+  ['自然语言处理', '自然语言处理', 'nlp', 'natural language processing'],
+  ['计算机视觉', '计算机视觉', 'computer vision', '图像识别', 'image recognition', '多模态', 'multimodal'],
+  ['访谈', '访谈', 'interview'],
+  ['焦点小组', '焦点小组', 'focus group'],
+  ['案例研究', '案例研究', '案例分析', 'case study'],
+  ['扎根理论', '扎根理论', 'grounded theory'],
+  ['眼动追踪', '眼动', 'eye tracking', 'eye-tracking'],
+  ['神经科学方法', '脑电', 'eeg', 'fmri', '脑成像'],
+  ['联合分析', '联合分析', 'conjoint'],
+  ['社会网络分析', '社会网络', 'social network'],
+  ['文献综述', '文献综述', '系统综述', 'systematic review', 'literature review'],
+  ['混合方法', '混合方法', 'mixed method'],
+  ['A/B 测试', 'a/b 测试', 'a/b test', 'ab test', 'ab测试'],
+  ['仿真', '仿真', 'simulation', 'agent-based', '多主体'],
+  ['大数据分析', '大数据', 'big data'],
+];
+
+/**
+ * 研究对象词表：[规范名, ...别名]。
+ * 这一维回答「两篇文献研究的是不是同一批人或同一个市场」——
+ * 同为消费者研究，一个看直播带货、一个看绿色包装，才值得连起来。
+ */
+const SUBJECT_LEXICON = [
+  ['消费者', '消费者', 'consumer', 'consumption'],
+  ['用户', '用户', 'user'],
+  ['顾客', '顾客', '客户', 'customer', 'client'],
+  ['企业', '企业', '公司', 'firm', 'enterprise', 'company'],
+  ['平台', '平台', 'platform'],
+  ['电子商务', '电子商务', '电商', 'e-commerce', 'ecommerce', 'online shopping', '网购'],
+  ['直播', '直播', 'live streaming', 'live stream', 'livestream'],
+  ['短视频', '短视频', 'short video', 'tiktok', '抖音'],
+  ['社交媒体', '社交媒体', 'social media', '微信', 'wechat', '微博', 'twitter', 'facebook'],
+  ['品牌', '品牌', 'brand'],
+  ['广告', '广告', 'advertising', 'advertisement'],
+  ['推荐系统', '推荐系统', '推荐算法', 'recommender', 'recommendation system'],
+  ['供应链', '供应链', 'supply chain'],
+  ['定价', '定价', '价格', 'pricing', 'price'],
+  ['可持续消费', '绿色消费', '可持续消费', 'sustainable consumption', 'green consumption', 'esg'],
+  ['人工智能', '人工智能', 'artificial intelligence'],
+  ['生成式内容', '生成式', 'generative', 'aigc'],
+  ['营销', '营销', 'marketing'],
+  ['产品', '产品', 'product'],
+  ['服务', '服务', 'service'],
+  ['信任', '信任', 'trust'],
+  ['满意度', '满意度', 'satisfaction'],
+  ['购买意愿', '购买意愿', '购买决策', 'purchase intention'],
+  ['口碑', '口碑', 'word of mouth', 'word-of-mouth', 'ewom'],
+  ['隐私', '隐私', 'privacy'],
+  ['学生', '学生', 'student'],
+  ['员工', '员工', 'employee', 'worker'],
+  ['投资者', '投资者', 'investor'],
+  ['医疗健康', '医疗', '健康', 'healthcare', 'health'],
+  ['旅游', '旅游', 'tourism', 'travel'],
+  ['教育', '教育', 'education'],
+  ['金融', '金融', 'finance', 'financial'],
+  ['算法', '算法', 'algorithm'],
+  ['移动应用', '移动应用', 'mobile application', 'app'],
+];
 // 大模型分组的上限：超过这个数就是模型没合并好（服务端会先做一次上位主题归并），
 // 这里只是兜底 —— 宁可少画几个主题，也不能让几十篇文献莫名掉进「未分类」。
 const MAX_LLM_GROUPS = 20;
 const MAX_GROUP_NAME = 40;
-// 图谱结构版本：v3 起每条边带 reason / terms / citing（「为什么相连」）。
-// 旧版本持久化的 graph 没有这些字段，服务端读到版本不符就重建，不必等用户手动重聚类。
-export const GRAPH_VERSION = 3;
+// 图谱结构版本：v4 起边只按内容建（同关键词 / 同方法 / 同研究对象），
+// 不再有「同属分类」「共同作者」这两类元数据边。旧版本持久化的 graph 一边是
+// 拿分类连出来的，服务端读到版本不符就重建，不必等用户手动重聚类。
+export const GRAPH_VERSION = 4;
 // 「为什么相连」里最多列出几个共享词
 const MAX_REASON_TERMS = 3;
 
@@ -250,55 +338,101 @@ export function applyTopicGroups(entries, groups) {
   return { topics, assignments, coverage: used.size };
 }
 
-function tokenSet(e) {
-  const s = new Set();
-  for (const t of Array.isArray(e?.tokens) ? e.tokens : []) {
-    const k = str(t).toLowerCase().trim();
-    if (k) s.add(k);
+/**
+ * 把关键词拆成原子词。
+ * 库里的 keywords 常常不是干净的词：AI 解析会写成
+ * 「作者原列关键词：A、B。ai 补充检索词：C、D」或「machine learning（机器学习）」，
+ * 整串比对永远不会和另一篇相等，等于没有关键词可用。这里先切掉来源前缀，
+ * 再按顿号/逗号/分号拆开，括号里的译名也单独算一个词。
+ */
+function keywordAtoms(e) {
+  const out = new Map(); // lowercase → 展示用原文
+  const push = (raw) => {
+    const s = str(raw).replace(/\s+/g, ' ').replace(/^[\s.。;；:：,-]+|[\s.。;；:：,-]+$/g, '').trim();
+    if (!s || s.length > 30) return;   // 整段检索词不是关键词
+    if (/^\d+$/.test(s)) return;
+    const low = s.toLowerCase();
+    if (!out.has(low)) out.set(low, s);
+  };
+  for (const raw of toList(e?.keywords)) {
+    const cleaned = str(raw)
+      .replace(/作者原列关键词\s*[:：]?/gi, '|')
+      .replace(/ai\s*补充检索词\s*[:：]?/gi, '|')
+      .replace(/补充检索词\s*[:：]?/gi, '|');
+    for (const seg of cleaned.split('|')) {
+      for (const part of seg.split(/[、,，;；/\n]+/)) {
+        const p = part.trim();
+        if (!p) continue;
+        const m = p.match(/^(.+?)[（(]([^()（）]+)[)）]\s*$/);
+        if (m) { push(m[1]); push(m[2]); } else push(p);
+      }
+    }
   }
-  return s;
+  return out;
 }
-function keywordSet(e) {
-  const s = new Set();
-  for (const k of toList(e?.keywords)) {
-    const v = str(k).toLowerCase().trim();
-    if (v) s.add(v);
+/** 每个词出现在多少篇里（文档频次）：越稀有的共享词，越能说明这两篇为什么被连起来。 */
+function docFreq(sets) {
+  const df = new Map();
+  for (const set of sets) {
+    if (!set) continue;
+    for (const t of set) df.set(t, (df.get(t) || 0) + 1);
   }
-  return s;
-}
-function authorSet(e) {
-  const s = new Set();
-  for (const a of toList(e?.authors)) {
-    const v = str(a).toLowerCase().trim();
-    if (v) s.add(v);
-  }
-  return s;
-}
-function jaccard(a, b) {
-  if (!a.size || !b.size) return 0;
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter++;
-  const uni = a.size + b.size - inter;
-  return uni ? inter / uni : 0;
+  return df;
 }
 
 /**
- * 共享 token 能不能展示给人看。
- * tokens 由 tokenize() 产生：英文是完整单词，中文是 2-gram。中文 2-gram 里混着
- * 「荐系 / 含关 / 供材」这类跨词边界的碎片，靠单字黑名单过滤不干净 —— 与其把碎片
- * 摊给用户当「相连理由」，不如只放行英文完整词；中文靠 keywords 的完整词交集。
+ * 全库过半文献都有的词，连起来说明不了什么。
+ * 「问卷」「消费者」这类词在本库里几乎人人都有，靠它建边会把整张图连成一坨，
+ * 等于没有解释；所以共享词要么稀有，要么就别当依据。小库（<3 篇）不设限。
  */
-function showableToken(t) {
-  const s = str(t).trim();
-  if (!/^[a-z][a-z0-9]*$/.test(s)) return false;
-  return s.length >= 4; // 英文至少 4 个字母，避开 crm / ai 这类过泛的缩写
+function tooCommon(df, n, ratio) {
+  const d = Number(df) || 0;
+  if (d < 3) return false;
+  return d / Math.max(1, n) > ratio;
 }
-function overlapRatio(a, b) {
-  if (!a.size || !b.size) return 0;
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter++;
-  return inter / Math.min(a.size, b.size);
+
+/** 别名 → 编译好的正则（英文按词边界，允许复数；中文走 includes，不用正则）。 */
+const ALIAS_RE = new Map();
+
+function hitAlias(hay, alias) {
+  if (!/[a-z]/.test(alias)) return hay.includes(alias);
+  let re = ALIAS_RE.get(alias);
+  if (!re) {
+    const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    re = new RegExp(`(^|[^a-z])${esc}(s|es)?([^a-z]|$)`);
+    ALIAS_RE.set(alias, re);
+  }
+  return re.test(hay);
 }
+
+/**
+ * 从「标题 + 译名 + 关键词 + 摘要」里认出方法与研究对象。
+ * 摘要缺失时才退回正文开头 —— 全文里参考文献和致谢会带来噪声，
+ * 只在没别的可用内容时才用，且只取前 4000 字。
+ */
+function contentText(e) {
+  const head = [
+    str(e?.title),
+    str(e?.titleZh),
+    toList(e?.keywords).join(' '),
+    str(e?.summary),
+  ].filter(Boolean).join('\n').slice(0, 6000).toLowerCase();
+  if (head.length >= 400) return head;
+  return `${head}\n${str(e?.text).slice(0, 4000)}`.toLowerCase();
+}
+
+function matchLexicon(hay, lexicon) {
+  const out = new Set();
+  if (!hay) return out;
+  for (const rule of lexicon) {
+    const label = rule[0];
+    for (let i = 1; i < rule.length; i++) {
+      if (hitAlias(hay, rule[i])) { out.add(label); break; }
+    }
+  }
+  return out;
+}
+
 // 对方标题 / 「作者 年份」出现在 A 的 DOI 或全文里 → 视为引用
 function citationWeight(a, b) {
   const hay = (str(a?.text) + ' ' + str(a?.doi)).toLowerCase();
@@ -321,21 +455,21 @@ function citationWeight(a, b) {
 /**
  * 生成文献之间的关联边。
  *
- * 每条边除了 source/target/kind/weight，还带一句可读的 reason：
- * 「共同主题词：消费者、购买意愿」「共同作者：张三」「同属分类：营销」「本篇引用了它」。
+ * 只按内容建边 —— 两篇文献要么共享关键词，要么用了同一种研究方法，要么研究同一类对象。
+ * 「同属分类」「共同作者」这类元数据不再参与：同一个分类里可能什么主题都有，
+ * 同一个作者也完全可能写两篇毫无关系的东西，拿它当连接依据等于没有解释。
+ *
+ * 每条边除了 source/target/kind/weight，还带一句可读的 reason，
  * 前端点开节点时据此解释「为什么相连」，不必再猜。
  *
  * @param {Array} entries 索引条目
- * @param {Object} assignments 文献 id → { topicId, label }
- * @param {{collectionNames?: Object<string,string>}} [options] 分类 id → 名字
+ * @param {Object} [_assignments] 旧版聚类结果；保留这个位置只为兼容既有调用
+ * @param {Object} [_options] 旧版分类名表；已不使用
  */
-export function buildEdges(entries, assignments, options) {
-  const opts = options && typeof options === 'object' ? options : {};
-  const collectionNames = opts.collectionNames && typeof opts.collectionNames === 'object'
-    ? opts.collectionNames : {};
+export function buildEdges(entries, _assignments, _options) {
   const all = Array.isArray(entries) ? entries.filter((e) => e && typeof e === 'object') : [];
   const list = all.slice(0, MAX_DOCS); // 超过 400 篇先截断
-  const amap = assignments && typeof assignments === 'object' ? assignments : {};
+  const N = list.length;
   const cand = [];
   const seen = new Set();
   const add = (idA, idB, kind, weight, extra) => {
@@ -360,24 +494,26 @@ export function buildEdges(entries, assignments, options) {
     cand.push(item);
   };
 
-  const tokens = list.map(tokenSet);
-  const kws = list.map(keywordSet);
-  const authors = list.map(authorSet);
-  const authorsRaw = list.map((e) => toList(e?.authors));
+  const kwMaps = list.map(keywordAtoms);
+  const kws = kwMaps.map((m) => new Set(m.keys()));
 
   // 关键词保留原词大小写/写法用于展示（集合里都是 lowercase）
   const kwDisplay = new Map();
-  for (const e of list) {
-    for (const k of toList(e?.keywords)) {
-      const low = str(k).toLowerCase().trim();
-      if (low && !kwDisplay.has(low)) kwDisplay.set(low, str(k).trim());
-    }
+  for (const m of kwMaps) {
+    for (const [low, disp] of m) if (!kwDisplay.has(low)) kwDisplay.set(low, disp);
   }
-  // token 文档频次：共享词里越稀有的越能说明「这两篇为什么被连起来」
-  const tokenDf = new Map();
-  for (const set of tokens) {
-    for (const t of set) tokenDf.set(t, (tokenDf.get(t) || 0) + 1);
-  }
+  const kwDf = docFreq(kws);
+
+  // 内容维度：从标题 / 关键词 / 摘要里认出研究方法与研究对象
+  const facets = list.map((e) => {
+    const hay = contentText(e);
+    return {
+      methods: matchLexicon(hay, METHOD_LEXICON),
+      subjects: matchLexicon(hay, SUBJECT_LEXICON),
+    };
+  });
+  const methodDf = docFreq(facets.map((f) => f.methods));
+  const subjectDf = docFreq(facets.map((f) => f.subjects));
 
   for (let i = 0; i < list.length; i++) {
     const a = list[i];
@@ -387,72 +523,53 @@ export function buildEdges(entries, assignments, options) {
       const b = list[j];
       const idB = str(b.id).trim();
       if (!idB || idA === idB) continue;
-      // topic：共享 token / 关键词相似度，同主题再加权
-      const simRaw = 0.6 * jaccard(tokens[i], tokens[j]) + 0.4 * jaccard(kws[i], kws[j]);
-      const ta = amap[idA]?.topicId, tb = amap[idB]?.topicId;
-      const sameTopic = !!(ta && tb && ta === tb);
-      // 共享关键词（AI 解析出的完整词，最像人话）优先，其次才是筛过的共享 token
-      const terms = [];
+      // ---- 同一关键词：只认 AI 解析出的完整词 ----
+      const sharedKw = [];
       for (const k of kws[i]) {
         if (!kws[j].has(k) || !kwDisplay.has(k)) continue;
-        terms.push(kwDisplay.get(k));
-        if (terms.length >= MAX_REASON_TERMS) break;
+        if (tooCommon(kwDf.get(k), N, 0.2)) continue; // 「研究」「消费者」这类人人都有
+        sharedKw.push(kwDisplay.get(k));
+        if (sharedKw.length >= MAX_REASON_TERMS) break;
       }
-      if (terms.length < MAX_REASON_TERMS) {
-        const taken = new Set(terms.map((s) => s.toLowerCase()));
-        const cands = [];
-        for (const t of tokens[i]) {
-          if (!tokens[j].has(t) || taken.has(t) || !showableToken(t)) continue;
-          // 已经用「消费者行为」当过理由，就别再补「消费者 / 行为」这种被它包含的碎片
-          if (terms.some((s) => s.toLowerCase().includes(t))) continue;
-          cands.push(t);
-        }
-        // 稀有优先；同频次按字典序，保证相同输入产生相同理由
-        cands.sort((x, y) => ((tokenDf.get(x) || 0) - (tokenDf.get(y) || 0)) || cmpStr(x, y));
-        for (const t of cands) {
-          terms.push(t);
-          if (terms.length >= MAX_REASON_TERMS) break;
-        }
-      }
-      const sim = Math.min(simRaw + (sameTopic ? 0.15 : 0), 1);
-      const pct = Math.round(simRaw * 100);
-      const topicLabel = str(amap[idA]?.label || amap[idB]?.label || '').trim();
-      let reason;
-      if (terms.length) {
-        reason = `共同关键词：${terms.join('、')}`;
-      } else if (sameTopic && topicLabel) {
-        // 拼不出可信的共享词时，别硬凑 2-gram 碎片：说清「同主题」更诚实。
-        // 相似度太低（<20%）就不提数字，免得「内容相近 9%」读起来像在硬连。
-        reason = pct >= 20
-          ? `同一主题「${topicLabel}」· 内容相近（${pct}%）`
-          : `同一主题「${topicLabel}」`;
-      } else {
-        reason = `研究内容相近（${pct}%）`;
-      }
-      add(idA, idB, 'topic', sim, { terms, reason });
-      // author：同一作者
-      const ratio = overlapRatio(authors[i], authors[j]);
-      if (ratio > 0) {
-        const shared = [];
-        for (const name of authorsRaw[i]) {
-          if (authors[j].has(name.toLowerCase())) shared.push(name);
-          if (shared.length >= 2) break;
-        }
-        add(idA, idB, 'author', 0.5 + 0.45 * ratio, {
-          reason: shared.length ? `共同作者：${shared.join('、')}` : '作者有重合',
+      if (sharedKw.length) {
+        add(idA, idB, 'keyword', Math.min(0.92, 0.5 + 0.14 * (sharedKw.length - 1)), {
+          terms: sharedKw,
+          reason: `共同关键词：${sharedKw.join('、')}`,
         });
       }
-      // collection：同一分类
-      const ca = str(a.collectionId).trim(), cb = str(b.collectionId).trim();
-      if (ca && ca === cb) {
-        const cname = str(collectionNames[ca]).trim();
-        add(idA, idB, 'collection', 0.45, {
-          reason: cname ? `同属分类「${cname}」` : '归在同一分类',
+
+      // ---- 同一研究方法：都用问卷 / 实验 / 文本挖掘，结论才可比 ----
+      const sharedMethod = [];
+      for (const m of facets[i].methods) {
+        // 方法词门槛比对象词宽一点，但全库三成都用的方法（如「实验」）同样不构成区分
+        if (!facets[j].methods.has(m) || tooCommon(methodDf.get(m), N, 0.3)) continue;
+        sharedMethod.push(m);
+        if (sharedMethod.length >= MAX_REASON_TERMS) break;
+      }
+      if (sharedMethod.length) {
+        add(idA, idB, 'method', Math.min(0.9, 0.58 + 0.16 * (sharedMethod.length - 1)), {
+          terms: sharedMethod,
+          reason: `共同研究方法：${sharedMethod.join('、')}`,
         });
       }
-      // citation：双向检查，记住是谁引用了谁
-      const ab = citationWeight(a, b);
-      const ba = citationWeight(b, a);
+
+      // ---- 同一研究对象：都在看消费者 / 平台 / 供应链，才有可对照之处 ----
+      const sharedSubject = [];
+      for (const s of facets[i].subjects) {
+        if (!facets[j].subjects.has(s) || tooCommon(subjectDf.get(s), N, 0.2)) continue;
+        sharedSubject.push(s);
+        if (sharedSubject.length >= MAX_REASON_TERMS) break;
+      }
+      if (sharedSubject.length) {
+        add(idA, idB, 'subject', Math.min(0.86, 0.52 + 0.12 * (sharedSubject.length - 1)), {
+          terms: sharedSubject,
+          reason: `共同研究对象：${sharedSubject.join('、')}`,
+        });
+      }
+
+      // ---- 引用：正文里明确提到了对方，是最硬的内容证据，保留 ----
+      const ab = citationWeight(list[i], list[j]);
+      const ba = citationWeight(list[j], list[i]);
       if (ab > 0 || ba > 0) {
         add(idA, idB, 'citation', Math.max(ab, ba), {
           citing: ab >= ba ? idA : idB,
@@ -462,22 +579,27 @@ export function buildEdges(entries, assignments, options) {
     }
   }
 
-  // 权重降序 + 稳定 tie-break，再按「每篇 ≤8 条、总量 ≤1200」裁剪
+  // 权重降序 + 稳定 tie-break，再按「每篇 ≤10 个邻居、总量 ≤1200」裁剪
   cand.sort((x, y) =>
     (y.weight - x.weight) ||
     cmpStr(x.source, y.source) ||
     cmpStr(x.target, y.target) ||
     cmpStr(x.kind, y.kind));
-  const degree = new Map();
+  const peers = new Map(); // 文献 id → 已连上的对端集合
   const edges = [];
   for (const e of cand) {
     if (edges.length >= MAX_EDGES) break;
-    const da = degree.get(e.source) || 0;
-    const db = degree.get(e.target) || 0;
-    if (da >= MAX_DEGREE || db >= MAX_DEGREE) continue;
+    let pa = peers.get(e.source);
+    if (!pa) { pa = new Set(); peers.set(e.source, pa); }
+    let pb = peers.get(e.target);
+    if (!pb) { pb = new Set(); peers.set(e.target, pb); }
+    // 同一对文献可能同时有「同关键词 / 同方法」多条边，不能算两次额度
+    const overA = pa.size >= MAX_DEGREE && !pa.has(e.target);
+    const overB = pb.size >= MAX_DEGREE && !pb.has(e.source);
+    if (overA || overB) continue;
     edges.push(e);
-    degree.set(e.source, da + 1);
-    degree.set(e.target, db + 1);
+    pa.add(e.target);
+    pb.add(e.source);
   }
   return edges;
 }
@@ -494,7 +616,8 @@ export function buildGraph(index, opts) {
     if (applied.coverage > 0) llm = applied;
   }
   const { topics, assignments } = llm || clusterTopics(entries, options);
-  const edges = buildEdges(entries, assignments, options);
+  // 聚类结果只决定节点属于哪个主题，不参与建边：连不连看内容本身
+  const edges = buildEdges(entries);
   const nodes = entries.map((e) => {
     const id = str(e.id).trim();
     const a = assignments[id] || {};

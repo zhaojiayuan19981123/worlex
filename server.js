@@ -1501,15 +1501,9 @@ export function createApp({
     return kbLlmClusters.groups;
   }
 
-  /** 图谱装配参数：大模型分组（若有）+ 分类 id → 名字（把「同分类」写成可读理由）。 */
+  /** 图谱装配参数：现在只需要大模型分组 —— 边由内容（关键词 / 方法 / 对象）自己算，不再读分类。 */
   function graphOptions() {
-    const collectionNames = {};
-    try {
-      for (const c of store.listCollections()) {
-        if (c && c.id) collectionNames[String(c.id)] = String(c.name || '').trim();
-      }
-    } catch (_) { /* 分类读不到就只写「归在同一分类」 */ }
-    return { topicGroups: llmGroupsForIndex() || undefined, collectionNames };
+    return { topicGroups: llmGroupsForIndex() || undefined };
   }
 
   /** 只重算图谱（索引没变时用，省掉一次全量建索引）。 */

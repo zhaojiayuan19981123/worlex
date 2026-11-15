@@ -1,7 +1,7 @@
-// v213-features.test.mjs —— v2.1.3 两项改动的接线与行为测试
+// v213-features.test.mjs —— 图谱「关联文献 + 为什么相连」与单主题布局的接线测试
 //
 // 1) 点击节点：详情面板列出「关联文献」，并说明每一篇为什么相连
-//    （共享主题词 / 共同作者 / 同分类 / 引用方向），画布上只提亮它的邻域
+//    （共同关键词 / 共同研究方法 / 共同研究对象 / 引用方向），画布上只提亮它的邻域
 // 2) 只显示某一个主题时：簇铺满画布，节点摊开，便于看清单个主题内部的关系
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -40,7 +40,7 @@ test('图谱视图：点击节点会列出关联文献，并给出「为什么�
   // 理由文案：引用方向按 citing 还原（source/target 被字典序重排过）
   assert.match(g, /function whyText\(e, self\)/);
   assert.match(g, /return e\.citing === self\.id \? '本篇引用了它' : '它引用了本篇';/);
-  assert.match(g, /return e\.reason \|\| '研究主题相近';/);
+  assert.match(g, /return e\.reason \|\| '内容相关';/);
   // 点击关联条目 → 定位并打开那一篇
   assert.match(g, /function focusNode\(id\)/);
   assert.match(g, /listen\(btn, 'click', \(\) => focusNode\(other\.id\), undefined, 'detail'\);/);
@@ -87,20 +87,30 @@ test('图谱布局：只剩一个主题时铺满画布，并放宽斥力与弹�
   assert.match(g, /startSim\(changed \? 120 : 45\);/);
 });
 
-test('后端：边带 reason，图谱结构版本写入缓存以便旧缓存自动重建', () => {
+test('后端：边只按内容建，分类 / 作者不再参与；结构版本升级以便旧缓存重建', () => {
   const kg = readText('../src/knowledgeGraph.js');
-  assert.match(kg, /export const GRAPH_VERSION = 3;/);
-  assert.match(kg, /export function buildEdges\(entries, assignments, options\)/);
-  assert.match(kg, /`共同关键词：\$\{terms\.join\('、'\)\}`/);
-  assert.match(kg, /reason: shared\.length \? `共同作者：\$\{shared\.join\('、'\)\}` : '作者有重合'/);
-  assert.match(kg, /reason: cname \? `同属分类「\$\{cname\}」` : '归在同一分类'/);
+  assert.match(kg, /export const GRAPH_VERSION = 4;/);
+  assert.match(kg, /export function buildEdges\(entries, _assignments, _options\)/);
+  assert.match(kg, /`共同关键词：\$\{sharedKw\.join\('、'\)\}`/);
+  assert.match(kg, /`共同研究方法：\$\{sharedMethod\.join\('、'\)\}`/);
+  assert.match(kg, /`共同研究对象：\$\{sharedSubject\.join\('、'\)\}`/);
+  // 「同属分类」「共同作者」这两类元数据边必须消失（注释里可以提，代码里不能再建）
+  assert.doesNotMatch(kg, /add\(idA, idB, 'collection'/);
+  assert.doesNotMatch(kg, /add\(idA, idB, 'author'/);
+  assert.doesNotMatch(kg, /'collection'\s*\)/);
+  assert.doesNotMatch(kg, /reason: `共同作者/);
   assert.match(kg, /citing: ab >= ba \? idA : idB/);
   assert.match(kg, /version: GRAPH_VERSION,/);
+  // 全库高频词不能当依据：三个维度都要过文档频次门槛
+  assert.match(kg, /function tooCommon\(df, n, ratio\)/);
+  assert.match(kg, /tooCommon\(kwDf\.get\(k\), N, 0\.2\)/);
+  assert.match(kg, /tooCommon\(methodDf\.get\(m\), N, 0\.3\)/);
+  assert.match(kg, /tooCommon\(subjectDf\.get\(s\), N, 0\.2\)/);
 
   const server = readText('../server.js');
   assert.match(server, /const usable = cached && Array\.isArray\(cached\.nodes\) && cached\.version === GRAPH_VERSION;/);
   assert.match(server, /function graphOptions\(\)/);
-  assert.match(server, /collectionNames\[String\(c\.id\)\] = String\(c\.name \|\| ''\)\.trim\(\);/);
+  assert.doesNotMatch(server, /collectionNames\[String\(c\.id\)\]/);
   assert.match(server, /kbGraphCache = buildGraph\(kbIndex, graphOptions\(\)\);/);
 });
 
@@ -141,20 +151,22 @@ test('HTTP：图谱接口返回的每条边都能解释「为什么相连」', a
 
     const graph = await (await fetch(base + '/api/knowledge/graph')).json();
     assert.ok(Array.isArray(graph.edges) && graph.edges.length > 0, '三篇文献之间应有边');
-    assert.equal(graph.version, 3, '新装配的图谱带结构版本号');
+    assert.equal(graph.version, 4, '新装配的图谱带结构版本号');
     for (const e of graph.edges) {
       assert.equal(typeof e.reason, 'string');
       assert.ok(e.reason.length > 0, `边 ${e.source}→${e.target}（${e.kind}）缺少理由`);
+      assert.ok(
+        ['keyword', 'method', 'subject', 'citation'].includes(e.kind),
+        `边类型只能是内容维度，实际：${e.kind}`,
+      );
     }
-    const author = graph.edges.find((e) => e.kind === 'author');
-    assert.ok(author, 'a / b 有共同作者，应有作者边');
-    assert.match(author.reason, /共同作者：张三/);
-    const col = graph.edges.find((e) => e.kind === 'collection');
-    assert.ok(col, 'a / b 同分类，应有分类边');
-    assert.equal(col.reason, '同属分类「营销实证」');
-    const topic = graph.edges.find((e) => e.kind === 'topic' && /共同关键词/.test(e.reason));
-    assert.ok(topic, '共享关键词的文献应给出「共同关键词」理由');
-    assert.match(topic.reason, /在线评论/);
+    // a / b 同分类、同作者 —— 这两类元数据不再作为连接依据
+    assert.ok(!graph.edges.some((e) => e.kind === 'author'), '共同作者不应再建边');
+    assert.ok(!graph.edges.some((e) => e.kind === 'collection'), '同属分类不应再建边');
+    assert.ok(!/同属分类|共同作者/.test(JSON.stringify(graph.edges)), '理由里不该出现元数据依据');
+    const keyword = graph.edges.find((e) => e.kind === 'keyword' && /共同关键词/.test(e.reason));
+    assert.ok(keyword, '共享关键词的文献应给出「共同关键词」理由');
+    assert.match(keyword.reason, /在线评论/);
   } finally {
     if (server) await close(server);
     store.saveSettings({ aiProvider: 'none', _modelMigrated: true, activeProfileId: '', modelProfiles: [] });

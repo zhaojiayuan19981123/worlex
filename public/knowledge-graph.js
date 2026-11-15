@@ -190,7 +190,7 @@
     const bar = el('div', 'kg-toolbar');
     const head = el('div', 'kg-head');
     head.appendChild(el('h1', 'kg-title', '知识图谱'));
-    head.appendChild(el('p', 'kg-sub', '由大模型按研究主题聚类；点击节点可看它与哪些文献相连、为什么相连。'));
+    head.appendChild(el('p', 'kg-sub', '由大模型按研究主题聚类；连线表示两篇文献同关键词、同研究方法或同研究对象。'));
     bar.appendChild(head);
 
     const tools = el('div', 'kg-tools');
@@ -322,8 +322,9 @@
 
   function edgeClass(kind) {
     const k = String(kind || '').toLowerCase();
-    if (/cite|ref|coauth|author|引用|共引/.test(k)) return 'e-weak';
-    if (/topic|cluster|same|主题|同簇/.test(k)) return 'e-strong';
+    // 引用边最弱（正文里提了一句），同关键词最强，同方法 / 同研究对象居中
+    if (/cite|ref|引用/.test(k)) return 'e-weak';
+    if (/keyword|topic|cluster|主题/.test(k)) return 'e-strong';
     return 'e-normal';
   }
 
@@ -1035,9 +1036,8 @@
       if (!e.citing) return e.reason || '存在引用关系';
       return e.citing === self.id ? '本篇引用了它' : '它引用了本篇';
     }
-    if (/author/.test(k)) return e.reason || '有共同作者';
-    if (/collection/.test(k)) return e.reason || '同属一个分类';
-    return e.reason || '研究主题相近';
+    // keyword / method / subject 的理由由后端算好（共同关键词 / 共同研究方法 / 共同研究对象）
+    return e.reason || '内容相关';
   }
 
   /**
@@ -1094,7 +1094,7 @@
     if (all.length) head.appendChild(el('span', 'kg-d-count', String(all.length)));
     sec.appendChild(head);
     if (!all.length) {
-      sec.appendChild(el('p', 'kg-d-none', '这篇文献暂时没有可解释的关联（库里还没有与它共享主题词 / 作者 / 分类的文献）。'));
+      sec.appendChild(el('p', 'kg-d-none', '这篇文献暂时没有可解释的关联（库里还没有与它共享关键词、研究方法或研究对象的文献）。'));
       return sec;
     }
     const wrap = el('div', 'kg-d-neighbors');
