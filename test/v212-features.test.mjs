@@ -14,7 +14,11 @@ import test from 'node:test';
 import { createApp } from '../server.js';
 import * as store from '../src/store.js';
 
-const read = (p) => readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8');
+// 统一换行符再断言：本机是 LF、GitHub Actions 的 Windows 检出是 CRLF，
+// 带 `;` 紧邻换行的正则（如 `;\n    hide…`）在 CRLF 下会失配。
+const norm = (s) => s.replace(/\r\n/g, '\n');
+const read = (p) => norm(readFileSync(new URL(`../public/${p}`, import.meta.url), 'utf8'));
+const readText = (rel) => norm(readFileSync(new URL(rel, import.meta.url), 'utf8'));
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
@@ -41,7 +45,7 @@ test('参考文献链接：命名目标 / 显式目标都能解析成页码并�
   assert.match(links, /if \(info\.fromLink && raw\) \{ gotoDest\(raw\); return; \}/);
   // 视口换算走主程序的 getPageViewport（含当前缩放与该页额外旋转）
   assert.match(read('app.js'), /\n    viewport: \(page, n\) => getPageViewport\(page, n\),/);
-  assert.match(readFileSync(new URL('../public/pdf-links.css', import.meta.url), 'utf8'), /\.pl-dest-mark/);
+  assert.match(read('pdf-links.css'), /\.pl-dest-mark/);
 });
 
 test('落点定位框：目标页懒渲染把它清掉之后会自动补挂回去', () => {
@@ -81,7 +85,7 @@ test('知识图谱：前端走大模型聚类接口，并显示聚类方式', ()
   assert.match(g, /api\('\/api\/knowledge\/recluster', \{ method: 'POST' \}\)/);
   assert.match(g, /大模型聚类/);
   assert.match(g, /'AI 重新聚类'/);
-  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const server = readText('../server.js');
   assert.match(server, /app\.post\('\/api\/knowledge\/recluster'/);
   assert.match(server, /async function requestLlmClusters\(/);
   assert.match(server, /按「研究主题 \/ 研究对象 \/ 理论视角」/);
