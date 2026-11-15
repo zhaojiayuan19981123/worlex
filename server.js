@@ -20,7 +20,7 @@ import {
 } from './src/aiExtractor.js';
 // v2.1.0 本地知识库：跨文库统一索引、主题聚类、文献关系图
 import { buildIndex, searchEntries, buildEvidenceBlock, createFullTextReader } from './src/knowledgeBase.js';
-import { buildGraph, mergeTags } from './src/knowledgeGraph.js';
+import { buildGraph, mergeTags, GRAPH_VERSION } from './src/knowledgeGraph.js';
 import { createParseTracker } from './src/parseProgress.js';
 import { detectDocLanguage } from './src/docLanguage.js';
 import {
@@ -1501,9 +1501,20 @@ export function createApp({
     return kbLlmClusters.groups;
   }
 
+  /** 图谱装配参数：大模型分组（若有）+ 分类 id → 名字（把「同分类」写成可读理由）。 */
+  function graphOptions() {
+    const collectionNames = {};
+    try {
+      for (const c of store.listCollections()) {
+        if (c && c.id) collectionNames[String(c.id)] = String(c.name || '').trim();
+      }
+    } catch (_) { /* 分类读不到就只写「归在同一分类」 */ }
+    return { topicGroups: llmGroupsForIndex() || undefined, collectionNames };
+  }
+
   /** 只重算图谱（索引没变时用，省掉一次全量建索引）。 */
   function rebuildGraphOnly() {
-    kbGraphCache = buildGraph(kbIndex, { topicGroups: llmGroupsForIndex() || undefined });
+    kbGraphCache = buildGraph(kbIndex, graphOptions());
   }
 
   function clusteringMeta() {
@@ -1536,9 +1547,11 @@ export function createApp({
       if (!data || !data.index || !Array.isArray(data.index.entries)) return false;
       kbIndex = data.index;
       if (data.llm && Array.isArray(data.llm.groups) && data.llm.groups.length) kbLlmClusters = data.llm;
-      kbGraphCache = data.graph && Array.isArray(data.graph.nodes)
-        ? data.graph
-        : buildGraph(kbIndex, { topicGroups: llmGroupsForIndex() || undefined });
+      // 旧缓存里的边没有 reason（「为什么相连」），版本不符就重建一次，
+      // 否则点开节点只能看到一串没有解释的文献。重建只算边，百毫秒级。
+      const cached = data.graph;
+      const usable = cached && Array.isArray(cached.nodes) && cached.version === GRAPH_VERSION;
+      kbGraphCache = usable ? cached : buildGraph(kbIndex, graphOptions());
       return true;
     } catch (_) { return false; }
   }

@@ -158,6 +158,8 @@
     filter: { q: '', topic: '__all__', labels: true },
     selected: null,
     status: 'idle',
+    // 当前可见簇的布局形态：只剩一个主题时铺满画布（节点摊开，才看得清彼此关系）
+    layout: { single: false, clusters: 0 },
     sim: { frame: 0, frames: FRAMES, running: false },
     raf: 0,
     ro: null,
@@ -188,7 +190,7 @@
     const bar = el('div', 'kg-toolbar');
     const head = el('div', 'kg-head');
     head.appendChild(el('h1', 'kg-title', '知识图谱'));
-    head.appendChild(el('p', 'kg-sub', '由大模型按研究主题聚类，呈现文献之间的关联；点击节点查看详情。'));
+    head.appendChild(el('p', 'kg-sub', '由大模型按研究主题聚类；点击节点可看它与哪些文献相连、为什么相连。'));
     bar.appendChild(head);
 
     const tools = el('div', 'kg-tools');
@@ -395,7 +397,16 @@
       const w = Math.max(0.1, Number(raw && raw.weight) || 1);
       s.deg += 1;
       t.deg += 1;
-      edges.push({ s, t, kind: String((raw && raw.kind) || ''), w, visible: true, line: null });
+      edges.push({
+        s, t,
+        kind: String((raw && raw.kind) || ''),
+        w,
+        // 「为什么相连」的依据：后端算好的一句理由 + 引用方向（谁引了谁）
+        reason: String((raw && raw.reason) || ''),
+        citing: String((raw && raw.citing) || ''),
+        visible: true,
+        line: null,
+      });
     });
 
     let maxDeg = 1;
@@ -575,9 +586,26 @@
   function layoutCenters() {
     const W = S.W || 800;
     const H = S.H || 600;
-    const active = S.clusters.filter((c) => c.nodes && c.nodes.length);
+    // 只统计「当前可见」的成员：筛选到某一个主题时，别的簇不该继续占着画布格子，
+    // 否则单主题只剩九分之一的地方，节点全挤在一小块里，看不出彼此关系。
+    const shownIn = (c) => c.nodes.reduce((k, n) => k + (n.visible ? 1 : 0), 0);
+    const active = S.clusters.filter((c) => shownIn(c) > 0);
     const m = active.length;
+    S.layout = { single: m === 1, clusters: m };
     if (!m) return;
+    // 详情面板打开时会盖住画布右侧：单主题视图把簇摆到「没被盖住」的那块中间，
+    // 否则节点看着整体偏右，像布局出了问题。
+    const detail = S.refs && S.refs.detail;
+    const panelW = detail && detail.classList.contains('is-open') ? Math.min(W * 0.6, detail.offsetWidth || 0) : 0;
+    const availW = Math.max(220, W - panelW);
+    if (m === 1) {
+      // 只看一个主题：簇铺满画布，节点有地方摊开
+      const c = active[0];
+      c.x = availW / 2;
+      c.y = H / 2;
+      c.rTarget = Math.max(90, Math.min(availW, H) / 2 - 46);
+      return;
+    }
     const padX = 24;
     const padY = 30; // 上方多留一点给主题标签
     const cols = Math.max(1, Math.ceil(Math.sqrt(m)));
@@ -590,7 +618,7 @@
       c.x = padX + cellW * (col + 0.5);
       c.y = padY + cellH * (row + 0.5);
       // 30 是「看起来像个簇」的下限，sqrt 保证文献多的主题占更大一块
-      const byCount = 30 + Math.sqrt(Math.max(1, c.nodes.length)) * 24;
+      const byCount = 30 + Math.sqrt(Math.max(1, shownIn(c))) * 24;
       const byCell = Math.min(cellW, cellH) / 2 - 26;
       c.rTarget = Math.max(34, Math.min(byCount, byCell));
     });
@@ -628,6 +656,14 @@
   function stepPhysics(alpha) {
     const nodes = S.nodes;
     const N = nodes.length;
+    // 只剩一个主题时把图「摊开」：斥力更强、作用范围更远、簇引力更弱，
+    // 节点会在整个画布半径内均匀散开，而不是缩在中心一小坨。
+    const single = !!(S.layout && S.layout.single);
+    const repulsion = single ? REPULSION * 3.2 : REPULSION;
+    const cutoff2 = single ? 250000 : 90000;
+    const clusterK = single ? CLUSTER_K * 0.35 : CLUSTER_K;
+    // 单主题时把弹簧放软：节点靠斥力摊开，而不是被连线拉成一小团
+    const springK = single ? SPRING_K * 0.55 : SPRING_K;
 
     // 斥力（库仑），距离过远忽略，保证大图也能跑
     for (let i = 0; i < N; i++) {
@@ -639,14 +675,14 @@
         let dx = a.x - b.x;
         let dy = a.y - b.y;
         let d2 = dx * dx + dy * dy;
-        if (d2 > 90000) continue;
+        if (d2 > cutoff2) continue;
         if (d2 < 0.01) {
           dx = (i - j) * 0.01 || 0.01;
           dy = 0.01;
           d2 = dx * dx + dy * dy;
         }
         const d = Math.sqrt(d2);
-        const f = REPULSION / (d2 + 40) * alpha;
+        const f = repulsion / (d2 + 40) * alpha;
         const fx = (dx / d) * f;
         const fy = (dy / d) * f;
         a.vx += fx; a.vy += fy;
@@ -663,9 +699,12 @@
       const dy = b.y - a.y;
       const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
       // 静止长度跟着簇的地盘走：小簇里还用 110px 会把节点全顶到边上
-      const base = Math.min(110, Math.max(46, (a.cluster && a.cluster.rTarget ? a.cluster.rTarget * 0.8 : 110)));
+      const rt = (a.cluster && a.cluster.rTarget) || 110;
+      const base = single
+        ? Math.max(120, Math.min(320, rt * 0.85)) // 单主题：地盘大，连线也跟着拉长
+        : Math.min(110, Math.max(46, rt * 0.8));
       const rest = base - Math.min(28, e.w * 10);
-      const f = SPRING_K * (d - rest) * alpha * (0.7 + 0.3 * Math.min(3, e.w));
+      const f = springK * (d - rest) * alpha * (0.7 + 0.3 * Math.min(3, e.w));
       const fx = (dx / d) * f;
       const fy = (dy / d) * f;
       a.vx += fx; a.vy += fy;
@@ -680,8 +719,8 @@
       if (n.fixed) { n.vx = 0; n.vy = 0; continue; }
       if (!n.visible) { n.vx = 0; n.vy = 0; continue; }
       if (n.cluster) {
-        n.vx += (n.cluster.x - n.x) * CLUSTER_K * alpha;
-        n.vy += (n.cluster.y - n.y) * CLUSTER_K * alpha;
+        n.vx += (n.cluster.x - n.x) * clusterK * alpha;
+        n.vy += (n.cluster.y - n.y) * clusterK * alpha;
       }
       n.vx += (cx - n.x) * CENTER_K * alpha;
       n.vy += (cy - n.y) * CENTER_K * alpha;
@@ -846,7 +885,18 @@
 
   function applyFilter() {
     updateVisibility();
-    startSim(45);
+    const prev = S.layout;
+    // 可见簇变了要重排中心：只看一个主题时铺满画布，回来时再还原成网格
+    layoutCenters();
+    const changed = !!prev && (prev.single !== S.layout.single || prev.clusters !== S.layout.clusters);
+    // 进出单主题时复位视图：否则新布局会落在上一次「点节点居中」留下的平移量里，
+    // 整簇被推到画布角落，看着像布局坏了。
+    if (changed) S.view = { scale: 1, tx: 0, ty: 0 };
+    startSim(changed ? 120 : 45);
+    if (S.selected) {
+      const sel = S.nodes.find((x) => x.id === S.selected);
+      if (sel) markNeighborhood(sel);
+    }
     render();
   }
 
@@ -947,6 +997,11 @@
     if (a) meta.push(a);
     if (d.year) meta.push(String(d.year));
     if (meta.length) r.tip.appendChild(el('div', 'kg-tip-meta', meta.join(' · ')));
+    // 主题与关联数：不用点开也能知道这个点在图上有多「关键」
+    const extra = [];
+    if (n.cluster && n.cluster.label) extra.push('主题：' + n.cluster.label);
+    if (n.deg) extra.push(n.deg + ' 条关联');
+    if (extra.length) r.tip.appendChild(el('div', 'kg-tip-meta', extra.join(' · ')));
     r.tip.classList.add('is-on');
     moveTip(clientX, clientY);
   }
@@ -972,6 +1027,153 @@
   }
 
   // ==================== 详情面板 ====================
+
+  /** 一条边用当前选中的文献视角讲清楚「为什么相连」。 */
+  function whyText(e, self) {
+    const k = String(e.kind || '').toLowerCase();
+    if (/cite/.test(k)) {
+      if (!e.citing) return e.reason || '存在引用关系';
+      return e.citing === self.id ? '本篇引用了它' : '它引用了本篇';
+    }
+    if (/author/.test(k)) return e.reason || '有共同作者';
+    if (/collection/.test(k)) return e.reason || '同属一个分类';
+    return e.reason || '研究主题相近';
+  }
+
+  /**
+   * 与某篇文献直接相连的文献，按目标节点聚合。
+   * 同一对文献可能同时有「主题」「作者」两条边，这里合成一条、理由合并展示，
+   * 否则列表里会出现两遍同一篇，用户会以为数据重复。
+   */
+  function neighborsOf(n) {
+    const map = new Map();
+    for (const e of S.edges) {
+      const other = e.s === n ? e.t : e.t === n ? e.s : null;
+      if (!other) continue;
+      let rec = map.get(other.id);
+      if (!rec) {
+        rec = { node: other, weight: 0, reasons: [] };
+        map.set(other.id, rec);
+      }
+      if (e.w > rec.weight) rec.weight = e.w;
+      const why = whyText(e, n);
+      if (why && rec.reasons.indexOf(why) === -1) rec.reasons.push(why);
+    }
+    const titleOf = (x) => String((x.data && (x.data.titleZh || x.data.title)) || x.id);
+    return [...map.values()].sort((a, b) => {
+      if (b.weight !== a.weight) return b.weight - a.weight;
+      const ta = titleOf(a.node), tb = titleOf(b.node);
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
+  }
+
+  function neighborRow(rec) {
+    const other = rec.node;
+    const d = other.data || {};
+    const btn = el('button', 'kg-d-nb');
+    btn.type = 'button';
+    btn.title = '在图上定位并查看这篇文献';
+    btn.appendChild(el('span', `kg-d-dot t${other.color}`));
+    const main = el('span', 'kg-d-nb-main');
+    const zh = String(d.titleZh || '').trim();
+    const en = String(d.title || '').trim();
+    main.appendChild(el('span', 'kg-d-nb-title', zh || en || '未命名文献'));
+    if (zh && en && en !== zh) main.appendChild(el('span', 'kg-d-nb-sub', en));
+    main.appendChild(el('span', 'kg-d-why', rec.reasons.join(' · ')));
+    btn.appendChild(main);
+    if (d.year) btn.appendChild(el('span', 'kg-d-nb-year', String(d.year)));
+    listen(btn, 'click', () => focusNode(other.id), undefined, 'detail');
+    return btn;
+  }
+
+  function neighborSection(n) {
+    const all = neighborsOf(n);
+    const sec = el('section', 'kg-d-section kg-d-nb-sec');
+    const head = el('h3', 'kg-d-label');
+    head.appendChild(el('span', '', '关联文献'));
+    if (all.length) head.appendChild(el('span', 'kg-d-count', String(all.length)));
+    sec.appendChild(head);
+    if (!all.length) {
+      sec.appendChild(el('p', 'kg-d-none', '这篇文献暂时没有可解释的关联（库里还没有与它共享主题词 / 作者 / 分类的文献）。'));
+      return sec;
+    }
+    const wrap = el('div', 'kg-d-neighbors');
+    sec.appendChild(wrap);
+    const LIMIT = 8;
+    let shown = 0;
+    const addRows = (to) => {
+      const end = Math.min(to, all.length);
+      for (let i = shown; i < end; i++) wrap.appendChild(neighborRow(all[i]));
+      shown = end;
+    };
+    addRows(LIMIT);
+    if (all.length > LIMIT) {
+      const more = el('button', 'kg-d-more', `展开全部 ${all.length} 篇`);
+      more.type = 'button';
+      listen(more, 'click', () => { addRows(all.length); more.remove(); }, undefined, 'detail');
+      sec.appendChild(more);
+    }
+    return sec;
+  }
+
+  /** 画布上把选中节点的邻域提亮，其余压暗：一眼看出「它和谁有关系」。 */
+  function markNeighborhood(n) {
+    const root = S.root;
+    if (!root) return;
+    const near = new Set([n.id]);
+    for (const e of S.edges) {
+      if (e.s === n) near.add(e.t.id);
+      else if (e.t === n) near.add(e.s.id);
+    }
+    root.classList.add('kg-focus');
+    for (const x of S.nodes) {
+      const on = near.has(x.id) && x.id !== n.id;
+      if (x.g) x.g.classList.toggle('is-near', on);
+    }
+    for (const e of S.edges) {
+      const hot = e.s === n || e.t === n;
+      if (e.line) e.line.classList.toggle('is-hot', hot);
+    }
+  }
+
+  function clearNeighborhood() {
+    if (S.root) S.root.classList.remove('kg-focus');
+    for (const x of S.nodes) {
+      if (x.g) x.g.classList.remove('is-near');
+    }
+    for (const e of S.edges) {
+      if (e.line) {
+        e.line.classList.remove('is-hot');
+      }
+    }
+  }
+
+  /** 让节点闪一下：从关联列表跳过来时，视线才跟得上。 */
+  function flashNode(n) {
+    if (!n || !n.g) return;
+    n.g.classList.remove('is-flash');
+    void n.g.getBoundingClientRect(); // 强制回流，连续点同一篇也能重播动画
+    n.g.classList.add('is-flash');
+    window.setTimeout(() => { if (n.g) n.g.classList.remove('is-flash'); }, 1400);
+  }
+
+  /** 定位到某篇并打开详情；被筛选藏起来时先恢复「全部文献」。 */
+  function focusNode(id) {
+    const n = S.nodes.find((x) => x.id === id);
+    if (!n) return;
+    if (!n.visible) {
+      S.filter.q = '';
+      S.filter.topic = '__all__';
+      if (S.refs.search) S.refs.search.value = '';
+      if (S.refs.sel) S.refs.sel.value = '__all__';
+      applyFilter();
+    }
+    S.view.tx = S.W / 2 - n.x * S.view.scale;
+    S.view.ty = S.H / 2 - n.y * S.view.scale;
+    render();
+    openDetail(id);
+    flashNode(n);
+  }
 
   function detailField(n, key) {
     const d = n.data || {};
@@ -1044,7 +1246,9 @@
       meta.appendChild(row);
     });
     body.appendChild(meta);
-
+    // 「它和谁有关系、为什么」是点开节点最想知道的事，排在关键词 / 标签之前，
+    // 免得用户在 340px 宽的面板里先滚过一大段元数据。
+    body.appendChild(neighborSection(n));
     body.appendChild(chipSection('关键词', detailField(n, 'keywords')));
     body.appendChild(chipSection('标签', detailField(n, 'tags')));
 
@@ -1064,6 +1268,7 @@
     if (!n) return;
     S.selected = id;
     S.nodes.forEach((x) => { if (x.g) x.g.classList.toggle('is-selected', x.id === id); });
+    markNeighborhood(n);
     buildDetail(n);
     S.refs.detail.classList.add('is-open');
     hideTip();
@@ -1072,6 +1277,7 @@
   function closeDetail() {
     S.selected = null;
     S.nodes.forEach((x) => { if (x.g) x.g.classList.remove('is-selected'); });
+    clearNeighborhood();
     const d = S.refs.detail;
     if (d) {
       d.classList.remove('is-open');
@@ -1162,7 +1368,7 @@
     S.H = h;
     if (S.nodes.length) {
       layoutCenters();
-      startSim(60);
+      startSim(S.layout && S.layout.single ? 90 : 60);
     }
     render();
   }
@@ -1175,6 +1381,9 @@
     renderStats();
     buildGraph();
     updateVisibility();
+    // 重新加载时筛选条件还在（比如一直只看某个主题）：中心与半径要按当前可见成员重算，
+    // 否则单主题视图会带着全量网格的坐标重新出现。
+    layoutCenters();
     const has = S.nodes.length > 0;
     setStatus(has ? 'ok' : 'empty');
     startSim(has ? FRAMES : 0);
@@ -1237,6 +1446,7 @@
     S.view = { scale: 1, tx: 0, ty: 0 };
     S.W = 0;
     S.H = 0;
+    S.layout = { single: false, clusters: 0 };
     S.filter = { q: '', topic: '__all__', labels: true };
   }
 

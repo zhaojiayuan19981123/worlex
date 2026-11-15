@@ -152,6 +152,7 @@
 
 /* 文献节点 */
 .kg-node { cursor: pointer; }
+.kg-node, .kg-edge { transition: opacity var(--dur) var(--ease); }
 .kg-disc { fill: var(--ink-3); stroke: var(--surface); stroke-width: 1.5; }
 .kg-hit { fill: none; stroke: none; pointer-events: all; }
 .kg-node.t0 .kg-disc { fill: var(--kg-c0); }
@@ -166,6 +167,22 @@
 .kg-node.is-selected .kg-disc { stroke: var(--primary); stroke-width: 3; }
 .kg-node:focus-visible { outline: none; }
 .kg-node:focus-visible .kg-disc { stroke: var(--ring); stroke-width: 3; }
+
+/* 选中一个节点：只提亮它和它的直接邻居，其余压暗 —— 「它和谁有关系」一眼可见 */
+.kg-root.kg-focus .kg-node { opacity: .14; }
+.kg-root.kg-focus .kg-node.is-selected,
+.kg-root.kg-focus .kg-node.is-near { opacity: 1; }
+.kg-root.kg-focus .kg-edge { opacity: .05; }
+.kg-root.kg-focus .kg-edge.is-hot { opacity: .9; stroke-width: 1.7; }
+.kg-root.kg-focus .kg-hull { opacity: .5; }
+.kg-node.is-near .kg-disc { stroke: var(--ink); stroke-width: 2.2; }
+
+/* 从关联列表跳过来时闪一下，视线才跟得上 */
+.kg-node.is-flash .kg-disc { animation: kgNodeFlash 1.2s var(--ease); }
+@keyframes kgNodeFlash {
+  0%, 100% { stroke: var(--surface); stroke-width: 1.5; }
+  22%, 58% { stroke: var(--primary); stroke-width: 4.5; }
+}
 
 /* ---------- Tooltip ---------- */
 .kg-tip {
@@ -268,8 +285,58 @@
   border-radius: var(--radius-sm);
   overflow-wrap: anywhere;
 }
-.kg-d-none { font-size: 12px; color: var(--text-3); }
+.kg-d-none { margin: 0; font-size: 12px; line-height: 1.65; color: var(--text-3); }
 .kg-d-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+
+/* ---------- 详情面板：关联文献 + 为什么相连 ---------- */
+.kg-d-count {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  font-size: 11px; font-weight: 600; color: var(--text-2);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.kg-d-neighbors { display: flex; flex-direction: column; gap: 2px; }
+.kg-d-nb {
+  display: flex; align-items: flex-start; gap: 9px;
+  width: 100%; padding: 9px 8px;
+  font-family: var(--font-ui); font-size: 12.5px; line-height: 1.5;
+  text-align: left; color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.kg-d-nb:hover { background: var(--row-hover); border-color: var(--border-soft); }
+.kg-d-dot { flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--ink-3); }
+.kg-d-dot.t0 { background: var(--kg-c0); }
+.kg-d-dot.t1 { background: var(--kg-c1); }
+.kg-d-dot.t2 { background: var(--kg-c2); }
+.kg-d-dot.t3 { background: var(--kg-c3); }
+.kg-d-dot.t4 { background: var(--kg-c4); }
+.kg-d-dot.t5 { background: var(--kg-c5); }
+.kg-d-dot.t6 { background: var(--kg-c6); }
+.kg-d-dot.t7 { background: var(--kg-c7); }
+.kg-d-nb-main { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.kg-d-nb-title { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.kg-d-nb-sub {
+  font-size: 11.5px; line-height: 1.5; color: var(--text-3);
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.kg-d-why { font-size: 11.5px; line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }
+.kg-d-nb-year { flex: none; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.kg-d-more {
+  margin-top: 6px; padding: 6px 8px;
+  font-family: var(--font-ui); font-size: 12px; color: var(--primary);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.kg-d-more:hover { background: var(--row-hover); border-color: var(--ink-3); }
 
 /* ---------- 本地兜底 toast（挂在 body 上，变量仍继承 :root） ---------- */
 .kg-toast {

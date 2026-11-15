@@ -188,6 +188,11 @@ const THRESHOLDS = { topic: 0.2, author: 0.5, collection: 0.4, citation: 0.8 };
 // 这里只是兜底 —— 宁可少画几个主题，也不能让几十篇文献莫名掉进「未分类」。
 const MAX_LLM_GROUPS = 20;
 const MAX_GROUP_NAME = 40;
+// 图谱结构版本：v3 起每条边带 reason / terms / citing（「为什么相连」）。
+// 旧版本持久化的 graph 没有这些字段，服务端读到版本不符就重建，不必等用户手动重聚类。
+export const GRAPH_VERSION = 3;
+// 「为什么相连」里最多列出几个共享词
+const MAX_REASON_TERMS = 3;
 
 /**
  * 用大模型给出的主题分组装配图谱（模型负责语义归类，本地负责结构校验）。
@@ -276,6 +281,18 @@ function jaccard(a, b) {
   const uni = a.size + b.size - inter;
   return uni ? inter / uni : 0;
 }
+
+/**
+ * 共享 token 能不能展示给人看。
+ * tokens 由 tokenize() 产生：英文是完整单词，中文是 2-gram。中文 2-gram 里混着
+ * 「荐系 / 含关 / 供材」这类跨词边界的碎片，靠单字黑名单过滤不干净 —— 与其把碎片
+ * 摊给用户当「相连理由」，不如只放行英文完整词；中文靠 keywords 的完整词交集。
+ */
+function showableToken(t) {
+  const s = str(t).trim();
+  if (!/^[a-z][a-z0-9]*$/.test(s)) return false;
+  return s.length >= 4; // 英文至少 4 个字母，避开 crm / ai 这类过泛的缩写
+}
 function overlapRatio(a, b) {
   if (!a.size || !b.size) return 0;
   let inter = 0;
@@ -301,13 +318,27 @@ function citationWeight(a, b) {
   return 0;
 }
 
-export function buildEdges(entries, assignments) {
+/**
+ * 生成文献之间的关联边。
+ *
+ * 每条边除了 source/target/kind/weight，还带一句可读的 reason：
+ * 「共同主题词：消费者、购买意愿」「共同作者：张三」「同属分类：营销」「本篇引用了它」。
+ * 前端点开节点时据此解释「为什么相连」，不必再猜。
+ *
+ * @param {Array} entries 索引条目
+ * @param {Object} assignments 文献 id → { topicId, label }
+ * @param {{collectionNames?: Object<string,string>}} [options] 分类 id → 名字
+ */
+export function buildEdges(entries, assignments, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const collectionNames = opts.collectionNames && typeof opts.collectionNames === 'object'
+    ? opts.collectionNames : {};
   const all = Array.isArray(entries) ? entries.filter((e) => e && typeof e === 'object') : [];
   const list = all.slice(0, MAX_DOCS); // 超过 400 篇先截断
   const amap = assignments && typeof assignments === 'object' ? assignments : {};
   const cand = [];
   const seen = new Set();
-  const add = (idA, idB, kind, weight) => {
+  const add = (idA, idB, kind, weight, extra) => {
     if (!Number.isFinite(weight) || weight <= THRESHOLDS[kind]) return;
     let source = str(idA).trim(), target = str(idB).trim();
     if (!source || !target || source === target) return; // 无自环
@@ -315,12 +346,39 @@ export function buildEdges(entries, assignments) {
     const key = `${source}\u0000${target}\u0000${kind}`;
     if (seen.has(key)) return; // (source,target,kind) 去重
     seen.add(key);
-    cand.push({ source, target, kind, weight: Math.round(weight * 1000) / 1000 });
+    const item = { source, target, kind, weight: Math.round(weight * 1000) / 1000 };
+    if (extra && typeof extra === 'object') {
+      const reason = str(extra.reason).replace(/\s+/g, ' ').trim().slice(0, 90);
+      if (reason) item.reason = reason;
+      if (Array.isArray(extra.terms) && extra.terms.length) {
+        item.terms = extra.terms.slice(0, MAX_REASON_TERMS).map((t) => str(t).trim()).filter(Boolean);
+      }
+      // citation 专用：谁引用了谁（source/target 被字典序重排过，方向不能靠这两个字段推）
+      const citing = str(extra.citing).trim();
+      if (citing) item.citing = citing;
+    }
+    cand.push(item);
   };
 
   const tokens = list.map(tokenSet);
   const kws = list.map(keywordSet);
   const authors = list.map(authorSet);
+  const authorsRaw = list.map((e) => toList(e?.authors));
+
+  // 关键词保留原词大小写/写法用于展示（集合里都是 lowercase）
+  const kwDisplay = new Map();
+  for (const e of list) {
+    for (const k of toList(e?.keywords)) {
+      const low = str(k).toLowerCase().trim();
+      if (low && !kwDisplay.has(low)) kwDisplay.set(low, str(k).trim());
+    }
+  }
+  // token 文档频次：共享词里越稀有的越能说明「这两篇为什么被连起来」
+  const tokenDf = new Map();
+  for (const set of tokens) {
+    for (const t of set) tokenDf.set(t, (tokenDf.get(t) || 0) + 1);
+  }
+
   for (let i = 0; i < list.length; i++) {
     const a = list[i];
     const idA = str(a.id).trim();
@@ -330,20 +388,80 @@ export function buildEdges(entries, assignments) {
       const idB = str(b.id).trim();
       if (!idB || idA === idB) continue;
       // topic：共享 token / 关键词相似度，同主题再加权
-      const sim = 0.6 * jaccard(tokens[i], tokens[j]) + 0.4 * jaccard(kws[i], kws[j]);
+      const simRaw = 0.6 * jaccard(tokens[i], tokens[j]) + 0.4 * jaccard(kws[i], kws[j]);
       const ta = amap[idA]?.topicId, tb = amap[idB]?.topicId;
-      add(idA, idB, 'topic', Math.min(sim + (ta && tb && ta === tb ? 0.15 : 0), 1));
+      const sameTopic = !!(ta && tb && ta === tb);
+      // 共享关键词（AI 解析出的完整词，最像人话）优先，其次才是筛过的共享 token
+      const terms = [];
+      for (const k of kws[i]) {
+        if (!kws[j].has(k) || !kwDisplay.has(k)) continue;
+        terms.push(kwDisplay.get(k));
+        if (terms.length >= MAX_REASON_TERMS) break;
+      }
+      if (terms.length < MAX_REASON_TERMS) {
+        const taken = new Set(terms.map((s) => s.toLowerCase()));
+        const cands = [];
+        for (const t of tokens[i]) {
+          if (!tokens[j].has(t) || taken.has(t) || !showableToken(t)) continue;
+          // 已经用「消费者行为」当过理由，就别再补「消费者 / 行为」这种被它包含的碎片
+          if (terms.some((s) => s.toLowerCase().includes(t))) continue;
+          cands.push(t);
+        }
+        // 稀有优先；同频次按字典序，保证相同输入产生相同理由
+        cands.sort((x, y) => ((tokenDf.get(x) || 0) - (tokenDf.get(y) || 0)) || cmpStr(x, y));
+        for (const t of cands) {
+          terms.push(t);
+          if (terms.length >= MAX_REASON_TERMS) break;
+        }
+      }
+      const sim = Math.min(simRaw + (sameTopic ? 0.15 : 0), 1);
+      const pct = Math.round(simRaw * 100);
+      const topicLabel = str(amap[idA]?.label || amap[idB]?.label || '').trim();
+      let reason;
+      if (terms.length) {
+        reason = `共同关键词：${terms.join('、')}`;
+      } else if (sameTopic && topicLabel) {
+        // 拼不出可信的共享词时，别硬凑 2-gram 碎片：说清「同主题」更诚实。
+        // 相似度太低（<20%）就不提数字，免得「内容相近 9%」读起来像在硬连。
+        reason = pct >= 20
+          ? `同一主题「${topicLabel}」· 内容相近（${pct}%）`
+          : `同一主题「${topicLabel}」`;
+      } else {
+        reason = `研究内容相近（${pct}%）`;
+      }
+      add(idA, idB, 'topic', sim, { terms, reason });
       // author：同一作者
       const ratio = overlapRatio(authors[i], authors[j]);
-      if (ratio > 0) add(idA, idB, 'author', 0.5 + 0.45 * ratio);
+      if (ratio > 0) {
+        const shared = [];
+        for (const name of authorsRaw[i]) {
+          if (authors[j].has(name.toLowerCase())) shared.push(name);
+          if (shared.length >= 2) break;
+        }
+        add(idA, idB, 'author', 0.5 + 0.45 * ratio, {
+          reason: shared.length ? `共同作者：${shared.join('、')}` : '作者有重合',
+        });
+      }
       // collection：同一分类
       const ca = str(a.collectionId).trim(), cb = str(b.collectionId).trim();
-      if (ca && ca === cb) add(idA, idB, 'collection', 0.45);
-      // citation：双向检查
-      const cw = Math.max(citationWeight(a, b), citationWeight(b, a));
-      if (cw > 0) add(idA, idB, 'citation', cw);
+      if (ca && ca === cb) {
+        const cname = str(collectionNames[ca]).trim();
+        add(idA, idB, 'collection', 0.45, {
+          reason: cname ? `同属分类「${cname}」` : '归在同一分类',
+        });
+      }
+      // citation：双向检查，记住是谁引用了谁
+      const ab = citationWeight(a, b);
+      const ba = citationWeight(b, a);
+      if (ab > 0 || ba > 0) {
+        add(idA, idB, 'citation', Math.max(ab, ba), {
+          citing: ab >= ba ? idA : idB,
+          reason: '正文中提及了对方文献',
+        });
+      }
     }
   }
+
   // 权重降序 + 稳定 tie-break，再按「每篇 ≤8 条、总量 ≤1200」裁剪
   cand.sort((x, y) =>
     (y.weight - x.weight) ||
@@ -376,7 +494,7 @@ export function buildGraph(index, opts) {
     if (applied.coverage > 0) llm = applied;
   }
   const { topics, assignments } = llm || clusterTopics(entries, options);
-  const edges = buildEdges(entries, assignments);
+  const edges = buildEdges(entries, assignments, options);
   const nodes = entries.map((e) => {
     const id = str(e.id).trim();
     const a = assignments[id] || {};
@@ -397,6 +515,8 @@ export function buildGraph(index, opts) {
     };
   });
   return {
+    // 结构版本：服务端读持久化缓存时据此判断要不要重建（旧版边没有 reason）
+    version: GRAPH_VERSION,
     nodes,
     edges,
     topics,

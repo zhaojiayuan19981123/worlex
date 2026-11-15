@@ -235,3 +235,82 @@ test('buildGraph：大模型分组全是无效 id 时自动退回本地聚类', 
   assert.equal(g.method, 'local');
   assert.equal(g.stats.documents, 2);
 });
+
+// ---------- v2.1.3：边上的「为什么相连」 ----------
+
+test('buildEdges：主题边给出共享关键词作理由', () => {
+  const entries = [
+    entry({ id: 'a', keywords: ['消费者行为', '购买意愿'], tokens: ['消费者', '行为', '意愿'] }),
+    entry({ id: 'b', keywords: ['消费者行为', '购买意愿'], tokens: ['消费者', '行为', '意愿'] }),
+  ];
+  const edges = buildEdges(entries, {});
+  const topic = edges.find((e) => e.kind === 'topic');
+  assert.ok(topic, '两篇高度相似的文献应有主题边');
+  assert.match(topic.reason, /^共同关键词：/);
+  assert.deepEqual(topic.terms, ['消费者行为', '购买意愿']);
+  assert.match(topic.reason, /消费者行为/);
+});
+
+test('buildEdges：中文 2-gram 碎片不进理由，老实退回「内容相近」', () => {
+  // 中文 tokens 是 2-gram，交集里全是「荐系 / 含关 / 供材」这种跨词碎片；
+  // 宁可只写相似度，也不能拿碎片当「为什么相连」。
+  const entries = [
+    entry({ id: 'a', keywords: ['alpha'], tokens: ['消费者', '锚定', '不的', '会不', '123'] }),
+    entry({ id: 'b', keywords: ['beta'], tokens: ['消费者', '锚定', '不的', '会不', '123'] }),
+  ];
+  const topic = buildEdges(entries, {}).find((e) => e.kind === 'topic');
+  assert.ok(topic);
+  assert.equal(topic.terms, undefined, '过滤后没有可信共享词，就不带 terms');
+  assert.match(topic.reason, /^研究内容相近（\d+%）$/);
+});
+
+test('buildEdges：共享的英文完整词可以当理由', () => {
+  const entries = [
+    entry({ id: 'a', keywords: ['alpha'], tokens: ['lightgcn', 'recommendation', 'graph', 'model'] }),
+    entry({ id: 'b', keywords: ['beta'], tokens: ['lightgcn', 'recommendation', 'graph', 'user'] }),
+  ];
+  const topic = buildEdges(entries, {}).find((e) => e.kind === 'topic');
+  assert.ok(topic);
+  assert.ok(topic.terms.includes('lightgcn'), `实际：${JSON.stringify(topic.terms)}`);
+  assert.match(topic.reason, /^共同关键词：/);
+  assert.match(topic.reason, /lightgcn/);
+});
+
+test('buildEdges：作者边、分类边、引用边各有可读理由与方向', () => {
+  const entries = [
+    entry({
+      id: 'a', title: 'A study', authors: ['张三', 'Li Si'], collectionId: 'C1',
+      tokens: ['x'], keywords: ['x'], text: '见 B study on trust 的结论',
+    }),
+    entry({
+      id: 'b', title: 'B study on trust', authors: ['张三'], collectionId: 'C1',
+      tokens: ['y'], keywords: ['y'], year: 2021,
+    }),
+  ];
+  const edges = buildEdges(entries, {}, { collectionNames: { C1: '营销实证' } });
+  const author = edges.find((e) => e.kind === 'author');
+  assert.ok(author);
+  assert.equal(author.reason, '共同作者：张三');
+  const collection = edges.find((e) => e.kind === 'collection');
+  assert.ok(collection);
+  assert.equal(collection.reason, '同属分类「营销实证」');
+  const citation = edges.find((e) => e.kind === 'citation');
+  assert.ok(citation, 'a 的正文提到 b 的题名，应识别为引用');
+  // a 引用了 b：source/target 被字典序重排，方向只能靠 citing 还原
+  assert.equal(citation.citing, 'a');
+});
+
+test('buildEdges：分类名缺失时仍给中性的理由文案', () => {
+  const entries = [
+    entry({ id: 'a', collectionId: 'C9', tokens: ['x'], keywords: ['x'] }),
+    entry({ id: 'b', collectionId: 'C9', tokens: ['x'], keywords: ['x'] }),
+  ];
+  const col = buildEdges(entries, {}).find((e) => e.kind === 'collection');
+  assert.ok(col);
+  assert.equal(col.reason, '归在同一分类');
+});
+
+test('buildGraph：返回结构版本号（服务端据此判断旧缓存是否要重建）', () => {
+  const g = buildGraph({ entries: [entry({ id: 'a' })] });
+  assert.equal(g.version, 3);
+});
