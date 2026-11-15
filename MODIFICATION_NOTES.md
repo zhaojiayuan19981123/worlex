@@ -1,3 +1,97 @@
+## v2.1.2：参考文献链接跳转 / 色块移位 / 图谱换大模型聚类（2026-11-15）
+
+> 用户三点反馈：① 点文章里的参考文献链接应直接跳到对应位置；② 第二行工具条那
+> 几个色块位置不合适，挪走；③ 图谱是依据什么聚类的，为什么只聚成两类，要用大模型聚类。
+
+### 一、参考文献链接：解析命名目标，精确落位
+
+- **真因**：`public/pdf-links.js` 渲染链接层时只取 `a.url || a.unsafeUrl`，为空就把字符串
+  `dest` 塞进 `url`。参考文献编号的链接不是网址，而是文档内**命名目标**（`bib51`），
+  既不是 `#pN` 也不是 http(s)，于是落到兜底分支弹「暂不支持该链接类型」。
+- **实测**（用户那份 14 页 PDF）：第 2 页 35 个 `Link` 注解全是 `dest`；
+  `doc.getDestination('bib51')` → `[{num:204,gen:0},{name:'FitR'},306.604,397.203,555.67,397.203]`
+  → `doc.getPageIndex(arr[0])` = 13 → 第 14 页。第 14 页才是 `https://doi.org/…` 与
+  `refhub.elsevier.com` 的真外链。
+- **改法**
+  - 渲染时把 `dest` 原样带出（`const dest = a.dest != null ? a.dest : null;` + `fromLink: true`）。
+  - 新增 `resolveDest`（字符串走 `getDestination`，数组直接用；页引用可能是数字或 `{num,gen}`）、
+    `destRect`（`FitR` 取 4 个坐标，`XYZ` 取 left/top 退化成 1px 点）、`gotoDest`。
+  - `onActivate` 增加文档内跳转分支；DOI 判断改成 `if (raw && isDoi(raw))`，否则空 `url`
+    会被当成 DOI 走进信息卡。
+- **落位**：`scrollToBox` 用 wrap 与 `#prPages` 的 `getBoundingClientRect` 差算出 `scrollTop`，
+  再把落点放到阅读区高度的 26% 处（引文条目通常贴着页脚，滚到页顶会看不见）。
+- **视口换算**统一走 `window.Worlex.viewport(page, n)`（`getPageViewport`，含当前缩放与
+  该页额外旋转），避免 90°/270° 旋转时框落偏。
+- **踩坑：落点框一闪就没**。真实链路是「点链接 → 平滑滚动 → 目标页进入视口 →
+  IntersectionObserver 才触发懒渲染」，而 `renderPageInto` 开头 `wrap.innerHTML = ''`
+  会把刚挂上的 `.pl-dest-mark` 连同占位符一起清掉。第一版想「等
+  `wrap.dataset.rendering !== '1'` 再挂」，但检测那一刻渲染往往还没开始
+  （实测点击后 132ms 就挂上了框，856ms 才开始渲染），于是直接放行 → 框被吃掉。
+  最终改成 `MutationObserver` 盯住 wrap：框被清走就补挂；2.4 秒后**先 `disconnect()`
+  再 `remove()`**（顺序反了 remove 本身会触发回调，又把框挂回去）。实测 marks
+  从 72ms 一直保持到 2447ms 自然退场。
+
+### 二、高亮色块：从第二行挪进顶部弹出取色器
+
+- **DOM**：删掉第二行整块 `#prColorTools`（它把「大纲」「原文/译文」挤到一边），改成一个
+  `.pr-color-wrap` 放进顶部 `#prPdfTools`，位置在 `#prToggleCmp` 之后、`#prToolStrip` 之前。
+- **结构**：按钮 `#prColorBtn`（内含 `#prColorDot` 显示当前色）+ 浮层 `#prColorPop`（4 个 `.pr-color`）。
+- **交互**：`aria-expanded` 同步；点外部 / Esc 关闭；`closePdfReader()` 里调
+  `hideColorPopover()` 兜底（否则下次打开阅读器浮层还开着）；选色后圆点 `data-color` 跟随。
+- **样式**：浮层 `top: calc(100% + 8px)` 贴按钮下方（实测浮层 top=90、按钮底 82），
+  `.pr-color-pop .pr-color` 缩到 22px。第二行现在只剩大纲 / 原文译文。
+
+### 三、知识图谱：大模型聚类取代本地词面聚类
+
+- **为什么只聚成两类**：`clusterTopics()` 是 TF 词面相似度 + `CLUSTER_THRESHOLD = 0.2` 的
+  贪心合并。中文库里「实证 / 量表 / 问卷 / 消费者」这类词遍布，任意两篇都能过阈值，
+  最后熔成一两坨 —— 这不是主题，是词表重合。
+- **管线**（`server.js`）
+  1. `clusterCatalog()`：字段长度随篇数自适应（>200 篇标题 70 / 摘要 60，>100 篇摘要 90，
+     否则 140），避免提示词过长；
+  2. 每 `CLUSTER_BATCH = 40` 篇一批、`CLUSTER_CONCURRENCY = 2` 并发；
+  3. `requestClusterBatchWithRetry()`：失败就对半拆，拆到 ≤10 篇还失败才认输；
+  4. 同名主题合并（判重时去掉标点与空白，模型偶尔多打个顿号）；
+  5. `mergeTopicGroups()`：合并后仍 >10 个主题时，只喂「主题名 + 篇数」让模型做一次
+     上位主题归并（让模型填原始主题的**序号**，不填 id，省 token 也不容易编）；
+  6. `applyTopicGroups()`（`src/knowledgeGraph.js`）本地结构校验：不存在的 id 丢掉、
+     重复归类只认第一次、主题名截到 40 字、空主题丢弃、模型漏掉的进「未分类」、
+     按篇数降序；
+  7. `buildGraph(index, { topicGroups })` 装配图谱，`method: 'llm' | 'local'`。
+- **超时与失败**：单批 `timeoutMs: 210000`（推理模型在 27k 字符目录上跑 180s 会超时）；
+  收尾用 `try { request.cancel?.() } catch {}` —— 失败路径拿到的是合成响应对象，
+  没有 `cancel`，原来的 `finally { request.cancel(); }` 会把真实报错盖掉，
+  表现为「大模型聚类失败：request.cancel is not a function」。
+- **上限**：`MAX_LLM_GROUPS = 20` 只作兜底。之前设 12 时会截断模型给的 27 个主题，
+  被截掉主题的文献全变「未分类」（实测 46~54 篇），现已提到 20 并配合归并。
+- **缓存与自动重跑**：`kbSignature()`（id + title + titleZh + keywords 的 FNV-1a 简写），
+  文献不变直接复用；一变就作废，`scheduleLlmClustering()` 在启动（3s 后）与知识库重建后
+  自动跑一次。`clusteringMeta()` 对外暴露 `method/at/model/running/error/progress/stale`。
+- **持久化**：`persistKnowledge()` 改写成 `{ index, graph, llm }`，重启直接生效；
+  换数据目录时清空 `kbLlmClusters` 并重新聚一次。
+- **自检**：写回后发现 `kbGraphCache.method !== 'llm'`（说明模型把 id 改成了序号之类的），
+  就回退旧分组并报「模型返回的文献 ID 与本地库对不上」，不让图谱悄悄变成空主题。
+- **实测（真实 107 篇 + 真实模型）**：193~282s、8 个主题、329 条关联、107/107 全覆盖：
+  人工智能与数字消费心理行为（23）、广告/社交媒体与品牌传播（23）、文本主题建模与
+  生成式内容分析（22）、多模态营销算法与视觉识别（19）、消费者决策与电商展示效应（8）、
+  平台市场机制与营销组合建模（7）、社会议题与可持续消费（4）、根技术概念与供应链韧性（1）。
+- **前端**：统计条改成 `107 篇文献 · 8 个主题 · 329 条关联 · 大模型聚类`，
+  `.kg-stats` 由 `flex: 0 0 auto; white-space: nowrap` 改为 `flex: 1 0 100%; white-space: normal`
+  （原来被挤到工具行末尾还被裁切）；按钮改「AI 重新聚类」，跑的过程中显示
+  「正在用大模型按研究主题归类…约 1~3 分钟」，失败保留原结果并 toast 原因。
+
+### 验证
+
+- 全量单测 **790 / 790**（Node 20.10 与 Node 22.22 各一遍）。
+- `test/v212-features.test.mjs` 新增 7 项：命名目标解析接线、落点框补挂逻辑、
+  色块位置与取色交互、45 篇超限时 **40→20→10 拆半重试的实际调用尺寸序列**
+  `[5, 10, 10, 10, 10, 20, 20, 40]`、模型编造 id 丢弃 + 未分类兜底、分组持久化。
+- 冒烟 `smoke-v212.mjs` **16 / 16**（真实 Chromium + 真实后端）：第 2 页点链接
+  → 第 14 页、scrollTop=15004、落点框 marks=1、不再弹「暂不支持」；
+  色块在 `#prPdfTools` 内、点开贴按钮下方、选完自动收起；统计条标明聚类方式、
+  无模型时给出明确原因而不是静默失败。
+- 冒烟 `smoke-v210.mjs` 回归 **16 / 16**。
+
 ## v2.1.1：框选只入框不发问 / 图谱分区不叠字 / 卡顿与内存（2026-11-15）
 
 > 用户三点反馈：① 框选问 AI 应该只把图放进对话框，用户发送才分析；

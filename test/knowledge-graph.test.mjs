@@ -6,6 +6,7 @@ import {
   clusterTopics,
   buildEdges,
   buildGraph,
+  applyTopicGroups,
   mergeTags,
 } from '../src/knowledgeGraph.js';
 
@@ -155,4 +156,82 @@ test('buildGraph：节点字段齐全、顺序稳定、stats 正确', () => {
   assert.equal(typeof g.stats.topics, 'number');
   assert.equal(g.stats.relations, g.edges.length);
   assert.notEqual(g.nodes[0].topicId, '', '应有主题分配');
+  assert.equal(g.method, 'local', '没有大模型分组时标记为本地聚类');
+});
+
+// ==================== 大模型主题分组（applyTopicGroups） ====================
+
+test('applyTopicGroups：空输入 / 脏数据都不抛错', () => {
+  assert.deepEqual(applyTopicGroups(null, null), { topics: [], assignments: {}, coverage: 0 });
+  assert.deepEqual(applyTopicGroups([], [{ name: 'x', ids: ['a'] }]), { topics: [], assignments: {}, coverage: 0 });
+  const entries = [entry({ id: 'a' })];
+  assert.equal(applyTopicGroups(entries, null).coverage, 0);
+  assert.equal(applyTopicGroups(entries, [null, 1, 'x']).coverage, 0);
+});
+
+test('applyTopicGroups：不存在的 id 丢掉、重复归类只认第一次、空主题丢弃', () => {
+  const entries = [entry({ id: 'a' }), entry({ id: 'b' }), entry({ id: 'c' })];
+  const out = applyTopicGroups(entries, [
+    { name: '  在线评论  ', keywords: ['评论', '情感'], ids: ['a', 'ghost', 'a'] },
+    { name: '空主题', ids: ['ghost'] },
+    { name: '平台治理', ids: ['b', 'a'] },  // a 已被前面的主题认领
+  ]);
+  assert.equal(out.coverage, 2);
+  assert.deepEqual(out.topics.map((t) => t.label), ['在线评论', '平台治理', '未分类']);
+  const byLabel = Object.fromEntries(out.topics.map((t) => [t.label, t]));
+  assert.equal(byLabel['在线评论'].count, 1);
+  assert.equal(byLabel['平台治理'].count, 1);
+  assert.equal(byLabel['未分类'].count, 1, '没被归类的进「未分类」');
+  assert.deepEqual(byLabel['在线评论'].terms, ['评论', '情感']);
+  assert.equal(out.assignments.a.label, '在线评论');
+  assert.equal(out.assignments.c.topicId, 'topic-uncategorized');
+});
+
+test('applyTopicGroups：主题按篇数降序排序，篇数相同按名字', () => {
+  const entries = ['a', 'b', 'c', 'd'].map((id) => entry({ id }));
+  const out = applyTopicGroups(entries, [
+    { name: '乙主题', ids: ['a'] },
+    { name: '甲主题', ids: ['b', 'c'] },
+    { name: '丙主题', ids: ['d'] },
+  ]);
+  assert.deepEqual(out.topics.map((t) => t.label), ['甲主题', '丙主题', '乙主题']);
+  assert.deepEqual(out.topics.map((t) => t.count), [2, 1, 1]);
+});
+
+test('applyTopicGroups：主题名超长截断、keywords 归一化', () => {
+  const out = applyTopicGroups([entry({ id: 'a' })], [{
+    name: '很'.repeat(80),
+    keywords: 'k1；k2',
+    ids: ['a'],
+  }]);
+  assert.equal(out.topics[0].label.length, 40);
+  assert.deepEqual(out.topics[0].terms, ['k1', 'k2'], '字符串关键词按中文分号拆开');
+});
+
+test('buildGraph：传入大模型分组时走 llm 分支，节点带上主题名', () => {
+  const entries = [
+    entry({ id: 'a', title: '在线评论情感分析', keywords: ['评论'], tokens: ['评论', '情感'] }),
+    entry({ id: 'b', title: '酒店评分与忠诚度', keywords: ['酒店'], tokens: ['酒店', '评分'] }),
+    entry({ id: 'c', title: '平台治理机制', keywords: ['平台'], tokens: ['平台', '治理'] }),
+  ];
+  const g = buildGraph({ entries }, {
+    topicGroups: [
+      { name: '在线评论与酒店绩效', keywords: ['评论', '酒店'], ids: ['a', 'b'] },
+      { name: '平台治理', ids: ['c'] },
+    ],
+  });
+  assert.equal(g.method, 'llm');
+  assert.deepEqual(g.topics.map((t) => t.label).sort(), ['在线评论与酒店绩效', '平台治理'].sort());
+  const byId = Object.fromEntries(g.nodes.map((n) => [n.id, n]));
+  assert.equal(byId.a.topicLabel, '在线评论与酒店绩效');
+  assert.equal(byId.c.topicLabel, '平台治理');
+  assert.equal(g.stats.documents, 3);
+  assert.equal(g.stats.topics, 2);
+});
+
+test('buildGraph：大模型分组全是无效 id 时自动退回本地聚类', () => {
+  const entries = [entry({ id: 'a', tokens: ['x', 'y'] }), entry({ id: 'b', tokens: ['x', 'y'] })];
+  const g = buildGraph({ entries }, { topicGroups: [{ name: '假的', ids: ['nope'] }] });
+  assert.equal(g.method, 'local');
+  assert.equal(g.stats.documents, 2);
 });

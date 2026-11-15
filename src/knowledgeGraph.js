@@ -184,6 +184,66 @@ const MAX_DOCS = 400;
 const MAX_EDGES = 1200;
 const MAX_DEGREE = 8;
 const THRESHOLDS = { topic: 0.2, author: 0.5, collection: 0.4, citation: 0.8 };
+// 大模型分组的上限：超过这个数就是模型没合并好（服务端会先做一次上位主题归并），
+// 这里只是兜底 —— 宁可少画几个主题，也不能让几十篇文献莫名掉进「未分类」。
+const MAX_LLM_GROUPS = 20;
+const MAX_GROUP_NAME = 40;
+
+/**
+ * 用大模型给出的主题分组装配图谱（模型负责语义归类，本地负责结构校验）。
+ *
+ * 本地相似度聚类只看词面重合：中文文献里「实证 / 量表 / 问卷」这类词到处都是，
+ * 很容易把所有文献熔成一两坨。大模型读标题 + 摘要能按真正的「研究问题」分。
+ *
+ * 容错规则（模型输出不可全信）：不存在的 id 丢掉、重复归类只认第一次、
+ * 主题名截断、空主题丢弃、没被归类的统一进「未分类」。
+ *
+ * @param {Array} entries 知识库条目
+ * @param {Array<{name?:string, keywords?:Array, ids?:Array, members?:Array}>} groups 模型输出
+ * @returns {{topics: Array, assignments: Object, coverage: number}} 与 clusterTopics 同构
+ */
+export function applyTopicGroups(entries, groups) {
+  const list = Array.isArray(entries) ? entries.filter((e) => e && typeof e === 'object') : [];
+  const raw = Array.isArray(groups) ? groups : [];
+  const known = new Set();
+  for (const e of list) {
+    const id = str(e.id).trim();
+    if (id) known.add(id);
+  }
+  const topics = [];
+  const assignments = {};
+  const used = new Set();
+  for (const g of raw) {
+    if (!g || typeof g !== 'object') continue;
+    if (topics.length >= MAX_LLM_GROUPS) break;
+    const label = str(g.name || g.label).replace(/\s+/g, ' ').trim().slice(0, MAX_GROUP_NAME);
+    const ids = (Array.isArray(g.ids) ? g.ids : Array.isArray(g.members) ? g.members : [])
+      .map((x) => str(x).trim()).filter(Boolean);
+    const members = [];
+    for (const id of ids) {
+      if (!known.has(id) || used.has(id)) continue; // 不存在的 id / 已被前面的主题认领
+      used.add(id);
+      members.push(id);
+    }
+    if (!members.length) continue;
+    const terms = toList(g.keywords).slice(0, 4);
+    const topicId = `topic-llm-${topics.length + 1}`;
+    const name = label || terms[0] || `主题 ${topics.length + 1}`;
+    topics.push({ id: topicId, label: name, terms, count: members.length });
+    for (const mid of members) assignments[mid] = { topicId, label: name, score: 1 };
+  }
+  const rest = [];
+  for (const id of known) {
+    if (!used.has(id)) rest.push(id);
+  }
+  if (rest.length) {
+    topics.push({ id: 'topic-uncategorized', label: '未分类', terms: [], count: rest.length });
+    for (const mid of rest) assignments[mid] = { topicId: 'topic-uncategorized', label: '未分类', score: 0 };
+  }
+  // 主题按篇数降序（并列按名字）排序：图谱配色与左侧筛选下拉的顺序才稳定
+  topics.sort((a, b) => (b.count - a.count) || cmpStr(a.label, b.label));
+  return { topics, assignments, coverage: used.size };
+}
 
 function tokenSet(e) {
   const s = new Set();
@@ -309,7 +369,13 @@ export function buildGraph(index, opts) {
     ? index.entries.filter((e) => e && typeof e === 'object')
     : [];
   const options = opts && typeof opts === 'object' ? opts : {};
-  const { topics, assignments } = clusterTopics(entries, options);
+  // 有大模型分组就优先用它（opts.topicGroups）；否则退回本地相似度聚类。
+  let llm = null;
+  if (Array.isArray(options.topicGroups) && options.topicGroups.length) {
+    const applied = applyTopicGroups(entries, options.topicGroups);
+    if (applied.coverage > 0) llm = applied;
+  }
+  const { topics, assignments } = llm || clusterTopics(entries, options);
   const edges = buildEdges(entries, assignments);
   const nodes = entries.map((e) => {
     const id = str(e.id).trim();
@@ -334,6 +400,8 @@ export function buildGraph(index, opts) {
     nodes,
     edges,
     topics,
+    // 聚类来源：'llm' = 大模型语义聚类，'local' = 本地词面相似度聚类
+    method: llm ? 'llm' : 'local',
     stats: { documents: nodes.length, topics: topics.length, relations: edges.length },
   };
 }

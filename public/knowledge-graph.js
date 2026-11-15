@@ -188,7 +188,7 @@
     const bar = el('div', 'kg-toolbar');
     const head = el('div', 'kg-head');
     head.appendChild(el('h1', 'kg-title', '知识图谱'));
-    head.appendChild(el('p', 'kg-sub', '按主题聚类呈现文献之间的关联，点击节点查看详细信息。'));
+    head.appendChild(el('p', 'kg-sub', '由大模型按研究主题聚类，呈现文献之间的关联；点击节点查看详情。'));
     bar.appendChild(head);
 
     const tools = el('div', 'kg-tools');
@@ -217,7 +217,7 @@
     chkLabel.appendChild(el('span', '', '显示主题标签'));
     tools.appendChild(chkLabel);
 
-    const rebuild = el('button', 'kg-btn kg-btn-primary kg-rebuild', '重新聚类');
+    const rebuild = el('button', 'kg-btn kg-btn-primary kg-rebuild', 'AI 重新聚类');
     rebuild.type = 'button';
     tools.appendChild(rebuild);
     bar.appendChild(tools);
@@ -454,8 +454,28 @@
       if (v == null || v === '') return '—';
       return String(v);
     };
+    const c = (S.data && S.data.clustering) || {};
+    const isLlm = c.method === 'llm';
+    const how = isLlm ? '大模型聚类' : '本地聚类';
+    const bits = [`${n(st.documents)} 篇文献`, `${n(st.topics)} 个主题`, `${n(st.relations)} 条关联`, how];
     box.hidden = false;
-    box.textContent = `${n(st.documents)} 篇文献 · ${n(st.topics)} 个主题 · ${n(st.relations)} 条关联`;
+    box.textContent = bits.join(' · ');
+    // 悬停看细节：用的是哪个模型、什么时候聚的、是否需要重新聚类
+    const tips = [];
+    if (isLlm) {
+      if (c.model) tips.push('聚类模型：' + c.model);
+      if (c.at) {
+        const d = new Date(c.at);
+        if (!Number.isNaN(d.getTime())) tips.push('聚类时间：' + d.toLocaleString());
+      }
+    } else {
+      tips.push('按标题 / 关键词的词面相似度聚类，未调用大模型');
+    }
+    if (c.running) tips.push('正在用大模型重新聚类…');
+    else if (c.stale) tips.push('文献有更新，稍后会自动重新聚类');
+    if (c.error) tips.push('上次大模型聚类失败：' + c.error);
+    if (tips.length) box.title = tips.join('\n');
+    else box.removeAttribute('title');
   }
 
   // ==================== SVG 元素构建 ====================
@@ -1074,11 +1094,31 @@
 
   function rebuild() {
     const buttons = S.root ? S.root.querySelectorAll('.kg-rebuild') : [];
-    buttons.forEach((b) => { b.disabled = true; });
-    api('/api/knowledge/rebuild', { method: 'POST' })
-      .then(() => { toast('已重新聚类', 'success'); return load(); })
-      .catch((err) => toast((err && err.message) || '重新聚类失败', 'error'))
-      .finally(() => { buttons.forEach((b) => { b.disabled = false; }); });
+    buttons.forEach((b) => {
+      b.disabled = true;
+      if (!b.dataset.label) b.dataset.label = b.textContent || 'AI 重新聚类';
+      b.textContent = '聚类中…';
+    });
+    // 走「大模型聚类」而不是本地重建：本地词面相似度常把中文文献熔成一两坨
+    setStatus('loading', '正在用大模型按研究主题归类…文献多时会分几批跑，约 1~3 分钟');
+    api('/api/knowledge/recluster', { method: 'POST' })
+      .then((d) => {
+        const t = Array.isArray(d && d.topics) ? d.topics.length : 0;
+        const warn = d && d.warning ? `（部分失败：${d.warning}）` : '';
+        toast(t ? `已用大模型分成 ${t} 个主题${warn}` : `已重新聚类${warn}`, warn ? 'info' : 'success');
+        return load();
+      })
+      .catch((err) => {
+        const msg = (err && err.message) || '重新聚类失败';
+        toast(msg + '（已保留当前聚类结果）', 'error');
+        return load();
+      })
+      .finally(() => {
+        buttons.forEach((b) => {
+          b.disabled = false;
+          b.textContent = b.dataset.label || 'AI 重新聚类';
+        });
+      });
   }
 
   // ==================== 状态层（加载中 / 空 / 失败） ====================
@@ -1095,7 +1135,7 @@
     if (kind === 'loading') {
       const line = el('div', 'kg-status-line');
       line.appendChild(el('span', 'kg-status-dot'));
-      line.appendChild(el('span', '', '正在构建知识图谱…'));
+      line.appendChild(el('span', '', msg || '正在构建知识图谱…'));
       card.appendChild(line);
     } else if (kind === 'empty') {
       card.appendChild(el('p', 'kg-status-text', '还没有可展示的文献关联。请先在文献库添加文献，或点击「重新聚类」生成主题。'));

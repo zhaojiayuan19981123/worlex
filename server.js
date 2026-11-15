@@ -1466,9 +1466,57 @@ export function createApp({
   let kbIndex = buildIndex([]);
   let kbGraphCache = buildGraph(kbIndex);
   let kbTimer = null;
+  // 大模型主题聚类结果：{ signature, at, model, groups: [{name, keywords, ids}] }
+  // 本地相似度聚类只看词面重合，中文库里常把全部文献熔成一两坨；主题归类交给大模型，
+  // 结构校验与图谱装配仍走本地（applyTopicGroups）。
+  let kbLlmClusters = null;
+  let kbLlmBusy = false;
+  let kbLlmError = '';
+  let kbLlmTimer = null;
+  let kbLlmProgress = null;   // { done, total }：分批聚类时前端能显示进度
 
   function knowledgeFile() {
     return path.join(store.getDataDir(), 'knowledge-base.json');
+  }
+
+  /** 文献集合指纹（id + 标题 + 关键词）：文献一改，旧的大模型分组就作废。 */
+  function kbSignature() {
+    const parts = [];
+    for (const e of kbIndex.entries || []) {
+      parts.push(e.id, e.title || '', e.titleZh || '', (e.keywords || []).join('/'));
+    }
+    const s = parts.join('\u0001');
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return `${(kbIndex.entries || []).length}:${h.toString(36)}`;
+  }
+
+  /** 当前索引可用的大模型分组；文献变了就返回 null（先按本地聚类显示，稍后自动重聚类）。 */
+  function llmGroupsForIndex() {
+    if (!kbLlmClusters || !Array.isArray(kbLlmClusters.groups) || !kbLlmClusters.groups.length) return null;
+    if (kbLlmClusters.signature !== kbSignature()) return null;
+    return kbLlmClusters.groups;
+  }
+
+  /** 只重算图谱（索引没变时用，省掉一次全量建索引）。 */
+  function rebuildGraphOnly() {
+    kbGraphCache = buildGraph(kbIndex, { topicGroups: llmGroupsForIndex() || undefined });
+  }
+
+  function clusteringMeta() {
+    const method = kbGraphCache && kbGraphCache.method === 'llm' ? 'llm' : 'local';
+    return {
+      method,
+      at: method === 'llm' ? (kbLlmClusters?.at || '') : '',
+      model: method === 'llm' ? (kbLlmClusters?.model || '') : '',
+      running: kbLlmBusy,
+      error: kbLlmError,
+      progress: kbLlmProgress,
+      stale: !!(kbLlmClusters && kbLlmClusters.signature !== kbSignature()),
+    };
   }
 
   function persistKnowledge() {
@@ -1476,7 +1524,7 @@ export function createApp({
       const file = knowledgeFile();
       const tmp = file + '.tmp';
       // 派生数据不必美化：compact 比 2 空格缩进少 30% 体积，写盘也更快
-      fs.writeFileSync(tmp, JSON.stringify({ index: kbIndex, graph: kbGraphCache }), 'utf8');
+      fs.writeFileSync(tmp, JSON.stringify({ index: kbIndex, graph: kbGraphCache, llm: kbLlmClusters }), 'utf8');
       fs.renameSync(tmp, file);
     } catch (_) { /* 索引是可重建的派生数据，写盘失败不影响使用 */ }
   }
@@ -1487,7 +1535,10 @@ export function createApp({
       const data = JSON.parse(fs.readFileSync(knowledgeFile(), 'utf8'));
       if (!data || !data.index || !Array.isArray(data.index.entries)) return false;
       kbIndex = data.index;
-      kbGraphCache = data.graph && Array.isArray(data.graph.nodes) ? data.graph : buildGraph(kbIndex);
+      if (data.llm && Array.isArray(data.llm.groups) && data.llm.groups.length) kbLlmClusters = data.llm;
+      kbGraphCache = data.graph && Array.isArray(data.graph.nodes)
+        ? data.graph
+        : buildGraph(kbIndex, { topicGroups: llmGroupsForIndex() || undefined });
       return true;
     } catch (_) { return false; }
   }
@@ -1511,7 +1562,7 @@ export function createApp({
         now: new Date().toISOString(),
         readFullText,
       });
-      kbGraphCache = buildGraph(kbIndex);
+      rebuildGraphOnly();
       persistKnowledge();
     } catch (e) {
       console.error('[knowledge] 重建索引失败：', e.message);
@@ -1520,9 +1571,302 @@ export function createApp({
     }
   }
 
+  /**
+   * 把文献清单压成模型能读的紧凑表：ID + 标题 + 中文标题 + 关键词 + 摘要片段。
+   * 字段长度随篇数自适应收窄：107 篇约 45KB，300 篇也不至于把上下文撑爆。
+   */
+  function clusterCatalog(entries) {
+    const n = entries.length;
+    const titleLen = n > 200 ? 70 : 110;
+    const kwCount = n > 200 ? 4 : 6;
+    const kwLen = n > 200 ? 12 : 16;
+    const absLen = n > 200 ? 60 : n > 100 ? 90 : 140;
+    const rows = [];
+    for (const e of entries.slice(0, 300)) {
+      const one = (v, len) => String(v == null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, len);
+      const title = one(e.title, titleLen);
+      const zh = one(e.titleZh, Math.round(titleLen * 0.55));
+      const kws = (Array.isArray(e.keywords) ? e.keywords : []).slice(0, kwCount)
+        .map((k) => one(k, kwLen)).filter(Boolean).join('、');
+      const abs = one(e.summary, absLen);
+      rows.push([e.id, title, zh && zh !== title ? zh : '', kws, abs].join('\t'));
+    }
+    return rows.join('\n');
+  }
+
+  /** 解析模型输出：允许 ```json 围栏、允许对象或数组，最终只认 {name, keywords, ids}。 */
+  function parseClusters(text) {
+    let s = String(text || '').trim();
+    s = s.replace(/^```[a-z]*\s*/i, '').replace(/```$/i, '').trim();
+    const a = s.indexOf('{');
+    const b = s.lastIndexOf('}');
+    const a2 = s.indexOf('[');
+    const b2 = s.lastIndexOf(']');
+    if (a >= 0 && b > a) s = s.slice(a, b + 1);
+    else if (a2 >= 0 && b2 > a2) s = s.slice(a2, b2 + 1);
+    const data = JSON.parse(s);
+    const groups = Array.isArray(data) ? data : (data.topics || data.clusters || data.groups || []);
+    if (!Array.isArray(groups)) throw new Error('模型返回的主题结构无法识别');
+    const clean = [];
+    for (const g of groups) {
+      if (!g || typeof g !== 'object') continue;
+      const name = String(g.name || g.label || g.topic || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const ids = (Array.isArray(g.ids) ? g.ids : Array.isArray(g.members) ? g.members : [])
+        .map((x) => String(x == null ? '' : x).trim()).filter(Boolean);
+      if (!name || !ids.length) continue;
+      const keywords = (Array.isArray(g.keywords) ? g.keywords : [])
+        .map((x) => String(x == null ? '' : x).trim()).filter(Boolean).slice(0, 4);
+      clean.push({ name, keywords, ids });
+    }
+    if (!clean.length) throw new Error('模型没有给出可用的主题分组');
+    return clean;
+  }
+
+  // 一次请求最多塞 40 篇：107 篇一次性丢给推理模型实测会跑到 3 分钟以上（甚至超时），
+  // 分批后每批十几秒，总时长还给并发压下来了；顺带让上下文小的本地模型也能用。
+  const CLUSTER_BATCH = 40;
+  const CLUSTER_CONCURRENCY = 2;
+
+  function clusterSystemPrompt(knownNames) {
+    const lines = [
+      '你是学术文献主题聚类助手。用户给出本地文献库清单，每行是：文献ID<TAB>标题<TAB>中文标题<TAB>关键词<TAB>摘要片段（字段可能为空，一律按制表符分隔）。',
+      '请按「研究主题 / 研究对象 / 理论视角」把它们分成若干互不重叠的主题簇。',
+      '要求：',
+      '1. 主题名用简体中文，6~18 字，具体可辨（如「在线评论情感分析与酒店绩效」「AI 拟人化与消费者接受」），禁用「其他」「综合」「研究主题一」这类空泛命名；',
+      '2. 每篇文献必须且只能出现在一个主题里；ids 必须逐字照抄每行第一个字段的文献ID（是长串的十六进制编号，不是序号），不要改写、不要编号、不要加引号；',
+      '3. 同作者、同期刊、同语种都不算主题，要看研究问题是否相同；',
+      '4. 主题数量按真实分化程度决定（大致 3~10 个）：强相关的文献不许为了凑数拆开，真正孤立的单篇可以自成一簇。',
+    ];
+    if (Array.isArray(knownNames) && knownNames.length) {
+      lines.push(`5. 本次清单只是全库的一部分。下面这些主题已在前面的批次里确定，属于它们的文献请**沿用同名**，不要另造同义主题：${knownNames.slice(0, 40).join('、')}`);
+    }
+    lines.push('只输出 JSON，不要解释、不要 Markdown 代码围栏（keywords 最多 2 个，能省就省）：');
+    lines.push('{"topics":[{"name":"主题名","keywords":["关键词1","关键词2"],"ids":["文献ID","文献ID"]}]}');
+    return lines.join('\n');
+  }
+
+  /** 单批请求：给多少篇就只归多少篇。 */
+  async function requestClusterBatch(am, entries, knownNames) {
+    const request = await fetchModelCompletion(am, {
+      model: am.model,
+      messages: [
+        { role: 'system', content: clusterSystemPrompt(knownNames) },
+        { role: 'user', content: `文献清单（共 ${entries.length} 篇）：\n${clusterCatalog(entries)}` },
+      ],
+      temperature: 0.1,
+      max_tokens: 2000,
+    }, { stream: false, timeoutMs: 210000 });
+    try {
+      if (!request.up || !request.up.ok) {
+        const detail = request.up?._litErrorText ?? (request.up ? await request.up.text().catch(() => '') : '');
+        throw new Error(endpointFailureMessage(request.up, detail) || '模型没有返回结果');
+      }
+      const text = (await readLLMResponse(request.up)).full || '';
+      return parseClusters(text);
+    } finally {
+      // 失败路径上拿到的是合成响应对象，没有 cancel；别让收尾动作盖掉真正的报错
+      try { request.cancel?.(); } catch (_) { /* ignore */ }
+    }
+  }
+
+  /**
+   * 批失败就拆半再试（40 → 20 → 10）：推理模型偶尔会在一批上卡到超时，
+   * 整批作废会让几十篇文献掉进「未分类」，拆小重试比直接放弃划算得多。
+   */
+  async function requestClusterBatchWithRetry(am, batch, knownNames) {
+    try {
+      return await requestClusterBatch(am, batch, knownNames);
+    } catch (e) {
+      if (batch.length <= 10) throw e;
+      const mid = Math.ceil(batch.length / 2);
+      const out = [];
+      for (const part of [batch.slice(0, mid), batch.slice(mid)]) {
+        out.push(...await requestClusterBatchWithRetry(am, part, knownNames));
+      }
+      return out;
+    }
+  }
+
+  /**
+   * 第二批以后模型往往会给同一批文献另起同义主题名（"广告说服" / "广告效果"），
+   * 分批跑下来主题数会膨胀到二三十个。这里做一次「合并同名再归类」的小请求：
+   * 只喂主题名和篇数，让模型给出「合并后的主题 → 原来第几组」的映射。
+   */
+  async function mergeTopicGroups(am, groups) {
+    if (groups.length <= 10) return groups;
+    const list = groups.map((g, i) => `${i + 1}. ${g.name}（${g.ids.length} 篇）`).join('\n');
+    const system = [
+      '你是学术文献主题聚类助手。下面是一份按批次聚类出来的主题列表，同一个研究方向被拆成了好几个同义主题。',
+      '请把它们合并成 4~10 个上位主题（研究主题 / 研究对象 / 理论视角），要求：',
+      '1. 合并后的主题名用简体中文，6~18 字，具体可辨；',
+      '2. 每个原始主题必须且只能被归入一个上位主题，groups 里填原始主题的**序号**（从 1 开始）；',
+      '3. 只有真正同一研究问题的才合并，不要为了凑数把不相关的并在一起。',
+      '只输出 JSON，不要解释、不要 Markdown 围栏：',
+      '{"themes":[{"name":"上位主题名","groups":[1,3,5]}]}',
+    ].join('\n');
+    const request = await fetchModelCompletion(am, {
+      model: am.model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: `原始主题（共 ${groups.length} 个）：\n${list}` },
+      ],
+      temperature: 0.1,
+      max_tokens: 1200,
+    }, { stream: false, timeoutMs: 150000 });
+    let data = null;
+    try {
+      if (!request.up || !request.up.ok) return groups;   // 合并失败就按原样用（前端会按上限截断）
+      const text = (await readLLMResponse(request.up)).full || '';
+      let s = text.trim().replace(/^```[a-z]*\s*/i, '').replace(/```$/i, '').trim();
+      const a = s.indexOf('{');
+      const b = s.lastIndexOf('}');
+      if (a >= 0 && b > a) s = s.slice(a, b + 1);
+      data = JSON.parse(s);
+    } catch (_) {
+      return groups;
+    } finally {
+      try { request.cancel?.(); } catch (_) { /* ignore */ }
+    }
+    const themes = Array.isArray(data?.themes) ? data.themes : [];
+    if (!themes.length) return groups;
+    const used = new Set();
+    const out = [];
+    for (const t of themes) {
+      if (!t || typeof t !== 'object') continue;
+      const name = String(t.name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const idxs = (Array.isArray(t.groups) ? t.groups : [])
+        .map((x) => Number(x) - 1)
+        .filter((i) => Number.isInteger(i) && i >= 0 && i < groups.length && !used.has(i));
+      if (!name || !idxs.length) continue;
+      const merged = { name, keywords: [], ids: [] };
+      for (const i of idxs) {
+        used.add(i);
+        for (const k of groups[i].keywords) {
+          if (merged.keywords.length < 4 && !merged.keywords.includes(k)) merged.keywords.push(k);
+        }
+        for (const id of groups[i].ids) if (!merged.ids.includes(id)) merged.ids.push(id);
+      }
+      out.push(merged);
+    }
+    // 模型漏掉的原始主题原样保留，别让这些文献无家可归
+    groups.forEach((g, i) => { if (!used.has(i)) out.push(g); });
+    return out;
+  }
+
+  /**
+   * 全库聚类：按 40 篇一批并发跑 → 同名合并 → 跨批次同义主题再做一次归并。
+   * 部分批次失败时用已成功的批次继续（剩下的文献进「未分类」），只有全军覆没才算失败。
+   */
+  async function requestLlmClusters(am, entries) {
+    const list = entries.slice(0, 300);
+    const batches = [];
+    for (let i = 0; i < list.length; i += CLUSTER_BATCH) batches.push(list.slice(i, i + CLUSTER_BATCH));
+    const merged = new Map();
+    const names = [];
+    const errors = [];
+    kbLlmProgress = { done: 0, total: batches.length };
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < batches.length) {
+        const idx = cursor;
+        cursor += 1;
+        const batch = batches[idx];
+        try {
+          const groups = await requestClusterBatchWithRetry(am, batch, names.slice());
+          for (const g of groups) {
+            // 同名判定放宽到「去掉标点与空白后一致」，模型偶尔会多打个顿号
+            const key = g.name.replace(/[\s·・,，、:：;；()（）【】[\]]/g, '').toLowerCase();
+            let hit = merged.get(key);
+            if (!hit) {
+              hit = { name: g.name, keywords: [], ids: [] };
+              merged.set(key, hit);
+              names.push(g.name);
+            }
+            for (const k of g.keywords) {
+              if (hit.keywords.length < 4 && !hit.keywords.includes(k)) hit.keywords.push(k);
+            }
+            for (const id of g.ids) if (!hit.ids.includes(id)) hit.ids.push(id);
+          }
+        } catch (e) {
+          errors.push(shortError(e));
+        } finally {
+          kbLlmProgress.done += 1;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CLUSTER_CONCURRENCY, batches.length) }, worker));
+    if (!merged.size) throw new Error(errors[0] || '模型没有给出可用的主题分组');
+    // 分批 + 同义主题膨胀：再让模型做一次「上位主题」归并，主题数落到 10 个以内
+    let groups = [...merged.values()];
+    try {
+      groups = await mergeTopicGroups(am, groups);
+    } catch (_) { /* 合并失败就按原样用 */ }
+    return { groups, errors, batches: batches.length };
+  }
+
+  /**
+   * 让大模型重新梳理主题。失败只记录原因、不影响本地聚类继续可用。
+   * @returns {Promise<{ok:boolean, error?:string, busy?:boolean, model?:string}>}
+   */
+  async function reclusterWithLLM() {
+    const am = activeModel(store.getSettings());
+    if (!am) return { ok: false, error: noModelError() };
+    if (!(kbIndex.entries || []).length) return { ok: false, error: '本地知识库里还没有文献，先添加并解析几篇再聚类' };
+    if (kbLlmBusy) return { ok: false, busy: true, error: '正在聚类中，请稍候' };
+    kbLlmBusy = true;
+    kbLlmError = '';
+    try {
+      const { groups, errors } = await requestLlmClusters(am, kbIndex.entries);
+      const prev = kbLlmClusters;
+      kbLlmClusters = {
+        signature: kbSignature(),
+        at: new Date().toISOString(),
+        model: String(am.label || am.model || ''),
+        groups,
+      };
+      rebuildGraphOnly();
+      // 模型把 ID 改写成了序号之类 → 一条也对不上，别让用户以为聚类成功了
+      if (kbGraphCache.method !== 'llm') {
+        kbLlmClusters = prev;
+        rebuildGraphOnly();
+        throw new Error('模型返回的文献 ID 与本地库对不上（可能被改写成了序号），换一个模型或重试');
+      }
+      persistKnowledge();
+      // 部分批次失败：结果照用，但把原因记下来，前端 hover 能看到
+      const warning = errors.length ? `${errors.length} 批失败：${errors[0]}` : '';
+      if (warning) kbLlmError = warning;
+      return { ok: true, model: kbLlmClusters.model, warning };
+    } catch (e) {
+      kbLlmError = shortError(e);
+      return { ok: false, error: '大模型聚类失败：' + kbLlmError };
+    } finally {
+      kbLlmBusy = false;
+      kbLlmProgress = null;
+    }
+  }
+
+  /** 文献变了：索引重建完成后隔一会儿让大模型重排主题（有模型才做；失败不影响使用）。 */
+  function scheduleLlmClustering(delay = 6000) {
+    if (kbLlmTimer) clearTimeout(kbLlmTimer);
+    kbLlmTimer = setTimeout(() => {
+      kbLlmTimer = null;
+      if (kbLlmBusy) { scheduleLlmClustering(4000); return; }
+      if (!(kbIndex.entries || []).length) return;
+      if (kbLlmClusters && kbLlmClusters.signature === kbSignature()) return;
+      if (!activeModel(store.getSettings())) return;
+      reclusterWithLLM().catch(() => { /* 错误已写进 kbLlmError */ });
+    }, delay);
+    kbLlmTimer.unref?.();
+  }
+
   function scheduleKbRebuild() {
     if (kbTimer) clearTimeout(kbTimer);
-    kbTimer = setTimeout(() => { kbTimer = null; rebuildKnowledge(); }, 800);
+    kbTimer = setTimeout(() => {
+      kbTimer = null;
+      rebuildKnowledge();
+      // 索引更新完再排一次大模型聚类：这样一次批量导入只调用一次模型
+      scheduleLlmClustering();
+    }, 800);
   }
 
   // 任何写文献的操作完成后都刷新知识库（异步解析任务返回时也会触发）
@@ -1538,17 +1882,42 @@ export function createApp({
     ...kbIndex.stats, builtAt: kbIndex.builtAt,
     topics: kbGraphCache?.topics?.length || 0,
     relations: kbGraphCache?.stats?.relations || 0,
+    clustering: clusteringMeta(),
   }));
   app.post('/api/knowledge/rebuild', (_req, res) => {
     rebuildKnowledge();
-    res.json({ ok: true, ...kbIndex.stats, topics: kbGraphCache.topics.length, relations: kbGraphCache.stats.relations });
+    res.json({
+      ok: true, ...kbIndex.stats,
+      topics: kbGraphCache.topics.length,
+      relations: kbGraphCache.stats.relations,
+      clustering: clusteringMeta(),
+    });
+  });
+  // 大模型重新聚类：读标题 / 中文译名 / 关键词 / 摘要，按研究主题归类（可能耗时十几秒）
+  app.post('/api/knowledge/recluster', async (_req, res) => {
+    try {
+      const out = await reclusterWithLLM();
+      if (!out.ok) return res.status(out.busy ? 409 : 400).json({ error: out.error });
+      res.json({
+        ok: true, method: 'llm', model: out.model, warning: out.warning || '',
+        topics: kbGraphCache.topics,
+        clustering: clusteringMeta(),
+        ...kbIndex.stats,
+        relations: kbGraphCache.stats.relations,
+      });
+    } catch (e) {
+      res.status(500).json({ error: shortError(e) });
+    }
   });
   app.get('/api/knowledge/search', (req, res) => {
     const q = String(req.query?.q || '');
     const limit = Math.max(1, Math.min(20, Number(req.query?.limit) || 8));
     res.json({ hits: searchEntries(kbIndex, q, limit) });
   });
-  app.get('/api/knowledge/graph', (_req, res) => res.json(kbGraphCache));
+  app.get('/api/knowledge/graph', (_req, res) => res.json({
+    ...kbGraphCache,
+    clustering: clusteringMeta(),
+  }));
   // 先尝试用上次的索引直接可用；只有「没有索引」或「索引落后于文献」才重建。
   // 落后时放到事件循环空闲处重建，不挡启动（旧版在 listen 之前同步跑 5 秒）。
   if (!loadPersistedKnowledge()) {
@@ -1556,6 +1925,8 @@ export function createApp({
   } else if (knowledgeStale()) {
     setTimeout(() => { try { rebuildKnowledge(); } catch (_) { /* 已在上层兜底 */ } }, 1500).unref?.();
   }
+  // 首次升级到「大模型聚类」时还没有分组：启动后自动跑一次（没有可用模型就跳过）
+  if ((kbIndex.entries || []).length) scheduleLlmClustering(3000);
 
   const browserUpdateStatus = {
     supported: false,
@@ -1969,7 +2340,10 @@ export function createApp({
 
     // 6) 切换
     store.configure({ dataDir: absNew });
-    scheduleKbRebuild(); // 数据目录换了，知识库要按新目录的文献重建
+    // 换了数据目录：旧目录的大模型主题分组不能再用，等新索引建好后再重新跑一次
+    kbLlmClusters = null;
+    kbLlmError = '';
+    scheduleKbRebuild();
     currentUploadDir = newUploadDir;
     return absNew;
   }

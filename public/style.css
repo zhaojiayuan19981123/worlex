@@ -1553,6 +1553,25 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 .pr-color[data-color="blue"]   { background: var(--hl-blue); }
 .pr-color[data-color="pink"]   { background: var(--hl-pink); }
 .pr-color.active { border-color: var(--text); box-shadow: 0 0 0 2px var(--ring); }
+/* 顶部工具条里的「当前高亮色」：一个圆点按钮 + 点开的取色浮层。
+   色块不再铺在第二行（那一行留给大纲 / 原文译文切换），需要时点一下再选。 */
+.pr-color-wrap { position: relative; display: inline-flex; align-items: center; }
+.pr-color-btn { gap: 6px; }
+.pr-color-dot {
+  flex: none; width: 14px; height: 14px; border-radius: 50%;
+  border: 1px solid var(--border); box-shadow: 0 0 0 1px var(--surface) inset;
+}
+.pr-color-dot[data-color="yellow"] { background: var(--hl-yellow); }
+.pr-color-dot[data-color="green"]  { background: var(--hl-green); }
+.pr-color-dot[data-color="blue"]   { background: var(--hl-blue); }
+.pr-color-dot[data-color="pink"]   { background: var(--hl-pink); }
+.pr-color-pop {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 60;
+  display: flex; align-items: center; gap: 7px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+}
+.pr-color-pop .pr-color { width: 22px; height: 22px; }
 /* 窄窗：把「文件名」压到最小、让功能组整组换行，避免各控件挤成一团 */
 @media (max-width: 1180px) {
   .pr-filename { max-width: 160px; }

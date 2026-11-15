@@ -3498,6 +3498,14 @@
     return page.getViewport({ scale, rotation: pdfReaderUtils.normalizeRotation(baseRotation + getPageExtraRotation(pageNum)) });
   }
 
+  /** 收起「高亮色」取色浮层（关阅读器、切换文献时都要收，避免残留一个悬空小窗）。 */
+  function hideColorPopover() {
+    const pop = $('prColorPop');
+    if (!pop || pop.classList.contains('hidden')) return;
+    pop.classList.add('hidden');
+    $('prColorBtn')?.setAttribute('aria-expanded', 'false');
+  }
+
   function updateRotationLabel() {
     const label = $('prRotationLabel');
     if (label) label.textContent = getPageExtraRotation(pr.pageNum) + '°';
@@ -9023,6 +9031,7 @@
 
   function closePdfReader() {
     pr.open = false;
+    hideColorPopover();
     // 打印预览开着就一起收掉：它持有整篇的高清位图，关阅读器后没有意义
     if (pp.on) closePrintDialog();
     window.ReadingHeat?.stop();   // 关阅读器立刻结算并落盘，别把最后一段停留丢掉
@@ -10759,9 +10768,36 @@
       }, 60);
     }, { passive: false });
 
+    // ---- 高亮颜色：顶部按钮 → 弹出取色；色块变化同步到按钮上的圆点 ----
+    const colorBtn = $('prColorBtn');
+    const colorPop = $('prColorPop');
+    const colorDot = $('prColorDot');
+    const closeColorPop = () => hideColorPopover();
+    const openColorPop = () => {
+      if (!colorPop) return;
+      colorPop.classList.remove('hidden');
+      colorBtn?.setAttribute('aria-expanded', 'true');
+      colorPop.querySelector('.pr-color.active')?.focus();
+    };
+    colorBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (colorPop?.classList.contains('hidden')) openColorPop();
+      else closeColorPop();
+    });
+    document.addEventListener('click', (e) => {
+      if (!colorPop || colorPop.classList.contains('hidden')) return;
+      if (colorPop.contains(e.target) || colorBtn?.contains(e.target)) return;
+      closeColorPop();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeColorPop();
+    });
+
     document.querySelectorAll('.pr-color').forEach((c) => c.addEventListener('click', () => {
       document.querySelectorAll('.pr-color').forEach((x) => x.classList.remove('active'));
       c.classList.add('active'); pr.highlightColor = c.dataset.color;
+      if (colorDot) colorDot.dataset.color = c.dataset.color;
+      closeColorPop();
     }));
 
     // 划词 → 工具条 + 自动翻译
@@ -15208,6 +15244,8 @@ a { color: #176b87; }
     pdfDoc: () => pr.doc,
     scale: () => pr.scale,
     pageSizes: () => pr.pageSizes,
+    // 页面视口：链接跳转要按「当前缩放 + 该页额外旋转」把 PDF 坐标换算成页面 CSS 坐标
+    viewport: (page, n) => getPageViewport(page, n),
     extraRotation: (n) => getPageExtraRotation(n),
     pageWrap: (n) => document.querySelector(`.pr-page-wrap[data-page="${n}"]`),
     gotoPage: (n) => {

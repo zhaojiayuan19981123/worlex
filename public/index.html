@@ -1606,6 +1606,20 @@
         <button id="prToggleMd" class="btn btn-ghost pr-icobtn hidden" title="在 Markdown 译文与原文 PDF 之间切换"><svg class="ico" aria-hidden="true"><use href="#i-edit"/></svg><span class="pr-bt-t">查看译文</span></button>
         <button id="prToggleNote" class="btn btn-ghost pr-icobtn" title="笔记模式：左侧原文 / 中间划词翻译 / 右侧笔记（Markdown + 思维导图）"><svg class="ico" aria-hidden="true"><use href="#i-note"/></svg><span class="pr-bt-t">笔记模式</span></button>
         <button id="prToggleCmp" class="btn btn-ghost pr-icobtn" title="对照精读：大纲 / 原文 / 译文 / 助读"><svg class="ico" aria-hidden="true"><use href="#i-grid"/></svg><span class="pr-bt-t">对照精读</span></button>
+        <!-- 高亮色：原来 4 个圆点直接铺在第二行，把「大纲 / 仅原文」挤到后面。
+             现在收成顶部一个「当前色」圆点 + 弹出式取色，第二行恢复干净。 -->
+        <div class="pr-color-wrap" id="prColorTools">
+          <button type="button" id="prColorBtn" class="btn btn-ghost pr-icobtn pr-color-btn" aria-haspopup="true" aria-expanded="false" title="划词高亮的颜色：点开选色">
+            <span class="pr-color-dot" id="prColorDot" data-color="yellow" aria-hidden="true"></span>
+            <span class="pr-bt-t">高亮色</span>
+          </button>
+          <div class="pr-color-pop hidden" id="prColorPop" role="group" aria-label="选择高亮颜色">
+            <button type="button" class="pr-color active" data-color="yellow" title="黄色高亮" aria-label="黄色高亮"></button>
+            <button type="button" class="pr-color" data-color="green" title="绿色高亮" aria-label="绿色高亮"></button>
+            <button type="button" class="pr-color" data-color="blue" title="蓝色高亮" aria-label="蓝色高亮"></button>
+            <button type="button" class="pr-color" data-color="pink" title="粉色高亮" aria-label="粉色高亮"></button>
+          </div>
+        </div>
         <!-- v2.1.0：版面识别改为打开文献即自动解析，阅读模式入口移除；保留 DOM 与逻辑兜底，避免旧绑定报错 -->
         <button id="prLayoutBtn" class="btn btn-ghost pr-icobtn hidden" title="版面解析：识别图表 / 表格 / 公式区域"><svg class="ico" aria-hidden="true"><use href="#i-puzzle"/></svg><span class="plb-text">版面</span></button>
         <button id="prReadingBtn" class="btn btn-ghost pr-icobtn hidden" title="阅读模式（已移除入口）"><svg class="ico" aria-hidden="true"><use href="#i-book"/></svg><span class="pr-bt-t">阅读模式</span></button>
@@ -1613,15 +1627,6 @@
         <span id="cmpAutoChip" class="cmp-auto-chip hidden"></span>
         <!-- 表格框选 / 任意框选送 AI / 全文查找（DOM 由 reader-tools.js 注入） -->
         <div class="pr-tools" id="prToolStrip"></div>
-      </div>
-      <div class="pr-tools" id="prColorTools">
-        <span class="tb-label">高亮</span>
-        <div class="pr-colors">
-          <button class="pr-color active" data-color="yellow" title="黄色高亮" aria-label="黄色高亮"></button>
-          <button class="pr-color" data-color="green" title="绿色高亮" aria-label="绿色高亮"></button>
-          <button class="pr-color" data-color="blue" title="蓝色高亮" aria-label="蓝色高亮"></button>
-          <button class="pr-color" data-color="pink" title="粉色高亮" aria-label="粉色高亮"></button>
-        </div>
       </div>
       <!-- EPUB 专属工具条（PDF 模式下整组隐藏）：字号 / 行距 / 字体 / 主题 / 翻页方式 / 章节位置 -->
       <div class="pr-tools hidden" id="prEpubTools">

@@ -181,10 +181,149 @@
     }
   }
 
+  /* ------------------------------------------------------------------
+   * 文档内跳转（参考文献 / 引文标记 / 图表编号）
+   *
+   * PDF 里「[1]」这种引文标记不是 URL，而是一条 Link 注释：
+   *   dest = 'bib51'（命名目标）或 [页引用, {name:'FitR'}, x1,y1,x2,y2]（显式目标）。
+   * 旧实现只认字符串 dest，于是点上去一律弹「暂不支持该链接类型」。
+   * 现在按 pdf.js 自己的规则解析：命名目标先 getDestination(name)，
+   * 再 getPageIndex(第一项) 得到页码；FitR / XYZ 的坐标用来精确落位。
+   * ------------------------------------------------------------------ */
+
+  function readerDoc() {
+    const w = typeof window !== 'undefined' ? window.Worlex : null;
+    if (!w || typeof w.pdfDoc !== 'function') return null;
+    try { return w.pdfDoc() || null; } catch (_) { return null; }
+  }
+
+  /** 目标数组 → PDF 用户坐标矩形；只给单点（XYZ）时返回零高矩形，仅用于纵向定位。 */
+  function destRect(arr) {
+    if (!Array.isArray(arr) || arr.length < 3) return null;
+    const kind = arr[1] && typeof arr[1] === 'object' ? String(arr[1].name || '') : '';
+    if (kind === 'FitR' && arr.length >= 6) {
+      const n = arr.slice(2, 6).map(Number);
+      if (n.every(Number.isFinite)) return [n[0], n[1], n[2], n[3]];
+    }
+    if (kind === 'XYZ') {
+      const top = Number(arr[3]);
+      if (Number.isFinite(top)) {
+        const left = Number.isFinite(Number(arr[2])) ? Number(arr[2]) : 0;
+        return [left, top, left + 1, top + 1];
+      }
+    }
+    return null;
+  }
+
+  /** dest（命名目标字符串 / 显式数组）→ { page（1 起）, rect（PDF 坐标，可能为 null） }。 */
+  async function resolveDest(dest) {
+    const doc = readerDoc();
+    if (!doc) return null;
+    let arr = dest;
+    if (typeof arr === 'string') {
+      try { arr = await doc.getDestination(arr); } catch (_) { arr = null; }
+    }
+    if (!Array.isArray(arr) || !arr.length) return null;
+    let pageIndex = -1;
+    try {
+      pageIndex = typeof arr[0] === 'number'
+        ? arr[0]
+        : await doc.getPageIndex(arr[0]);
+    } catch (_) { return null; }
+    if (!Number.isFinite(pageIndex) || pageIndex < 0) return null;
+    return { page: pageIndex + 1, rect: destRect(arr) };
+  }
+
+  /** 等页面容器就位（切换文献 / 懒渲染时可能还没建出来）。 */
+  function waitPageWrap(pageNum, timeoutMs) {
+    const wrapOf = bridge('pageWrap');
+    if (!wrapOf) return Promise.resolve(null);
+    const deadline = Date.now() + Math.max(200, timeoutMs || 1200);
+    return new Promise((resolve) => {
+      const tick = () => {
+        const w = wrapOf(pageNum);
+        if (w) { resolve(w); return; }
+        if (Date.now() >= deadline) { resolve(null); return; }
+        setTimeout(tick, 80);
+      };
+      tick();
+    });
+  }
+
+  /** 把目标位置滚到阅读区上方约 1/4 处，而不是页面顶端（引文条目通常靠页脚）。 */
+  function scrollToBox(wrap, box) {
+    const host = document.getElementById('prPages');
+    if (!host) return;
+    const wr = wrap.getBoundingClientRect();
+    const hr = host.getBoundingClientRect();
+    const base = host.scrollTop + (wr.top - hr.top);
+    const y = base + (box ? box.top : 0) - Math.round(host.clientHeight * 0.26);
+    try { host.scrollTo({ top: Math.max(0, y), behavior: 'smooth' }); }
+    catch (_) { host.scrollTop = Math.max(0, y); }
+  }
+
+  /**
+   * 目标处闪一下半透明框：让用户一眼看到「跳到哪一条」。
+   *
+   * 这里不能「挂上去就不管」：跳转用的页目标往往在视口外，是滚动到位之后才被
+   * 懒渲染的，而 renderPageInto 开头会 wrap.innerHTML = ''（连同占位符一起重画），
+   * 刚挂好的框在同一帧内就被清掉了。等渲染结束再挂也不行 —— 平滑滚动耗时不定，
+   * 渲染可能比预估更晚才开始。
+   * 所以改成盯住容器：只要框被清走就补挂回去，直到它按动画时长自然退场。
+   * 坐标跟着页面走（占位符与真页同尺寸），补挂后位置依然准确。
+   */
+  function flash(wrap, box) {
+    const mark = el('div', 'pl-dest-mark');
+    mark.style.left = Math.max(0, Math.round(box.left - 3)) + 'px';
+    mark.style.top = Math.max(0, Math.round(box.top - 2)) + 'px';
+    mark.style.width = Math.max(6, Math.round(box.w + 6)) + 'px';
+    mark.style.height = Math.max(6, Math.round(box.h + 4)) + 'px';
+    wrap.appendChild(mark);
+    const keep = () => { if (!mark.isConnected) wrap.appendChild(mark); };
+    let mo = null;
+    if (typeof MutationObserver === 'function') {
+      mo = new MutationObserver(keep);
+      mo.observe(wrap, { childList: true });
+    }
+    setTimeout(() => {
+      // 先停观察再摘框：否则 remove() 本身会触发回调，又把框挂回去
+      if (mo) mo.disconnect();
+      if (mark.parentNode) mark.remove();
+    }, 2400);
+  }
+
+  async function gotoDest(dest) {
+    const doc = readerDoc();
+    if (!doc) { toast('请先打开一篇文献，再点文档内的链接', 'info'); return; }
+    let target = null;
+    try { target = await resolveDest(dest); } catch (_) { target = null; }
+    if (!target) { toast('这条链接没有指向文档内的位置', 'info'); return; }
+    const go = bridge('gotoPage');
+    if (go) go(target.page);
+    const wrap = await waitPageWrap(target.page, 1500);
+    if (!wrap) return;
+    let box = null;
+    if (target.rect) {
+      try {
+        const page = await doc.getPage(target.page);
+        const vp = bridge('viewport') ? bridge('viewport')(page, target.page) : null;
+        if (vp && typeof vp.convertToViewportRectangle === 'function') {
+          const r = vp.convertToViewportRectangle(target.rect);
+          box = {
+            left: Math.min(r[0], r[2]), top: Math.min(r[1], r[3]),
+            w: Math.abs(r[2] - r[0]), h: Math.abs(r[3] - r[1]),
+          };
+        }
+      } catch (_) { box = null; }
+    }
+    scrollToBox(wrap, box);
+    if (box) flash(wrap, box);
+  }
+
   function onActivate(info, anchor) {
     const raw = String(info.url || info.text || '').trim();
     // DOI 优先于普通 http(s)：doi.org 链接要弹信息卡而不是直接跳走。
-    if (isDoi(raw)) {
+    if (raw && isDoi(raw)) {
       if (ACTIVE && ACTIVE.anchor === anchor) { closeCard(); return; }
       openDoiCard(raw, info, anchor);
       return;
@@ -201,6 +340,9 @@
       catch (_) { toast('无法打开链接', 'error'); }
       return;
     }
+    // 文档内跳转：注释带的命名目标 / 显式目标
+    if (info.dest != null) { gotoDest(info.dest); return; }
+    if (info.fromLink && raw) { gotoDest(raw); return; }
     toast('暂不支持该链接类型', 'info');
   }
 
@@ -393,12 +535,16 @@
       if (!Array.isArray(rect) || rect.length !== 4) continue;
       const vb = viewportBox(viewport, rect);
       if (!vb) continue;
-      let raw = String(a.url || a.unsafeUrl || '').trim();
-      if (!raw && typeof a.dest === 'string') raw = a.dest.trim();
+      const url = String(a.url || a.unsafeUrl || '').trim();
+      // 注释里除了外链，还有大量文档内目标（参考文献「[1]」→ 命名目标 bib51）。
+      // dest 原样带上，点击时再异步解析，渲染阶段不阻塞。
+      const dest = a.dest != null ? a.dest : null;
       addHot(layer, {
-        url: raw,
-        text: raw,
-        label: '链接：' + (raw || '文档内部跳转'),
+        url,
+        dest,
+        fromLink: true,
+        text: url,
+        label: url ? ('链接：' + url) : '文档内跳转',
         left: vb.left,
         top: vb.top,
         w: vb.w,

@@ -35,6 +35,25 @@
 }
 .pl-hot:focus-visible { box-shadow: 0 0 0 2px var(--ring); }
 
+/* 跳到文档内目标后，在落点闪一下框：告诉用户「就是这一条」。
+   只用透明度做动画，不触发布局；pointer-events:none 保证不影响继续划词。 */
+.pl-dest-mark {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 1.5px solid var(--primary);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  animation: pl-dest-flash 2.4s var(--ease) forwards;
+}
+@keyframes pl-dest-flash {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  62% { opacity: .9; }
+  100% { opacity: 0; }
+}
+
 /* ---------- DOI 信息卡 ---------- */
 .pl-card {
   position: fixed;
@@ -143,4 +162,5 @@
     transition: none !important;
     animation: none !important;
   }
+  .pl-dest-mark { animation: none !important; opacity: .9; }
 }
