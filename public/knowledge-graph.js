@@ -193,7 +193,7 @@
     const bar = el('div', 'kg-toolbar');
     const head = el('div', 'kg-head');
     head.appendChild(el('h1', 'kg-title', '知识图谱'));
-    head.appendChild(el('p', 'kg-sub', '由大模型按研究主题聚类；连线表示两篇文献同关键词、同研究方法或同研究对象。'));
+    head.appendChild(el('p', 'kg-sub', '一个主题一种颜色，圆越大表示相连的文献越多。点击任一节点：颜色越深，说明它和这一篇越相关。连线表示两篇文献同关键词、同研究方法或同研究对象。'));
     bar.appendChild(head);
 
     const tools = el('div', 'kg-tools');
@@ -250,6 +250,19 @@
     const tip = el('div', 'kg-tip');
     tip.setAttribute('role', 'tooltip');
 
+    // 图例：说明「圆的大小」读什么；深浅只在点开某个节点后才出现
+    const legend = el('div', 'kg-legend');
+    legend.setAttribute('role', 'note');
+    const legendDots = el('span', 'kg-legend-dots');
+    legendDots.setAttribute('aria-hidden', 'true');
+    [5, 8, 11, 13].forEach((r) => {
+      const dot = el('i', 'kg-legend-dot');
+      dot.style.setProperty('--kg-r', r + 'px');
+      legendDots.appendChild(dot);
+    });
+    legend.appendChild(legendDots);
+    legend.appendChild(el('span', 'kg-legend-text', '圆越大，相连的文献越多'));
+
     // 聚类进度浮层：盖在画布左上角，不遮旧图谱（聚类期间旧结果仍然可看可点）
     const progress = el('div', 'kg-progress');
     progress.hidden = true;
@@ -288,6 +301,7 @@
     mkZoom('复位', '重置视图', 1, true);
 
     stage.appendChild(tip);
+    stage.appendChild(legend);
     stage.appendChild(progress);
     stage.appendChild(status);
     stage.appendChild(zoom);
@@ -305,7 +319,7 @@
     S.refs = {
       root, bar, search, sel, chk, rebuild, stats,
       main, stage, svg: svgRoot, viewport, clustersG, edgesG, nodesG,
-      tip, progress, pText, pPct, pFill, pSub,
+      tip, legend, progress, pText, pPct, pFill, pSub,
       status, zoom, detail,
     };
   }
@@ -435,9 +449,11 @@
       });
     });
 
+    // 半径 = 关联文献数量（直接按 deg / maxDeg 线性放大，读数才准），
+    // 颜色不参与「连得多不多」的表达，只在点开某个节点时用深浅表示相关性。
     let maxDeg = 1;
     nodes.forEach((n) => { if (n.deg > maxDeg) maxDeg = n.deg; });
-    nodes.forEach((n) => { n.r = 5 + 6 * (n.deg / maxDeg); });
+    nodes.forEach((n) => { n.r = 4.6 + 8.4 * (n.deg / maxDeg); });
 
     nodes.forEach((n) => {
       const tid = n.data.topicId == null ? '' : String(n.data.topicId);
@@ -496,7 +512,19 @@
     const how = isLlm ? '大模型聚类' : '本地聚类';
     const bits = [`${n(st.documents)} 篇文献`, `${n(st.topics)} 个主题`, `${n(st.relations)} 条关联`, how];
     box.hidden = false;
-    box.textContent = bits.join(' · ');
+    box.textContent = '';
+    // 色卡：把「哪个主题 = 哪种糖色」摆到台面上，图上的颜色才有出处
+    if (S.clusters.length && S.clusters.length <= TOPIC_COLORS) {
+      const sw = el('span', 'kg-swatches');
+      sw.setAttribute('aria-hidden', 'true');
+      S.clusters.forEach((c) => {
+        const dot = el('span', `kg-swatch t${c.color}`);
+        dot.title = `${c.label}（${c.nodes.length} 篇）`;
+        sw.appendChild(dot);
+      });
+      box.appendChild(sw);
+    }
+    box.appendChild(el('span', 'kg-stats-text', bits.join(' · ')));
     // 悬停看细节：用的是哪个模型、什么时候聚的、是否需要重新聚类
     const tips = [];
     if (isLlm) {
@@ -531,10 +559,10 @@
     [r.clustersG, r.edgesG, r.nodesG].forEach((g) => { g.textContent = ''; });
     S.elToNode = new WeakMap();
 
-    // 主题簇：中性细线圈 + 灰色标签（颜色落在节点上）
+    // 主题簇：同色系淡底 + 同色虚线边界，颜色直接点题
     for (const c of S.clusters) {
-      const hull = svg('circle', { class: 'kg-hull', r: 60 });
-      const label = svg('text', { class: 'kg-topic-label', 'text-anchor': 'middle' });
+      const hull = svg('circle', { class: `kg-hull t${c.color}`, r: 60 });
+      const label = svg('text', { class: `kg-topic-label t${c.color}`, 'text-anchor': 'middle' });
       // 长标签截断显示，完整名称放进 title：图谱里一行放不下两串长中文
       c.labelText = labelTextOf(c.label);
       c.labelW = estTextWidth(c.labelText);
@@ -557,7 +585,7 @@
       e.line = line;
     }
 
-    // 文献节点
+    // 文献节点：平涂圆点，半径 = 关联文献数；深浅在选中时按相关性写入 --kg-fill
     for (const n of S.nodes) {
       const g = svg('g', {
         class: `kg-node t${n.color}`, tabindex: '0', role: 'button',
@@ -1148,19 +1176,40 @@
     return sec;
   }
 
-  /** 画布上把选中节点的邻域提亮，其余压暗：一眼看出「它和谁有关系」。 */
+  /**
+   * 画布上把选中节点的邻域提亮，其余压暗：一眼看出「它和谁有关系」。
+   * 同时按边的权重给每个邻居上深浅 —— 越深表示和这一篇越相关（可能是共同关键词更多、
+   * 也可能是同方法同对象好几条理由叠在一起），这才是颜色在这张图上唯一的含义。
+   */
   function markNeighborhood(n) {
     const root = S.root;
     if (!root) return;
-    const near = new Set([n.id]);
+    // 相关性 = 两篇之间所有边的权重之和：同关键词 / 同方法 / 同对象叠得越多，越相关
+    const strength = new Map();
     for (const e of S.edges) {
-      if (e.s === n) near.add(e.t.id);
-      else if (e.t === n) near.add(e.s.id);
+      const other = e.s === n ? e.t : e.t === n ? e.s : null;
+      if (!other) continue;
+      strength.set(other.id, (strength.get(other.id) || 0) + e.w);
     }
+    // 光按最大值归一不够：边的权重本身就挤在 0.5~0.92，除完只剩 90%~100%，
+    // 看着全是同一个深。改成按「相关度档位」铺开：最远 42%，最近 100%。
+    // 用档位而不是逐个排名，是因为同一篇文献的多个邻居常常同分（并列就该同色）。
+    const rel = new Map();
+    const sorted = [...strength.entries()].sort((a, b) => a[1] - b[1]);
+    const levels = [...new Set(sorted.map((x) => x[1]))];
+    const lastLevel = levels.length - 1;
+    sorted.forEach(([id, s]) => {
+      const t = lastLevel > 0 ? levels.indexOf(s) / lastLevel : 0.75;
+      rel.set(id, Math.round(52 + 48 * t) + '%');
+    });
     root.classList.add('kg-focus');
     for (const x of S.nodes) {
-      const on = near.has(x.id) && x.id !== n.id;
-      if (x.g) x.g.classList.toggle('is-near', on);
+      const fill = rel.get(x.id);
+      const on = fill != null && x.id !== n.id;
+      if (!x.g) continue;
+      x.g.classList.toggle('is-near', on);
+      if (on) x.g.style.setProperty('--kg-fill', fill);
+      else x.g.style.removeProperty('--kg-fill');
     }
     for (const e of S.edges) {
       const hot = e.s === n || e.t === n;
@@ -1171,7 +1220,10 @@
   function clearNeighborhood() {
     if (S.root) S.root.classList.remove('kg-focus');
     for (const x of S.nodes) {
-      if (x.g) x.g.classList.remove('is-near');
+      if (x.g) {
+        x.g.classList.remove('is-near');
+        x.g.style.removeProperty('--kg-fill');
+      }
     }
     for (const e of S.edges) {
       if (e.line) {
@@ -1262,13 +1314,23 @@
     const zh = detailField(n, 'titleZh');
     if (zh) body.appendChild(el('p', 'kg-d-zh', zh));
 
+    // 主题色点 + 关联数：和画布上是同一套编码（色相 = 主题，浓淡 = 关联数），
+    // 点开之后也能对得上刚才点的是哪一颗。
+    const topicName = (n.cluster && n.cluster.label) || String(detailField(n, 'topicLabel') || '');
+    if (topicName || n.deg) {
+      const tp = el('div', 'kg-d-topic');
+      tp.appendChild(el('span', `kg-d-topic-dot t${n.color}`));
+      if (topicName) tp.appendChild(el('span', 'kg-d-topic-name', topicName));
+      tp.appendChild(el('span', 'kg-d-topic-deg', `${n.deg || 0} 条关联`));
+      body.appendChild(tp);
+    }
+
     const meta = el('dl', 'kg-d-meta');
     const rows = [
       ['作者', joinText(detailField(n, 'authors'), '、')],
       ['年份', String(detailField(n, 'year') || '')],
       ['期刊', joinText(detailField(n, 'journal'), '、')],
       ['类型', String(detailField(n, 'docType') || '')],
-      ['主题', (n.cluster && n.cluster.label) ? n.cluster.label : String(detailField(n, 'topicLabel') || '')],
     ];
     rows.forEach(([k, v]) => {
       if (!v) return;
