@@ -426,11 +426,22 @@
   function paintLayer(n) {
     const rec = state.wraps.get(n);
     if (!rec?.layer) return;
-    rec.layer.innerHTML = '';
-    const size = pageSize(n);
-    const pageH = rec.wrap.clientHeight || 1;
+    layoutLayer(rec.layer, rec.wrap, state.byPage.get(n) || [], pageSize(n), n);
+  }
+
+  /**
+   * 把一页的译文块铺进 layer 并排版。
+   *
+   * 从 paintLayer 里抽出来，是为了让**打印**复用同一套排版：屏幕那页长什么样，
+   * 纸上就该是什么样。只要 wrap 尺寸一致，这里的百分比定位、字号计算、
+   * 「先长高后缩号」的取舍就与屏幕完全一致 —— 打印另写一套排版是没有意义的，
+   * 迟早会和屏幕分叉成两种版式。
+   */
+  function layoutLayer(layer, wrap, blocks, size, pageNo) {
+    layer.innerHTML = '';
+    const pageH = wrap.clientHeight || 1;
     const items = [];
-    for (const b of state.byPage.get(n) || []) {
+    for (const b of blocks) {
       const p = blockPercent(b, size);
       if (p) items.push({ b, p, grow: 0 });
     }
@@ -440,11 +451,11 @@
     const jobs = [];
     for (const it of merged) {
       const el = buildBlockEl(it.b, it.p, it.grow);
-      rec.layer.appendChild(el);
+      layer.appendChild(el);
       const textEl = el.querySelector('.ctp-text');
       if (textEl) jobs.push({ el, textEl, grow: it.grow, kind: it.b.kind || 'body' });
     }
-    if (jobs.length) fitPage(n, jobs);
+    if (jobs.length) fitPage(pageNo, jobs);
   }
 
   /**
@@ -866,6 +877,134 @@
     try { return out.toDataURL('image/jpeg', 0.9); } catch (_) { return null; }
   }
 
+  // ==================== 打印：版面还原的译文 ====================
+  //
+  // 用户要「打印版面还原版本的译文」：纸上那几页应该和屏幕上这个译文栏长得一样 ——
+  // 文字块在原坐标上、图表表格原样保留，而不是文本重排那种连续流。
+  //
+  // 所以这里不另写一套排版，而是复用 layoutLayer / fitPage：先把页建在一个
+  // **离屏但参与布局**的台子上量准尺寸，排完再交给调用方塞进打印容器。
+  // 用 visibility:hidden 而不是 display:none —— 后者量到的宽高是 0，
+  // prepText / maxFit 会全部算错，最后纸上是一堆贴着块顶的 6px 小字。
+
+  /** 打印页的基准宽度：A4 去掉左右 12mm 页边距后的可打印宽度（96dpi 下 ≈703px），
+   *  与打印预览纸面同宽 —— 预览里看到的就是纸上那份。 */
+  const PRINT_W = 703;
+  /**
+   * 底图倍率。底图是位图，纸上放大会糊；但按 300dpi（≈3x）一篇二十页就要几百 MB，
+   * 打完直接把内存顶爆。1.8x（≈173dpi）对这个用途够：文字块已经被译文盖住，
+   * 剩下的主要是图表与版式参照。
+   */
+  const PRINT_IMG_X = 1.8;
+
+  /** 按页把块分组（与 setBlocks 同一套分组 / 排序，只是不写进 state） */
+  function groupByPage(blocks) {
+    const map = new Map();
+    for (const b of Array.isArray(blocks) ? blocks : []) {
+      if (!Number.isFinite(b?.page)) continue;
+      if (!map.has(b.page)) map.set(b.page, []);
+      map.get(b.page).push(b);
+    }
+    for (const list of map.values()) list.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    return map;
+  }
+
+  /** 造一张「纸」：A4 可打印宽度等比放大，底图高清重画，译文按同一套函数铺上去 */
+  async function buildPrintSheet(n, doc, stage) {
+    const page = await doc.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const scale = PRINT_W / Math.max(1, base.width);
+    const w = Math.round(base.width * scale);
+    const h = Math.round(base.height * scale);
+
+    const sheet = document.createElement('div');
+    sheet.className = 'ctp-sheet';
+    sheet.style.width = w + 'px';
+    const wrap = document.createElement('div');
+    wrap.className = 'ctp-page ctp-print';
+    wrap.style.width = w + 'px';
+    wrap.style.height = h + 'px';
+    sheet.appendChild(wrap);
+    // 必须先进文档：下面量块宽高、算字号靠的就是真实布局
+    stage.appendChild(sheet);
+
+    // 底图单独重画：屏幕上那份是贴着栏宽渲染的，直接印会糊成一团
+    const vp = page.getViewport({ scale: scale * PRINT_IMG_X });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(vp.width));
+    canvas.height = Math.max(1, Math.round(vp.height));
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    // JPEG 比 PNG 小一个数量级，文字块底下就是一张底图，看不出差别；
+    // 转完立刻把位图置 0，否则一篇几十页能把内存吃掉几百 MB。
+    const img = document.createElement('img');
+    img.className = 'ctp-canvas';
+    img.alt = 'P' + n;
+    img.src = canvas.toDataURL('image/jpeg', 0.92);
+    canvas.width = 0;
+    canvas.height = 0;
+    wrap.appendChild(img);
+
+    const layer = document.createElement('div');
+    layer.className = 'ctp-layer';
+    wrap.appendChild(layer);
+    layoutLayer(layer, wrap, state.byPage.get(n) || [], pageSize(n), n);
+    return sheet;
+  }
+
+  /**
+   * 生成「版面还原译文」的打印页，每页一个 `.ctp-sheet`，交给调用方塞进打印容器。
+   *
+   * 不依赖 mount：doc / pageSize / blocks 全部从参数来 —— 用户没进过对照精读
+   * （译文页从未渲染过）也要能打印。打印期间临时接管 state.opts / byPage，
+   * 结束后原样换回，阅读器这边看不到任何变化。
+   */
+  async function printPages(pageNums, opts = {}) {
+    const list = (Array.isArray(pageNums) ? pageNums : []).filter((n) => Number.isFinite(n) && n > 0);
+    const getDoc = typeof opts.getDoc === 'function' ? opts.getDoc : () => state.opts.getDoc?.();
+    const doc = getDoc();
+    if (!doc) throw new Error('PDF 还没加载完成，稍后再打印译文');
+    if (!list.length) return [];
+
+    const prev = {
+      opts: state.opts, byPage: state.byPage, pending: state.pending,
+      errors: state.errors, activeId: state.activeId,
+    };
+    state.opts = {
+      getDoc,
+      pageCount: opts.pageCount || prev.opts.pageCount,
+      pageSize: typeof opts.pageSize === 'function' ? opts.pageSize : prev.opts.pageSize,
+    };
+    state.byPage = groupByPage(opts.blocks);
+    // 打印稿不该出现「翻译中」的白块和红色错误框：那些是交互态
+    state.pending = new Set();
+    state.errors = new Map();
+    state.activeId = null;
+
+    const stage = document.createElement('div');
+    stage.className = 'ctp-print-stage';
+    document.body.appendChild(stage);
+    const sheets = [];
+    try {
+      for (let i = 0; i < list.length; i += 1) {
+        opts.onProgress?.(i + 1, list.length, list[i]);
+        sheets.push(await buildPrintSheet(list[i], doc, stage));
+        // 让出一帧：几十页连着排会把界面冻住，进度提示也刷不出来
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    } finally {
+      state.opts = prev.opts;
+      state.byPage = prev.byPage;
+      state.pending = prev.pending;
+      state.errors = prev.errors;
+      state.activeId = prev.activeId;
+      // 打印页与屏幕页同号，基准字号会互相覆盖；清掉让下次铺页重新算
+      state.base.clear();
+      for (const s of sheets) s.remove();
+      stage.remove();
+    }
+    return sheets;
+  }
+
   /**
    * 按当前宽度（× 缩放）重铺。缩放时以「选中的那一块」为锚点，读到的位置不会跳走。
    */
@@ -910,6 +1049,7 @@
     setPending,
     setError,
     capture,
+    printPages,
     refit,
     setZoom,
     getZoom,

@@ -1,3 +1,54 @@
+## v2.1.8：打印支持「版面还原的译文」（2026-11-17）
+
+> 用户需求：「点击打印时，要求能够支持打印版面还原版本的译文」。
+
+### 一、要的是什么
+
+不是「把中文单独排一份稿子印出来」，而是**纸上那几页长得和屏幕上这个译文栏一样**：
+译文块回到原文坐标上、标题仍是标题的字号、双栏仍是双栏，图表 / 表格 / 公式原样保留。
+文本重排那种连续流不要——印出来就不是论文了。
+
+### 二、做法：复用排版，不重写
+
+| 文件 | 改动 |
+| --- | --- |
+| `public/cmp-pages.js` | 从 `paintLayer` 拆出 `layoutLayer(layer, wrap, blocks, size, pageNo)`；新增 `buildPrintSheet()` / `printPages()` 并导出 |
+| `public/app.js` | `pp.mode` 增加 `trans`；新增 `ppTransBlocks()` / `ppBuildTrans()` / `ppEnsureTrans()` |
+| `public/index.html` | 打印弹层页签增加「译文」（原文 / 译文 / 解析结果） |
+| `public/style.css` | 离屏排版台 `.ctp-print-stage`、打印分页、角落角标不印 |
+
+`printPages()` 的要点：
+
+1. **离屏但参与布局**的台子上先量后交。台子用 `visibility:hidden` 而不是 `display:none`——
+   后者量到的宽高是 0，`prepText` / `maxFit` 会全部算错，最后纸上是贴着块顶的 6px 小字。
+2. **页宽 `PRINT_W = 703`**（A4 去掉左右 12mm 页边距，96dpi 下的可打印宽度），与打印预览纸面同宽。
+3. **底图单独重画**：屏幕上那份贴着栏宽渲染，直接印会糊。按 `scale × 1.8`（≈173dpi）重画成
+   JPEG(0.92)，转完立刻把 canvas 宽高置 0 —— 否则一篇几十页能吃掉几百 MB。不取 300dpi
+   是因为这个用途里文字块已被译文盖住，底图只承担图表与版式参照。
+4. **不依赖 mount**：`doc` / `pageSize` / `blocks` 全部从参数来，用户没进过对照精读也能打。
+   执行期间临时接管 `state.opts / byPage / pending / errors / activeId`，`finally` 原样换回。
+5. **不印交互态**：`pending` 置空、`errors` 清掉，所以「翻译中」白块和红色错误框不会上纸。
+
+`ppTransBlocks()` 会把「点段按需翻译」只在 `cmp.transCache` 里的译文合并回块，否则纸上会漏这几段；
+`ppBuildTrans()` 对缺译文的段落在预览底部提示「还有 N 段没有译文，这些位置印出来是原文」。
+
+### 三、两处体验决定
+
+- **切到「译文」时若内存里没有对照数据，先静默取一次**（`ppEnsureTrans` → `loadCmpAlign({silent:true, quiet:true})`），
+  取不到才 toast 提示「先在对照精读里翻一遍」。理由：用户可能昨天翻完、今天打开直接打印。
+- **预览只铺前 6 页**（`PP_TRANS_PREVIEW_MAX`，原文预览是 12 页）并提示「打印时排全部 N 页」。
+  译文每页都要重画底图，预览铺全篇会让弹层开得很慢。
+
+### 四、验证
+
+- 真实 24 页 PDF + Playwright（对照数据用路由拦截伪造，未动真实数据）：单张纸 703×899、
+  底图 1265×1619、标题 16px 粗体 / 正文 14px、块矩形 281×270 恰好盖住原文区域；
+  预览出 6 张纸并给出「仅前 6 页」提示；`print` 媒体下页面上只剩 `#litPrintArea`。
+- 新增 `test/v218-features.test.mjs` 7 条静态锁（页签三选一、`PRINT_W`、底图倍率、
+  `visibility:hidden` 台子、state 接管与还原、`transCache` 合并、打印不印 pending/errors）。
+- `test/print-preview.test.mjs` 的页签断言从两种更新到三种。
+- `node --test` 全量 **822/822** 通过（Node 20.10）。
+
 ## v2.1.7：AI 助读提示词收紧——只交代依据与底线，输出仍为 Markdown（2026-11-17）
 
 > 用户反馈：「文献阅读中的 AI 助读，不要给过于复杂的提示词，就告诉它基于文档内容，

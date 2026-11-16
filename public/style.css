@@ -4350,6 +4350,21 @@ body.pn-resizing * { cursor: col-resize !important; }
 }
 .ctp-empty { padding: 48px 18px; text-align: center; font-size: 12.5px; color: var(--ink-3); line-height: 2; }
 
+/* ---------- 打印「版面还原的译文」----------
+   打印页要在真实布局里量宽度、算字号，所以先建在一个离屏台子上：
+   用 visibility:hidden 而不是 display:none —— 后者量到的宽高是 0，
+   字号会全部算错（纸上变成贴着块顶的 6px 小字）。 */
+.ctp-print-stage {
+  position: fixed; left: -20000px; top: 0; z-index: -1;
+  display: block; visibility: hidden; pointer-events: none;
+}
+/* 纸面上不要圆角、阴影与悬停态：那些是给屏幕看的 */
+.ctp-page.ctp-print { margin: 0; border-radius: 0; box-shadow: none; }
+.ctp-page.ctp-print .ctp-block { cursor: default; }
+/* 每张纸之间留 12px 空隙，只在预览里有意义（打印时由分页接管） */
+.ctp-sheet { margin: 0 0 12px; }
+.ctp-sheet:last-child { margin-bottom: 0; }
+
 /* ---------- 译文样式二选一：版面还原（嵌回 PDF 页）/ 文本重排（连续文本流） ---------- */
 .pr-cmp-mode[data-style="flow"] #cmpTransFlow { display: none !important; }
 .pr-cmp-mode[data-style="page"] #cmpTransHtml { display: none !important; }
@@ -4514,6 +4529,13 @@ body.pn-resizing * { cursor: col-resize !important; }
      最后一页被压到第二张纸上，就是这个按钮最容易被骂的地方。 */
   .print-page { display: block; width: 100%; height: auto; page-break-after: always; break-after: page; }
   .print-page:last-child { page-break-after: auto; break-after: auto; }
+  /* 译文页：一张纸一页，页宽已经是 A4 可打印宽度，不再缩放（缩放会让字号与屏幕不一致） */
+  .print-area .ctp-sheet { margin: 0; page-break-after: always; break-after: page; }
+  .print-area .ctp-sheet:last-child { page-break-after: auto; break-after: auto; }
+  .print-area .ctp-page.ctp-print { box-shadow: none; border-radius: 0; }
+  /* 屏幕上的「点这里翻译」角标、截断省略号不该印出来 */
+  .print-area .ctp-block.ctp-missing::after,
+  .print-area .ctp-block.ctp-clip::after { content: none !important; }
   .print-para { font-size: 11pt; line-height: 1.7; margin: 0 0 8pt; }
   /* 预览里那行「只预览了前 N 页」的提示不该印出来 */
   .prp-note { display: none !important; }

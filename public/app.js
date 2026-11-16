@@ -7434,7 +7434,7 @@
    *   ② 只做过「版面识别」→ 用 /layout/align 拿到结构（大纲 + 原文流，译文留空），
    *      让用户不必等整篇翻完就能先读结构，点哪段再翻哪段
    */
-  async function loadCmpAlign({ silent = true } = {}) {
+  async function loadCmpAlign({ silent = true, quiet = false } = {}) {
     const litId = pr.recordId;
     if (!litId) return false;
     const found = await findCmpAlignJob();
@@ -7446,7 +7446,8 @@
         const data = await res.json();
         if (pr.recordId !== litId) return false;
         setCmpData(data, { translated: true });
-        toast(`已载入对照数据：${data.totalBlocks} 个块，其中 ${data.translatedBlocks} 段有译文`, 'success');
+        // quiet：调用方自己有进度提示（打印预览切「译文」时），别在底下再弹一个 toast
+        if (!quiet) toast(`已载入对照数据：${data.totalBlocks} 个块，其中 ${data.translatedBlocks} 段有译文`, 'success');
         return true;
       } catch (e) {
         if (!silent) toast('读取对照数据失败：' + e.message, 'error');
@@ -10316,20 +10317,26 @@
     window.print();
   }
 
-  // ---------- 打印预览：原文 / 解析结果各成一份文档 ----------
+  // ---------- 打印预览：原文 / 译文 / 解析结果各成一份文档 ----------
   //
   // 「原文」只印论文页本身（不加页眉标题，免得把页面往下挤）；
+  // 「译文」是版面还原的那一份 —— 与对照精读里的译文栏同一套排版，文字块填回原坐标，
+  //   图表 / 表格 / 公式原样留在页面上（文本重排那种连续流不印，它本来就是屏幕读法）；
   // 「解析结果」是另一份文档：标题 + 元信息 + 分节正文，排成 A4 文稿。
-  // 两份都在同一个预览里看，分别打。
+  // 三份都在同一个预览里看，分别打。
 
   const PP_PREVIEW_MAX = 12;   // 预览最多铺几页（再多就只为打印渲染，免得一开窗就等半天）
+  // 译文页每页要重画高清底图 + 逐块量字号，比原文页（一张图）重得多，
+  // 预览少铺几页；打印时仍是全部。
+  const PP_TRANS_PREVIEW_MAX = 6;
 
   const pp = {
     on: false,
-    mode: 'pdf',      // pdf | analysis
+    mode: 'pdf',      // pdf | trans | analysis
     gen: 0,           // 重建代数：切页签 / 改页码时让上一轮异步渲染作废
     busy: false,
     rangeTimer: null,
+    transSeeded: false,   // 译文页签是否已经把页码铺成「全篇」（只做一次，别覆盖用户手填的）
   };
 
   function ppEl(id) { return document.getElementById(id); }
@@ -10344,6 +10351,7 @@
     if (mode === 'pdf' && pr.fileKind === 'epub') { printEpubChapter(); return; }
     if (mode === 'pdf' && !pr.doc) { toast('还没有打开文档', 'error'); return; }
     pp.on = true;
+    pp.transSeeded = false;
     ppEl('ppOverlay')?.classList.remove('hidden');
     const total = pr.totalPages || 1;
     if (ppEl('ppTotal')) ppEl('ppTotal').textContent = `共 ${total} 页`;
@@ -10368,7 +10376,15 @@
     for (const b of ppEl('ppSeg')?.querySelectorAll('[data-ppmode]') || []) {
       b.classList.toggle('active', b.dataset.ppmode === mode);
     }
-    ppEl('ppRangeWrap')?.classList.toggle('hidden', mode !== 'pdf');
+    // 页码只对「原文 / 译文」有意义：解析结果是整篇文稿，没有页可选
+    ppEl('ppRangeWrap')?.classList.toggle('hidden', mode === 'analysis');
+    // 「译文」默认打全篇：用户点这一页要的就是这份中文稿，不是屏幕上停着的那一页。
+    // 只铺一次（transSeeded），之后用户改成 3-5 之类的范围不会被切页签重置。
+    if (mode === 'trans' && !pp.transSeeded) {
+      pp.transSeeded = true;
+      const total = pr.totalPages || 1;
+      if (ppEl('ppRange')) ppEl('ppRange').value = '1-' + total;
+    }
     await ppRender();
   }
 
@@ -10383,6 +10399,8 @@
     try {
       if (pp.mode === 'analysis') {
         ppBuildAnalysis();
+      } else if (pp.mode === 'trans') {
+        await ppBuildTrans({ preview: true, gen });
       } else {
         const pages = ppCurrentPages();
         if (!pages) { ppSetStatus('页码写法看不懂，用「1-3,5」这种格式'); return; }
@@ -10429,6 +10447,69 @@
       const note = document.createElement('div');
       note.className = 'prp-note';
       note.textContent = `预览仅前 ${PP_PREVIEW_MAX} 页，打印时渲染全部 ${pages.length} 页。`;
+      box.appendChild(note);
+    }
+  }
+
+  /** 打印用的译文块：把「点段按需翻译」只留在缓存里的译文也合并进去，否则纸上会漏这几段 */
+  function ppTransBlocks() {
+    const list = Array.isArray(cmp.data?.blocks) ? cmp.data.blocks : [];
+    const out = [];
+    for (const b of list) {
+      if (!Number.isFinite(b?.page)) continue;
+      const cached = String(b.translation || '').trim() ? '' : (cmp.transCache.get(b.id) || '');
+      out.push(cached ? { ...b, translation: cached } : b);
+    }
+    return out;
+  }
+
+  /**
+   * 译文（版面还原）的预览与打印。
+   *
+   * 排版不在这里做：交给 CmpPages.printPages 复用译文栏那套函数 —— 屏幕上怎么排，
+   * 纸上就怎么排（只有两处差别：页宽按 A4 可打印宽度、底图按 1.8 倍重画）。
+   * 打印模块重写一套版式是没有意义的，迟早会和屏幕分叉成两种样子。
+   */
+  async function ppBuildTrans({ preview = false, gen = pp.gen } = {}) {
+    const box = printArea();
+    const pages = ppCurrentPages();
+    if (!pages) { ppSetStatus('页码写法看不懂，用「1-3,5」这种格式'); return; }
+    const blocks = ppTransBlocks();
+    if (!blocks.length) {
+      box.innerHTML = '';
+      ppSetStatus('这篇还没有译文：先在「对照精读」里完成整篇翻译，再来打印');
+      return;
+    }
+    if (!pr.doc) { ppSetStatus('PDF 还没加载完成，稍等一下'); return; }
+    if (!window.CmpPages?.printPages) { ppSetStatus('译文打印模块未加载，请重新打开阅读器'); return; }
+
+    box.innerHTML = '';
+    const list = preview ? pages.slice(0, PP_TRANS_PREVIEW_MAX) : pages;
+    const sheets = await window.CmpPages.printPages(list, {
+      getDoc: () => pr.doc,
+      pageCount: () => pr.totalPages,
+      pageSize: (n) => pr.pageSizes?.[n - 1] || null,
+      blocks,
+      onProgress: (i, total, n) => ppSetStatus(`正在排译文第 ${i} / ${total} 页（原文 P${n}）…`),
+    });
+    // 排版期间换了页签 / 改了页码 / 关了预览：这一轮作废，别把旧内容贴上去
+    if (gen !== pp.gen) { for (const s of sheets) s.innerHTML = ''; return; }
+    const frag = document.createDocumentFragment();
+    for (const s of sheets) frag.appendChild(s);
+    box.appendChild(frag);
+
+    // 中英混排时说明一句，免得以为排版坏了
+    const missing = blocks.filter((b) => b.translatable !== false && !String(b.translation || '').trim()).length;
+    if (missing) {
+      const note = document.createElement('div');
+      note.className = 'prp-note';
+      note.textContent = `还有 ${missing} 段没有译文，这些位置印出来是原文。`;
+      box.appendChild(note);
+    }
+    if (preview && pages.length > list.length) {
+      const note = document.createElement('div');
+      note.className = 'prp-note';
+      note.textContent = `预览仅前 ${list.length} 页，打印时排全部 ${pages.length} 页。`;
       box.appendChild(note);
     }
   }
@@ -10503,6 +10584,14 @@
         more = pages.length > PP_PREVIEW_MAX;
         if (more) toast(`正在渲染 ${pages.length} 页，稍等一下…`, 'success');
         await ppBuildPdf(pages, { preview: false, gen: ++pp.gen });
+      } else if (pp.mode === 'trans') {
+        const pages = ppCurrentPages();
+        if (!pages) { toast('页码写法看不懂，请用「1-3,5」这种格式', 'error'); return; }
+        more = pages.length > PP_TRANS_PREVIEW_MAX;
+        if (more) toast(`正在排版 ${pages.length} 页译文，稍等一下…`, 'success');
+        await ppBuildTrans({ preview: false, gen: ++pp.gen });
+        // 一段译文都没有时上面只会给一句提示，这时候别弹打印对话框（打出来是空白）
+        if (!ppTransBlocks().length) return;
       } else {
         pp.gen += 1;
         ppBuildAnalysis();
@@ -10514,9 +10603,30 @@
     } finally {
       pp.busy = false;
       if (btn) btn.disabled = false;
-      // 打完把预览收回前 12 页：两百页位图不该一直挂在 DOM 上
-      if (more && pp.on) setTimeout(() => { if (pp.on && pp.mode === 'pdf') ppRender(); }, 1200);
+      // 打完把预览收回前几页：两百页位图（译文页还带高清底图）不该一直挂在 DOM 上
+      if (more && pp.on) setTimeout(() => { if (pp.on && pp.mode !== 'analysis') ppRender(); }, 1200);
     }
+  }
+
+  /**
+   * 切到「译文」页签前确认手里有译文。
+   *
+   * 对照数据只在进过对照精读时才挂在内存里；用户完全可能整篇翻完、关掉阅读器、
+   * 隔天打开直接来打印 —— 这时候要静默去服务端取一次，不能因为「没进过对照精读」
+   * 就判成没有译文。
+   */
+  async function ppEnsureTrans() {
+    if (ppTransBlocks().length) return true;
+    if (!pr.recordId) {
+      toast('没有整篇译文可打印：成果附件不支持整篇翻译', 'error');
+      return false;
+    }
+    ppSetStatus('正在读取这篇的译文…');
+    try { await loadCmpAlign({ silent: true, quiet: true }); } catch (_) { /* 下面统一提示 */ }
+    ppSetStatus('');
+    if (ppTransBlocks().length) return true;
+    toast('这篇还没有整篇翻译的译文：先在「对照精读」里翻一遍，再来打印', 'error');
+    return false;
   }
 
   function bindPrintPreview() {
@@ -10524,9 +10634,13 @@
     ppEl('ppOverlay')?.addEventListener('click', (e) => {
       if (e.target?.dataset?.ppclose) closePrintDialog();
     });
-    ppEl('ppSeg')?.addEventListener('click', (e) => {
+    ppEl('ppSeg')?.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-ppmode]');
-      if (b && !b.classList.contains('active')) ppSwitchMode(b.dataset.ppmode);
+      if (!b || b.classList.contains('active')) return;
+      // 「译文」可能要先从服务端取对照数据：先亮出页签再读，用户才有反馈
+      if (b.dataset.ppmode === 'trans' && !(await ppEnsureTrans())) return;
+      if (!pp.on) return;   // 读数据期间预览被关了
+      ppSwitchMode(b.dataset.ppmode);
     });
     ppEl('ppPrint')?.addEventListener('click', ppPrint);
     // 页码边改边预览：停手 500ms 再渲染，别每敲一个字符就重画一遍

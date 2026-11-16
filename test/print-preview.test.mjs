@@ -25,9 +25,9 @@ test('打印预览：弹层骨架齐备，且挂在 index.html 里', () => {
   for (const id of ['ppOverlay', 'ppSeg', 'ppRange', 'ppRangeWrap', 'ppStatus', 'ppPaper', 'ppBody', 'ppClose', 'ppPrint']) {
     assert.match(html, new RegExp(`id=["']${id}["']`), `index.html 缺少打印预览元素 ${id}`);
   }
-  // 两种文档：原文页 / 解析结果文稿
+  // 三种文档：原文页 / 版面还原的译文 / 解析结果文稿
   const modes = [...html.matchAll(/data-ppmode="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(modes.sort(), ['analysis', 'pdf'], '打印预览必须同时提供「原文」与「解析结果」两种文档');
+  assert.deepEqual(modes.sort(), ['analysis', 'pdf', 'trans'], '打印预览必须提供「原文」「译文」「解析结果」三种文档');
 });
 
 test('原文打印不再往打印区塞标题（标题会挤压版面）', () => {
