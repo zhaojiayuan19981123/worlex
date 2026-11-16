@@ -4074,6 +4074,22 @@ body.pn-resizing * { cursor: col-resize !important; }
 }
 .cmp-engine-state { font-variant-numeric: tabular-nums; }
 .cmp-engine-state.ready { color: var(--ink-2); }
+
+/* ---------- 全局翻译引擎标签（v2.1.9：引擎只有一处设置，这些位置只负责显示） ---------- */
+.tr-engine-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  max-width: 100%; height: 26px; padding: 0 9px;
+  font-size: 11.5px; line-height: 1; color: var(--ink-2);
+  background: var(--panel-2); border: 1px solid var(--hair); border-radius: 999px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cmp-field > .tr-engine-chip { height: 32px; width: 100%; border-radius: 7px; padding: 0 10px; font-size: 12.5px; }
+.pn-head .tr-engine-chip { margin-left: auto; }
+/* 对照精读工具条比较挤：引擎标签只放一行、不换行，窄屏让位给块数统计 */
+.cmp-bar .cmp-engine-chip { height: 24px; font-size: 11px; flex-shrink: 0; max-width: 190px; }
+@media (max-width: 1120px) { .cmp-bar .cmp-engine-chip { display: none; } }
+/* 原图弹窗里的旋转角度：点一下归零 */
+.pbp-rot-label { min-width: 46px; font-variant-numeric: tabular-nums; }
 .cmp-bar-engine {
   max-width: 220px; height: 28px; padding: 0 6px; font-size: 12px; flex-shrink: 0;
   border: 1px solid var(--hair); border-radius: 6px; background: var(--surface); color: var(--text);
@@ -4288,6 +4304,19 @@ body.pn-resizing * { cursor: col-resize !important; }
   outline: 1.5px dashed color-mix(in srgb, var(--primary) 55%, transparent);
   background: color-mix(in srgb, var(--primary) 4%, transparent);
 }
+/* 「看原图」小图标：平时隐形，悬停这一块才露出来（不悬停时不能挡住正文与划词） */
+.ctp-zoom {
+  position: absolute; top: 2px; right: 2px; z-index: 4;
+  width: 20px; height: 20px; padding: 0; display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  border-radius: 5px; cursor: zoom-in;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--primary);
+  opacity: 0; pointer-events: none; transition: opacity .12s ease;
+}
+.ctp-block.ctp-keep:hover .ctp-zoom { opacity: 1; pointer-events: auto; }
+.ctp-zoom:hover { background: var(--surface); border-color: var(--primary); }
+.ctp-zoom svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 /* 已翻译的文字块：白底盖住原文，再写中文 */
 .ctp-block.ctp-filled { background: #fff; color: #16181b; overflow: hidden; }
 .ctp-text {
@@ -4364,6 +4393,8 @@ body.pn-resizing * { cursor: col-resize !important; }
 /* 每张纸之间留 12px 空隙，只在预览里有意义（打印时由分页接管） */
 .ctp-sheet { margin: 0 0 12px; }
 .ctp-sheet:last-child { margin-bottom: 0; }
+/* 打印稿 / 打印预览里不出现「看原图」图标：纸上按不了，预览也不该有交互元件 */
+.ctp-print .ctp-zoom, .print-area .ctp-zoom, .prp-paper .ctp-zoom { display: none !important; }
 
 /* ---------- 译文样式二选一：版面还原（嵌回 PDF 页）/ 文本重排（连续文本流） ---------- */
 .pr-cmp-mode[data-style="flow"] #cmpTransFlow { display: none !important; }

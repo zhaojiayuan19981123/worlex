@@ -443,17 +443,24 @@ test('旋转页：双语成品画布尺寸按「显示尺寸」翻倍，且不�
 
 // ==================== 前端静态一致性 ====================
 
-test('前端：全文翻译面板已整体移除，设置页的翻译源仍必须留着', () => {
+test('前端：全文翻译面板已移除；翻译引擎只保留设置页一处（v2.1.9 删掉「翻译源」）', () => {
   const js = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
   const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf-8');
   // 面板删掉后不该再有任何 ft 开头的控件，也不该留 ftEl() / ftOptions() 的残骸 ——
   // 这种「删了一半」最容易变成点了没反应的静默 bug。
   assert.doesNotMatch(html, /id=["']ft[A-Za-z]/, 'index.html 里还有 ft 开头的控件残留');
   assert.doesNotMatch(js, /\bftEl\(|function ftOptions\(/, 'app.js 里还有全文翻译面板的残骸');
-  // 但设置页的翻译源 / 源语言 / 目标语言必须留着：
-  // 对照精读的单段翻译、划词译文浮层、笔记模式都读它们（全应用共用）。
-  for (const id of ['prTranslateSource', 'prLangFrom', 'prLangTo']) {
+  // 语言方向仍要在设置页：对照精读的单段翻译、划词译文浮层、笔记模式都读它
+  for (const id of ['prLangFrom', 'prLangTo']) {
     assert.match(html, new RegExp(`id=["']${id}["']`), `设置页缺少 ${id}`);
+  }
+  // 「翻译源」这个第二开关必须彻底去掉，否则用户在两处选不同引擎
+  assert.doesNotMatch(html, /id=["']prTranslateSource["']/, '设置页不该再有「翻译源」下拉');
+  assert.doesNotMatch(js, /prTranslateSource/, 'app.js 不该再读「翻译源」');
+  // 引擎只有 settings.translateProvider 一处；阅读器里只负责显示
+  assert.match(js, /function renderTranslateEngine\(\)/, '应有一个统一的引擎展示函数');
+  for (const id of ['prSelSource', 'pnEngineChip', 'cmpEngineState']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`), `阅读器缺少引擎展示位 ${id}`);
   }
 });
 

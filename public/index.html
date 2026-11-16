@@ -1110,17 +1110,10 @@
           <div id="mlCheckupResult" class="ml-test-result hidden"></div>
         </div>
 
-        <!-- 视觉模型：看图的核心能力，必填。提到最前面，别让用户翻到「高级设置」里才找到 -->
-        <div class="ml-section" id="visionSection">
-          <div class="ml-head">
-            <span class="ml-title"><svg class="ico ico" aria-hidden="true"><use href="#i-eye"/></svg>视觉模型 <b class="ml-required">必填</b></span>
-          </div>
-          <p class="ml-desc">纯文本模型无法读图；留空时自动选用支持图片的配置。</p>
-          <label class="field"><span>视觉模型<b class="ml-required">*</b></span>
-            <select id="setVisionProfile" class="tb-select"></select>
-          </label>
-          <div id="setVisionHint" class="ml-vision-hint"></div>
-        </div>
+        <!-- v2.1.9：视觉模型配置整块删除。
+             现在各家的模型基本都自带看图，再让用户「指定一个能看图的模型」只是多一步必填；
+             后端仍保留自动兜底（真遇到纯文本模型，会自动挑一条能看图的配置来转述），
+             但这件事不需要用户配置，也不该占设置页的位置。 -->
 
         <!-- 本地 OpenAI 兼容端口：让别的软件也能用上这里的模型路由 -->
         <div class="ml-section" id="gatewaySection">
@@ -1329,7 +1322,8 @@
         <h4 class="settings-group-title">期刊等级</h4>
         <label class="field"><span>easyScholar SecretKey</span><input id="setEasyKey" class="tb-input" type="password" placeholder="留空不查询" /></label>
         <div class="field-sep"></div>
-        <h4 class="settings-group-title">划词翻译</h4>
+        <h4 class="settings-group-title">翻译引擎</h4>
+        <p class="ml-desc" style="margin:-4px 0 8px">全局唯一：划词翻译、对照精读整篇翻译、笔记模式与全文翻译都使用这里选定的引擎。</p>
         <label class="field"><span>翻译提供方</span>
           <select id="setTranslateProvider" class="tb-select w100">
             <option value="builtin">内置翻译模型（免费）</option>
@@ -1356,11 +1350,6 @@
         <label class="field tr-field hidden" data-tr-for="baidu"><span>百度翻译密钥</span><input id="setBaiduKey" class="tb-input" type="password" placeholder="AppID#密钥" /></label>
         <label class="field tr-field hidden" data-tr-for="tencent"><span>腾讯云密钥</span><input id="setTencentKey" class="tb-input" type="password" placeholder="SecretId#SecretKey" /></label>
         <label class="field tr-field hidden" data-tr-for="tencent"><span>腾讯云地域（可选）</span><input id="setTencentRegion" class="tb-input" placeholder="默认 ap-shanghai" /></label>
-        <label class="field"><span>翻译源</span>
-          <select id="prTranslateSource" class="tb-select w100" title="局部翻译使用的翻译源；整篇翻译在对照精读里单独选">
-            <option value="auto">跟随上方设置</option>
-          </select>
-        </label>
         <label class="field"><span>语言方向</span>
           <div class="pr-lang-row">
             <select id="prLangFrom" class="tb-select">
@@ -1678,6 +1667,7 @@
         <section class="pn-pane pn-mid" data-pn="mid">
           <div class="pn-head">
             <span class="pn-head-title">划词翻译</span>
+            <span class="tr-engine-chip" id="pnEngineChip" title="在「设置 → 翻译引擎」里统一选择">引擎：—</span>
             <button id="pnCopyTrans" class="btn btn-ghost btn-sm" title="复制译文">⧉</button>
           </div>
           <div class="pn-body pn-mid-body">
@@ -1838,9 +1828,10 @@
           <p class="cmp-start-desc" id="cmpStartDesc"></p>
           <ol class="cmp-start-steps" id="cmpStartSteps"></ol>
           <div class="cmp-start-form">
-            <label class="cmp-field"><span>翻译引擎</span>
-              <select id="cmpEngine" class="tb-select w100" title="这一篇用谁来翻译"></select>
-            </label>
+            <!-- v2.1.9：整篇翻译不再单独选引擎，与划词 / 笔记共用「设置 → 翻译引擎」 -->
+            <div class="cmp-field"><span>翻译引擎</span>
+              <span class="tr-engine-chip" id="cmpEngine" title="在「设置 → 翻译引擎」里统一选择">读取中…</span>
+            </div>
             <label class="cmp-field"><span>目标语言</span>
               <select id="cmpTarget" class="tb-select w100"></select>
             </label>
@@ -1888,6 +1879,8 @@
           <option value="para">逐段配对</option>
           <option value="sentence">逐句配对</option>
         </select>
+        <!-- v2.1.9：工具条上直接显示当前全局引擎，不用点开任何面板就知道在用什么翻 -->
+        <span class="cmp-engine-chip tr-engine-chip" id="cmpEngineChip" title="在「设置 → 翻译引擎」里统一选择">引擎：—</span>
         <span class="cmp-engine-state" id="cmpEngineState"></span>
         <span class="cmp-hint" id="cmpSyncHint"></span>
         <span class="cmp-bar-spacer"></span>
@@ -2071,9 +2064,8 @@
              选中左侧 PDF / EPUB 文字后自动翻译到这里；引擎在顶部自选（跟随全局设置 / 指定模型 / 指定服务）。 -->
         <div class="pr-panel-body pr-pane hidden" data-prpane="translate">
           <div class="pr-lang-row">
-            <select id="prSelSource" class="tb-select w100" title="划词翻译用的引擎，只影响这一栏">
-              <option value="auto">引擎：跟随全局设置</option>
-            </select>
+            <!-- v2.1.9：引擎不再逐栏切换，统一跟随「设置 → 翻译引擎」，这里只显示当前用的是谁 -->
+            <span class="tr-engine-chip" id="prSelSource" title="在「设置 → 翻译引擎」里统一选择">引擎：—</span>
           </div>
           <textarea id="prSourceText" class="pr-src" placeholder="粘贴文本…"></textarea>
           <div class="pr-selection-options">
@@ -2214,6 +2206,9 @@
           <span class="pbp-kind" id="pbpKind">图表</span>
           <span class="pbp-page" id="pbpPage"></span>
           <span class="pbp-spacer"></span>
+          <button class="btn btn-ghost" id="pbpRotateLeft" title="向左旋转 90°"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-rotate-left"/></svg></button>
+          <button class="btn btn-ghost pbp-rot-label" id="pbpRotateLabel" title="点击归零：把这张图转回正">0°</button>
+          <button class="btn btn-ghost" id="pbpRotateRight" title="向右旋转 90°"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-rotate-right"/></svg></button>
           <button class="btn btn-ghost" id="pbpZoomOut" title="缩小">－</button>
           <button class="btn btn-ghost" id="pbpZoomFit" title="适应窗口">适应</button>
           <button class="btn btn-ghost" id="pbpZoomIn" title="放大">＋</button>

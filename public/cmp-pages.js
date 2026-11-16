@@ -625,6 +625,19 @@
     if (keep) {
       // 图表 / 表格 / 公式：不遮不翻，只留一层可点区域（原来那张图就在底下）
       el.classList.add('ctp-keep');
+      // 右上角一个「看原图」小图标：块本身点击是「选中 + 定位」，要放大看细节得有个
+      // 明确的入口。以前只能先点块、再去底栏找「原图」，用户根本没发现那个按钮。
+      if (b.image || KEEP_KINDS.has(b.kind)) {
+        const zoom = document.createElement('button');
+        zoom.type = 'button';
+        zoom.className = 'ctp-zoom';
+        zoom.title = '查看原图';
+        zoom.setAttribute('aria-label', '查看原图');
+        zoom.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+          + '<circle cx="10.5" cy="10.5" r="6.2"/><path d="m15.2 15.2 4.8 4.8"/>'
+          + '<path d="M10.5 7.8v5.4M7.8 10.5h5.4"/></svg>';
+        el.appendChild(zoom);
+      }
       return el;
     }
     if (!b.translatable) return el;
@@ -845,6 +858,17 @@
 
   function onClick(event) {
     if (window.getSelection()?.toString().trim()) return;
+    // 「看原图」图标：弹出这一块的裁图。拦在块点击之前，否则点图标会变成「选中块」。
+    const zoomBtn = event.target.closest?.('.ctp-zoom');
+    if (zoomBtn) {
+      const zid = zoomBtn.closest('.ctp-block')?.dataset.id;
+      if (zid) {
+        event.preventDefault();
+        event.stopPropagation();
+        state.opts.onAsset?.(zid);
+        return;
+      }
+    }
     const el = event.target.closest('.ctp-block');
     if (!el) return;
     const id = el.dataset.id;

@@ -113,13 +113,15 @@ test('检索用到的纯函数都在可单测的 utils 模块里导出', () => {
   }
 });
 
-test('自动整篇翻译默认使用免密钥的火山网页版，不消耗大模型 token', () => {
+test('自动整篇翻译跟随全局翻译引擎（v2.1.9 起不再单独固定成火山网页版）', () => {
   const app = readSrc('public/app.js');
-  assert.match(app, /const CMP_AUTO_ENGINE = 'volcweb';/);
+  // 引擎只有一处设置：settings.translateProvider。自动管线传 'auto' 让服务端按它分流，
+  // 否则用户在设置里选了 DeepL，打开文献还是偷偷用另一个引擎。
+  assert.match(app, /const CMP_AUTO_ENGINE = 'auto';/);
   assert.match(app, /startCmpTranslate\(\{ auto: true \}\);?/, '自动管线应显式按 auto 模式启动翻译');
-  assert.match(app, /window\.__cmpAutoEngine \|\| CMP_AUTO_ENGINE/, 'auto 模式应取火山网页版（可被调试钩子覆盖）');
-  // 启动面板里也要能看到这个选项（手动选得到）
-  assert.match(app, /value="volcweb"/);
+  assert.match(app, /window\.__cmpAutoEngine \|\| CMP_AUTO_ENGINE/, 'auto 模式仍要留调试钩子覆盖');
+  // 对照精读的启动面板 / 工具条都不再提供第二个引擎下拉
+  assert.doesNotMatch(app, /cmpEl\('cmpEngine'\)\?\.value/, '启动面板不该再读引擎下拉的值');
 });
 
 test('服务端 engine 白名单放行传统翻译服务（volcweb 不被重置成 auto）', () => {

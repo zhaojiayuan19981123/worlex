@@ -2100,7 +2100,7 @@
     // 供应商下拉 + 已配置模型列表
     renderProviderOptions();
     renderProfileList();
-    renderVisionOptions();
+    renderTranslateEngine();
     closeMlEditor();
   }
   async function saveSettingsFromForm() {
@@ -2132,13 +2132,15 @@
       fontSize: $('setFontSize').value,
       modelProfiles: profiles,
       activeProfileId,
-      visionProfileId: $('setVisionProfile') ? $('setVisionProfile').value : (settings.visionProfileId || ''),
+      // v2.1.9：视觉模型配置已从设置页移除，这里不再回写 visionProfileId
     };
     try {
       settings = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
       el.settingsModal.classList.add('hidden');
       await loadModels();
       renderModelSwitcher();
+      // 翻译引擎换了：阅读器 / 笔记 / 对照精读上的「引擎：XXX」跟着变
+      renderTranslateEngine();
       toast('设置已保存' + (settings.dataDir ? '，数据目录已切换' : ''), 'success');
       await loadItems(); await loadCollections();
     } catch (e) { toast(e.message, 'error'); }
@@ -2356,37 +2358,9 @@
   function profileName(p) {
     return p.label || (providerById(p.provider)?.name || p.provider) + ' · ' + (p.model || '');
   }
-  function renderVisionOptions() {
-    const sel = $('setVisionProfile');
-    if (!sel) return;
-    const able = visionCapable();
-    const cur = settings.visionProfileId || '';
-    sel.innerHTML = [
-      `<option value="">自动选择（${able.length ? able.length + ' 个可用' : '暂无可用'}）</option>`,
-      ...able.map((p) => `<option value="${esc(p.id)}">${esc(profileName(p))}</option>`),
-    ].join('');
-    // 指定的那条被删掉 / 改坏了，就退回「自动」，避免下拉框显示空白
-    sel.value = able.some((p) => p.id === cur) ? cur : '';
-    if (sel.value !== cur) settings.visionProfileId = sel.value;
-
-    const hint = $('setVisionHint');
-    if (!hint) return;
-    const active = profiles.find((p) => p.id === activeProfileId);
-    const activeVision = active ? profileVision(active) : false;
-    if (!able.length) {
-      hint.className = 'ml-vision-hint warn';
-      hint.textContent = '暂无可用的视觉模型';
-    } else if (activeVision) {
-      hint.className = 'ml-vision-hint ok';
-      hint.textContent = `当前模型「${profileName(active)}」可直接看图`;
-    } else {
-      // 以「后端实际会用哪个」为准，而不是前端自己猜，避免两边判断不一致
-      const real = activeVisionInfo || able[0];
-      const isDesignated = !!settings.visionProfileId && settings.visionProfileId === real?.id;
-      hint.className = 'ml-vision-hint ok';
-      hint.textContent = `图片由「${real.label || real.model}」转述（${isDesignated ? '按你的指定' : '自动选择'}）`;
-    }
-  }
+  // v2.1.9：设置页不再有「视觉模型」这一项。
+  // 后端仍会自动挑一条支持图片的配置兜底（纯文本模型发图会 400），
+  // 但那是实现细节，不需要用户指定，也就不在这里渲染下拉框。
 
   // ==================== 模型路由（故障转移 / 熔断 / 用量） ====================
   // 决策与记账都在后端（src/modelRouter.js + server.js），前端只做「展示 + 改配置」。
@@ -2971,15 +2945,12 @@
           modelProfiles: profiles,
           activeProfileId,
           aiProvider: $('setAiEnabled').checked ? 'siliconflow' : 'none',
-          // 模型增删后原本指定的视觉模型可能已不存在，这里带上最新选择让后端保持一致
-          visionProfileId: $('setVisionProfile') ? $('setVisionProfile').value : (settings.visionProfileId || ''),
         }),
       });
       profiles = settings.modelProfiles || profiles;
       activeProfileId = settings.activeProfileId || activeProfileId;
       await loadModels();
       renderModelSwitcher();
-      renderVisionOptions();
       if (msg) toast(msg, 'success');
     } catch (e) { toast(e.message, 'error'); }
   }
@@ -3533,8 +3504,9 @@
   function switchPrTab(name) {
     // 页签四个：划词翻译 / 解析结果 / 笔记 / AI 助读。
     // 「全文翻译」页签已删除（整篇翻译走「对照精读」）；划词翻译页签已还原。
-    // 翻译源与目标语言（#prTranslateSource / #prLangTo）在「设置」页，元素本身没删，
-    // 因为笔记模式、邮件翻译、对照精读的单段翻译、划词翻译面板都还在读它们。
+    // 目标语言（#prLangTo）在「设置」页，元素本身没删：笔记模式、邮件翻译、
+    // 对照精读的单段翻译、划词翻译面板都还在读它。
+    // 翻译引擎自 v2.1.9 起只有一处（设置 → 翻译引擎），阅读器内不再有下拉。
     pr.tab = name || 'analysis';
     document.querySelectorAll('.pr-tab').forEach((b) => b.classList.toggle('active', b.dataset.prtab === pr.tab));
     document.querySelectorAll('.pr-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.prpane !== pr.tab));
@@ -3590,6 +3562,8 @@
     $('prToggleMd').classList.add('hidden');
     $('prMdContent').innerHTML = '';
     pr.md = null;
+    // 笔记模式左栏的「全文翻译」缓存也一起作废：换了文献要重新按新文献找译文
+    try { pn.mdFor = ''; pn.mdPromise = null; } catch (_) { /* 初始化早期 pn 还没就绪 */ }
   }
 
   async function loadMdContent() {
@@ -3782,6 +3756,8 @@
     dirty: false,        // 有未保存改动
     saveTimer: null,
     loadedFor: null,     // 已载入笔记的文献 id，避免重复拉取
+    mdFor: '',           // 已为哪篇文献找过全文译文（切页签不必重复打接口）
+    mdPromise: null,     // 正在找的 Promise，防并发重复请求
   };
   const PN_PANES_KEY = 'pnPanes';
 
@@ -3925,7 +3901,15 @@
     if (pn.leftTab === 'md') renderPnLeftMd();
   }
 
-  /** 把「全文翻译」的 Markdown 译文渲染到左栏（复用 pr.md 里已加载的文本） */
+  /**
+   * 把「全文翻译」的译文渲染到左栏。
+   *
+   * v2.1.9 修：这里原来只看 `pr.md` —— 而 `pr.md` 只有在用户点开过 Markdown 译文
+   * 查看器时才会被赋值。于是「译过一整篇、但从没点过查看译文」的用户切到这里，
+   * 永远看到「还没有全文翻译结果」，明明已经翻完了。
+   * 现在内存里没有就向服务端要一次：先找 Markdown 成品，没有就用对照数据里的译文
+   * 拼一份可读正文（对照精读翻完的稿子同样算「已翻译」）。
+   */
   function renderPnLeftMd() {
     const box = pnEl('pnMdContent');
     const empty = pnEl('pnMdEmpty');
@@ -3933,13 +3917,109 @@
     const text = pr.md?.text || '';
     if (!text) {
       box.innerHTML = '';
-      empty?.classList.remove('hidden');
+      if (empty) {
+        empty.classList.remove('hidden');
+        empty.textContent = '正在查找这篇的全文译文…';
+      }
+      loadPnLeftMd();
       return;
     }
     empty?.classList.add('hidden');
     const source = text.replace(/\]\(crop:/g, '](#crop:');
     box.innerHTML = renderMarkdown(source);
     try { renderMdCrops(box); } catch (_) { /* 裁剪图失败不影响文字 */ }
+  }
+
+  /** 对照数据 → 可读 Markdown：按页分组、按阅读顺序拼接，标题保留层级 */
+  function pnAlignToMarkdown(data) {
+    const blocks = Array.isArray(data?.blocks) ? data.blocks : [];
+    const byPage = new Map();
+    for (const b of blocks) {
+      const tr = String(b?.translation || '').trim();
+      if (!tr) continue;
+      const p = Number.isFinite(b?.page) ? b.page : 1;
+      if (!byPage.has(p)) byPage.set(p, []);
+      byPage.get(p).push(b);
+    }
+    const out = [];
+    for (const p of [...byPage.keys()].sort((a, b) => a - b)) {
+      out.push(`## 第 ${p} 页`);
+      const list = [...byPage.get(p)].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+      for (const b of list) {
+        const tr = String(b.translation || '').trim();
+        if (b.kind === 'title') out.push(`# ${tr}`);
+        else if (b.kind === 'heading') out.push(`### ${tr}`);
+        else out.push(tr);
+        out.push('');
+      }
+    }
+    return out.join('\n');
+  }
+
+  /** 左栏「全文翻译」：找不到内存里的译文时，按「Markdown 成品 → 对照译文」的顺序取一次 */
+  async function loadPnLeftMd() {
+    const litId = pr.recordId;
+    if (!litId) return;
+    if (pn.mdFor === litId && !pn.mdPromise) return;
+    if (pn.mdFor === litId && pn.mdPromise) return pn.mdPromise;
+    pn.mdFor = litId;
+    pn.mdPromise = (async () => {
+      const fail = (msg) => {
+        // 这次没找到就先允许下次重试：用户可能看完提示才去翻，翻完切回来要能读到
+        pn.mdFor = '';
+        const empty = pnEl('pnMdEmpty');
+        const box = pnEl('pnMdContent');
+        if (box) box.innerHTML = '';
+        if (empty) { empty.classList.remove('hidden'); empty.textContent = msg; }
+      };
+      try {
+        const list = await api('/api/pdf-translate/jobs');
+        if (pr.recordId !== litId) return;
+        const mine = (Array.isArray(list) ? list : [])
+          .filter((j) => j.literatureId === litId && j.status === 'done')
+          .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        if (!mine.length) { fail('这篇还没有整篇译文：打开「对照精读」翻一遍，或到「全文翻译」页签生成 Markdown 译文，再回到这里查看。'); return; }
+
+        // ① 优先 Markdown 成品（保留了标题层级与段落顺序）
+        let mdUrl = '';
+        for (const j of mine) {
+          const o = (j.outputs || []).find((x) => x.kind === 'md');
+          if (o?.url) { mdUrl = o.url; break; }
+        }
+        if (mdUrl) {
+          const res = await fetch(mdUrl);
+          if (res.ok) {
+            const text = await res.text();
+            if (pr.recordId !== litId) return;
+            pr.md = { url: mdUrl, name: 'Markdown 译文', visible: false, loaded: true, text };
+            $('prToggleMd')?.classList.remove('hidden');
+            renderPnLeftMd();
+            return;
+          }
+        }
+
+        // ② 没有 Markdown 成品：用对照译文拼正文（对照精读翻完但没有选 md 成品的老作业）
+        let alignUrl = '';
+        for (const j of mine) {
+          const o = (j.outputs || []).find((x) => x.kind === 'align');
+          if (o?.url) { alignUrl = o.url; break; }
+        }
+        if (!alignUrl) { fail('这篇还没有整篇译文：打开「对照精读」翻一遍，或到「全文翻译」页签生成 Markdown 译文，再回到这里查看。'); return; }
+        const res = await fetch(alignUrl);
+        if (!res.ok) { fail('译文读取失败：HTTP ' + res.status); return; }
+        const data = await res.json();
+        if (pr.recordId !== litId) return;
+        const md = pnAlignToMarkdown(data);
+        if (!md.trim()) { fail('这篇的对照译文里没有可读正文（只有图表 / 公式），换「原文 PDF」看吧。'); return; }
+        pr.md = { url: '', name: '对照译文', visible: false, loaded: true, text: md };
+        renderPnLeftMd();
+      } catch (e) {
+        fail('译文读取失败：' + (e.message || '未知错误'));
+      } finally {
+        pn.mdPromise = null;
+      }
+    })();
+    return pn.mdPromise;
   }
 
   // ---------- 中栏：划词翻译 ----------
@@ -3957,16 +4037,12 @@
     pnTranslateAbort = new AbortController();
     const { signal } = pnTranslateAbort;
     const target = $('prLangTo')?.value || 'zh';
-    let provider;
-    let profileId;
-    const src = $('prTranslateSource')?.value || 'auto';
-    if (src.startsWith('llm:')) { provider = 'siliconflow'; profileId = src.slice(4); }
-    else if (src !== 'auto') provider = src;
     setPnTrans('<div class="pr-loading">翻译中…</div>');
     try {
       const data = await api('/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, target, provider, profileId }), signal,
+        // 引擎统一由服务端按「设置 → 翻译引擎」决定
+        body: JSON.stringify({ text, target }), signal,
       });
       if (signal.aborted) return;
       setPnTrans(`<div class="md">${renderMarkdown(data.translation || '')}</div>`);
@@ -5659,8 +5735,8 @@
     // 只有在「当前模型看不了图、而且后端也没找到视觉模型」时才是真问题；
     // 后端能自动转述时不应再吓唬用户（v1 的写法会把正常流程误报成不支持）。
     if (imgs.length && holder.modelVision === false && !holder.visions?.length && !holder.error) {
-      holder.content += `\n\n${ico('lightbulb')}当前模型「${holder.modelLabel || ''}」不支持图片输入，且没有可用的视觉模型。`
-        + '可到「AI 设置 → 两段式看图」指定一个视觉模型（如 GLM-4.5V 或 Qwen3.8-27B），或在顶栏直接切换。';
+      holder.content += `\n\n${ico('lightbulb')}当前模型「${holder.modelLabel || ''}」这次没能读图。`
+        + '可到「AI 设置」检查这条模型的密钥，或在顶栏换一个模型再问一次。';
     }
     if (holder.visions?.length) holder.visionNote = true;
 
@@ -6373,7 +6449,7 @@
   //   3) 图表 / 公式的放大预览，以及「AI 解释」「转 LaTeX」。
   // 文本块刻意不做点击交互 —— 正文已经有划词翻译，再叠一层点击只会互相打架。
 
-  const BLOCK_VIEW = { block: null, zoom: 1, busy: false, asset: false, modelLabel: '', directVision: false };
+  const BLOCK_VIEW = { block: null, zoom: 1, rotation: 0, busy: false, asset: false, modelLabel: '', directVision: false };
 
   function layoutAssetUrl(recordId, imagePath) {
     const name = String(imagePath || '').split('/').pop();
@@ -6552,21 +6628,58 @@
     BLOCK_VIEW.block = block;
     BLOCK_VIEW.asset = !!meta?.asset;
     BLOCK_VIEW.zoom = 1;
+    BLOCK_VIEW.rotation = 0;
     BLOCK_VIEW.busy = false;
     $('pbpKind').textContent = meta?.label || '区域';
     $('pbpPage').textContent = `第 ${block.page} 页`;
     $('pbpAnswer').classList.add('hidden');
     $('pbpAnswerBody').innerHTML = '';
     const img = $('pbpImg');
-    img.style.width = '100%';
-    if (block.image && pr.recordId) img.src = layoutAssetUrl(pr.recordId, block.image);
+    if (block._dataUrl) img.src = block._dataUrl;
+    else if (block.image && pr.recordId) img.src = layoutAssetUrl(pr.recordId, block.image);
     else img.removeAttribute('src');
+    // 裁图 404（老作业的 assets 被清理过）时，退回「从已渲染画布截一块」，
+    // 别让用户看到的是一张空白弹窗
+    img.onerror = () => {
+      img.onerror = null;
+      const shot = block.id ? window.CmpPages?.capture?.(block.id) : null;
+      if (shot) img.src = shot;
+    };
+    applyBlockTransform();
     $('prBlockPreview').classList.remove('hidden');
   }
 
   function applyBlockZoom() {
+    applyBlockTransform();
+  }
+
+  /**
+   * 缩放 + 旋转统一在这里落。
+   *
+   * 旋转不能只写 transform：`rotate(90deg)` 只改绘制、不改布局，图片的盒宽还是原样，
+   * 于是横过来之后会顶出可视区。所以 90° / 270° 时把 max-width 换成「视口高度」，
+   * 让旋转后的长边落在宽度方向，仍然整张可见。
+   */
+  function applyBlockTransform() {
     const img = $('pbpImg');
-    if (img) img.style.width = (BLOCK_VIEW.zoom * 100) + '%';
+    if (!img) return;
+    const deg = ((Number(BLOCK_VIEW.rotation) || 0) % 360 + 360) % 360;
+    const side = deg === 90 || deg === 270;
+    img.style.width = (BLOCK_VIEW.zoom * 100) + '%';
+    img.style.maxWidth = side ? 'calc(92vh - 190px)' : '100%';
+    img.style.maxHeight = side ? 'calc(94vw - 80px)' : 'calc(92vh - 190px)';
+    img.style.transform = deg ? `rotate(${deg}deg)` : '';
+    const label = $('pbpRotateLabel');
+    if (label) label.textContent = deg + '°';
+    const box = $('pbpBody');
+    if (box) box.classList.toggle('pbp-rotated', side);
+  }
+
+  /** 原图旋转：每次 90°，只影响查看，不改文件、也不影响送给 AI 的那张图 */
+  function rotateBlockView(delta) {
+    if (!BLOCK_VIEW.block) return;
+    BLOCK_VIEW.rotation = ((Number(BLOCK_VIEW.rotation) || 0) + delta + 360) % 360;
+    applyBlockTransform();
   }
 
   function assetDataUrl(recordId, imagePath) {
@@ -6727,7 +6840,11 @@
     box.querySelector('[data-pbp-close]')?.addEventListener('click', closeBlockView);
     $('pbpZoomIn').addEventListener('click', () => { BLOCK_VIEW.zoom = Math.min(4, BLOCK_VIEW.zoom + 0.25); applyBlockZoom(); });
     $('pbpZoomOut').addEventListener('click', () => { BLOCK_VIEW.zoom = Math.max(0.5, BLOCK_VIEW.zoom - 0.25); applyBlockZoom(); });
-    $('pbpZoomFit').addEventListener('click', () => { BLOCK_VIEW.zoom = 1; applyBlockZoom(); });
+    $('pbpZoomFit').addEventListener('click', () => { BLOCK_VIEW.zoom = 1; BLOCK_VIEW.rotation = 0; applyBlockTransform(); });
+    // 原图旋转：横放的表格 / 竖排的图，转过来才看得清
+    $('pbpRotateLeft')?.addEventListener('click', () => rotateBlockView(-90));
+    $('pbpRotateRight')?.addEventListener('click', () => rotateBlockView(90));
+    $('pbpRotateLabel')?.addEventListener('click', () => { BLOCK_VIEW.rotation = 0; applyBlockTransform(); });
     $('pbpAsk').addEventListener('click', () => runBlockAi('explain'));
     $('pbpLatex').addEventListener('click', () => runBlockAi('latex'));
     $('pbpAnswerCopy').addEventListener('click', async () => {
@@ -7163,6 +7280,8 @@
       pageCount: () => pr.totalPages,
       pageSize: (n) => pr.pageSizes?.[n - 1] || null,
       onPick: (id, meta) => cmpPickFromTransPage(id, meta),
+      // 图表 / 表格 / 公式右上角的「看原图」图标
+      onAsset: (id) => openCmpBlockImage(id),
       onZoom: (z) => setCmpZoomLabel(z),
     });
     setCmpZoomLabel(window.CmpPages.getZoom?.() || 1);
@@ -7287,34 +7406,10 @@
         tgt.innerHTML = (meta.targetLangs || []).map((l) => `<option value="${esc(l.id)}">${esc(l.label)}</option>`).join('');
         tgt.value = meta.options?.targetLang || 'zh';
       }
-      // 翻译引擎：跟随设置 / 逐条大模型配置 / DeepL
-      const src = cmpEl('cmpEngine');
-      if (src && !src.options.length) {
-        const opts = ['<option value="auto">跟随「划词翻译」设置</option>'];
-        // 内置翻译模型（免费小模型）排在第一位：整篇翻译量大，最需要「便宜 + 术语一致」
-        opts.push('<option value="builtin">内置翻译模型 · 免费（学术优化）</option>');
-        for (const p of meta.engine?.profiles || []) {
-          opts.push(`<option value="llm:${esc(p.id)}">大模型 · ${esc(p.label || p.model)}${p.hasKey ? '' : '（未填 Key）'}</option>`);
-        }
-        opts.push(`<option value="deepl">DeepL${meta.engine?.deeplReady ? '' : '（未配置 Key）'}</option>`);
-        // 传统翻译服务（免密钥的火山网页版默认排在最前，它是自动翻译的默认引擎）
-        opts.push('<option value="volcweb">火山翻译 · 网页版（免密钥，不耗 token）</option>');
-        src.innerHTML = opts.join('');
-      }
-      // 工具条引擎选择器（点段落即译 / 重译统一用）：完整提供方（跟随设置 + 各模型 + 各服务）
+      // 翻译引擎：v2.1.9 起不再在这里选，只显示全局引擎（设置 → 翻译引擎）
+      renderTranslateEngine();
       const bar = cmpEl('cmpBarEngine');
-      if (bar) bar.value = 'auto';  // 固定跟随全局设置
-      if (bar && !bar.dataset.filled) {
-        bar.dataset.filled = '1';
-        api('/api/translate/sources').then((d) => {
-          const opts = ['<option value="auto">跟随全局设置</option>'];
-          for (const p of d.profiles || []) {
-            opts.push(`<option value="llm:${esc(p.id)}">大模型 · ${esc(p.label)}${p.hasKey ? '' : '（未填 Key）'}</option>`);
-          }
-          for (const p of d.providers || []) opts.push(`<option value="${esc(p.id)}">${esc(p.label)}</option>`);
-          bar.innerHTML = opts.join('');
-        }).catch(() => {});
-      }
+      if (bar) bar.value = 'auto';  // 兼容旧逻辑：始终跟随全局
     } catch (_) { /* 拉不到就保留「跟随设置」这一项 */ }
   }
 
@@ -7468,12 +7563,10 @@
     return false;
   }
 
-  /** 当前对照精读用的引擎 / 目标语言（本地缓存 key 的一部分）。 */
+  /** 当前对照精读用的引擎 / 目标语言（本地缓存 key 的一部分）。
+   *  v2.1.9：引擎固定取全局设置，工具条与启动面板都不再提供单独选择。 */
   function cmpCurrentEngine() {
-    const bar = cmpEl('cmpBarEngine')?.value || 'auto';
-    const own = cmpEl('cmpEngine')?.value || 'auto';
-    const fallback = bar !== 'auto' ? bar : (own !== 'auto' ? own : ($('prTranslateSource')?.value || 'auto'));
-    const { provider, profileId } = cmpResolveSource(fallback);
+    const { provider, profileId } = cmpResolveSource('auto');
     const target = cmpEl('cmpTarget')?.value || $('prLangTo')?.value || 'zh';
     return { provider, profileId, target };
   }
@@ -7780,8 +7873,9 @@
     const btn = (k) => bar.querySelector(`[data-cmpbar="${k}"]`);
     btn('tr')?.classList.toggle('hidden', !canTr || !!tr);
     btn('retrans')?.classList.toggle('hidden', !canTr || !tr);
-    // 「原图」只对带裁图的块有意义；「送 AI」对文字块送原文、对图表送整张图
-    btn('img')?.classList.toggle('hidden', !b.image || !pr.recordId);
+    // 「原图」对图表 / 表格 / 公式都要在：即使没有 assets 裁图，也能从已渲染画布上截一块
+    const canImg = !!pr.recordId && (!!b.image || ['figure', 'table', 'formula'].includes(b.kind) || b.translatable === false);
+    btn('img')?.classList.toggle('hidden', !canImg);
     const ai = btn('ai');
     if (ai) {
       ai.title = b.image
@@ -8031,9 +8125,12 @@
    * 三种形态：'llm:<id>'（逐条大模型配置）、'auto'（跟随全局设置）、其余（provider id）。
    */
   function cmpResolveSource(src) {
-    if (String(src || '').startsWith('llm:')) return { provider: 'siliconflow', profileId: String(src).slice(4) };
-    if (src && src !== 'auto') return { provider: src, profileId: '' };
-    return { provider: undefined, profileId: '' };
+    const s = String(src || '').trim();
+    if (s.startsWith('llm:')) return { provider: 'siliconflow', profileId: s.slice(4) };
+    if (s && s !== 'auto') return { provider: s, profileId: '' };
+    // auto / 空：跟随全局引擎。返回具体 id 而不是 undefined —— 本地缓存 key 要按引擎区分，
+    // 换了引擎还命中旧译文，用户会以为「换了引擎没生效」。
+    return { provider: settings?.translateProvider || 'siliconflow', profileId: '' };
   }
 
   /**
@@ -8109,22 +8206,32 @@
 
   // ---------- 打开裁图预览（复用版面块预览弹层） ----------
 
+  /**
+   * 对照精读里「看原图」。
+   *
+   * 优先用版面解析产出的裁图 assets；老作业 / 视觉路径可能没有 image 字段，
+   * 这时从已经渲染好的译文页画布上就地裁一块 —— 有画布就一定截得到，
+   * 不至于「点了没反应」。
+   */
   function openCmpBlockImage(id) {
     const b = cmp.blockById.get(id);
-    if (!b?.image) return;
+    if (!b) return;
     const kindLabel = window.PrBlocks?.labels?.[b.label] || CMP_KIND_LABEL[b.kind] || '区域';
-    // 把块自身带上（含识别出的文字），「AI 解释」就能连图带文一起给模型看
-    openBlockView(
-      { id: b.id, page: b.page, label: b.label, image: b.image, text: b.text, caption: b.caption },
-      { asset: true, label: kindLabel },
-    );
+    const base = { id: b.id, page: b.page, label: b.label, image: b.image, text: b.text, caption: b.caption };
+    if (b.image) {
+      openBlockView(base, { asset: true, label: kindLabel });
+      return;
+    }
+    const shot = window.CmpPages?.capture?.(id);
+    if (!shot) { toast('这一块没有可用的原图', 'error'); return; }
+    openBlockView({ ...base, _dataUrl: shot }, { asset: true, label: kindLabel });
   }
 
   // ---------- 作业：开始对照翻译 / 跟踪进度 ----------
 
-  // 自动管线（用户零操作）默认使用的翻译源：火山翻译网页版 —— 免密钥、走外部网页接口，
-  // 不消耗任何大模型 token。这是「打开阅读器就自动整篇翻译」不烧钱的前提。
-  const CMP_AUTO_ENGINE = 'volcweb';
+  // 自动管线（用户零操作）也用同一个全局引擎 —— v2.1.9 起不再单独固定成火山网页版：
+  // 用户在设置里选了 DeepL，打开文献自动翻译就该是 DeepL，而不是「设置归设置、后台归后台」。
+  const CMP_AUTO_ENGINE = 'auto';
 
   async function startCmpTranslate(opts = {}) {
     if (cmp.busy) return;
@@ -8142,12 +8249,13 @@
       refreshCmpStart();
       return;
     }
-    // 引擎选择：自动管线固定用免密钥的火山网页版（不烧 token）；手动模式以启动面板的选择为准。
+    // 引擎：一律 'auto' —— 服务端 createEngine 会按 settings.translateProvider 分流，
+    // 也就是「设置 → 翻译引擎」里选的那一个。
     // window.__cmpAutoEngine 与 __cmpAutoOff 同属调试钩子：E2E 用它把自动翻译指向本机假模型，
     // 免得测试真的去打外部网页接口（正常用户永远碰不到）。
     const raw = opts.auto
       ? (opts.engine || window.__cmpAutoEngine || CMP_AUTO_ENGINE)
-      : (cmpEl('cmpEngine')?.value || 'auto');
+      : 'auto';
     const options = {
       engine: 'auto',
       profileId: '',
@@ -8158,7 +8266,7 @@
       translateReferences: !!cmpEl('cmpRefs')?.checked,
     };
     if (raw.startsWith('llm:')) { options.engine = 'llm'; options.profileId = raw.slice(4); }
-    // 'auto' / 'deepl' / 'volcweb' / 其它传统翻译服务 id 一律原样透传（服务端 createEngine 分流）
+    // 'auto' / 'deepl' / 其它传统翻译服务 id 一律原样透传（服务端 createEngine 分流）
     else options.engine = raw;
 
     setCmpStartBusy(true);
@@ -8188,6 +8296,8 @@
       closeCmpStream();
       setCmpStartBusy(false);
       cmp.job = null;
+      // 刚翻完：笔记模式左栏那份「有没有全文译文」的判断要作废，切过去才读得到新译文
+      pn.mdFor = '';
       const ok = await loadCmpAlign({ silent: false });
       if (ok) {
         cmpEl('cmpStart')?.classList.add('hidden');
@@ -8588,8 +8698,7 @@
     const layoutOk = await waitLayoutDone(recordId);
     if (pr.recordId !== recordId) return;
     if (!layoutOk) { setCmpAutoChip('fail', '版面解析未完成，翻译没有开始'); return; }
-    // ④ 自动整篇翻译。引擎固定用免密钥的火山网页版（对齐「打开即用、不烧 token」），
-    //    目标语言跟随设置（默认中文）。
+    // ④ 自动整篇翻译。引擎跟随「设置 → 翻译引擎」，目标语言跟随设置（默认中文）。
     setCmpAutoChip('busy', '正在整篇翻译…');
     cmp.autoEnter = true;
     await startCmpTranslate({ auto: true });
@@ -9972,7 +10081,7 @@
 
   /**
    * 翻译一段选中文字并就地显示。
-   * 翻译源 / 目标语言沿用设置页的 #prTranslateSource 与 #prLangTo（全应用共用）。
+   * 引擎统一取「设置 → 翻译引擎」，目标语言取 #prLangTo（全应用共用）。
    */
   async function showSelTrans(text, anchorRect) {
     const body = $('prSelTransBody');
@@ -9985,12 +10094,6 @@
     const { signal } = selTransAbort;
 
     const target = $('prLangTo')?.value || 'zh';
-    let provider;
-    let profileId;
-    const src = $('prTranslateSource')?.value || 'auto';
-    if (src.startsWith('llm:')) { provider = 'siliconflow'; profileId = src.slice(4); }
-    else if (src !== 'auto') provider = src;
-
     const title = $('prSelTransTitle');
     if (title) {
       title.textContent = srcText.length > 48 ? srcText.slice(0, 48) + '…' : srcText;
@@ -10001,7 +10104,8 @@
     try {
       const data = await api('/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: srcText, target, provider, profileId }), signal,
+        // 引擎统一由服务端按「设置 → 翻译引擎」决定
+        body: JSON.stringify({ text: srcText, target }), signal,
       });
       if (signal.aborted) return;
       const tr = String(data.translation || '').trim() || '（未返回译文）';
@@ -10015,31 +10119,56 @@
   }
 
   /**
-   * 划词面板的「翻译源」下拉：跟随设置 / 逐条大模型配置 / 各翻译服务。
-   * 只影响划词翻译；全文翻译的引擎在「全文翻译」页签里单独选。
-   * 选择存在 localStorage，下次打开阅读器自动恢复。
+   * 全局翻译引擎：所有翻译入口共用「设置 → 翻译引擎」。
    */
+  //
+  // v2.1.9：删掉「翻译源」这个第二开关。原来设置页一个「翻译源」、划词面板一个
+  // 「引擎」、对照精读再一个「翻译引擎」，三处各自记忆，用户选完 DeepL 发现
+  // 别处还在用内置模型。现在引擎只有一处设置（settings.translateProvider），
+  // 阅读器里只显示「当前用的是谁」，不再提供第二个选择。
+
+  /** 引擎 id → 展示名。刻意写死中文短名：接口返回的 label 带「（需单独 Key）」这类后缀，放进按钮太长 */
+  const TR_ENGINE_LABEL = {
+    builtin: '内置翻译模型（免费）',
+    siliconflow: '当前激活的大模型',
+    deepl: 'DeepL',
+    volcweb: '火山翻译 · 网页版',
+    youdaoweb: '有道翻译 · 网页版',
+    volcapi: '火山引擎机器翻译',
+    youdaoapi: '有道智云翻译',
+    baidu: '百度翻译',
+    tencent: '腾讯云机器翻译',
+    free: '免费接口',
+  };
+
+  function trEngineName(id) {
+    const key = id || settings?.translateProvider || 'siliconflow';
+    if (key === 'siliconflow') {
+      const m = activeModelInfo?.label || activeModelInfo?.model || '';
+      return m ? `当前大模型 · ${m}` : TR_ENGINE_LABEL.siliconflow;
+    }
+    return TR_ENGINE_LABEL[key] || key;
+  }
+
+  /** 把「引擎：XXX」刷到阅读器里所有需要显示引擎的位置 */
+  function renderTranslateEngine() {
+    const name = trEngineName();
+    for (const id of ['prSelSource', 'pnEngineChip', 'cmpEngineChip']) {
+      const el = $(id);
+      if (el) el.textContent = '引擎：' + name;
+    }
+    // 整篇翻译面板里自带「翻译引擎」这一栏标题，这里只写名字
+    const start = $('cmpEngine');
+    if (start) start.textContent = name;
+  }
+
   async function loadTranslateSources() {
-    // 两个下拉：设置页的全局翻译源（#prTranslateSource）+ 划词面板的引擎（#prSelSource）。
-    // 各自记住自己的选择，互不干扰。
-    const targets = [
-      { el: $('prTranslateSource'), key: 'prTranslateSource', label: '翻译源：跟随全局设置' },
-      { el: $('prSelSource'), key: 'prSelSource', label: '引擎：跟随全局设置' },
-    ];
+    // 服务端是引擎配置的权威来源：设置可能刚在别的窗口改过，进来先对齐一次。
     try {
       const data = await api('/api/translate/sources');
-      for (const t of targets) {
-        if (!t.el) continue;
-        const opts = [{ value: 'auto', label: t.label }];
-        for (const p of data.profiles || []) {
-          opts.push({ value: 'llm:' + p.id, label: `大模型 · ${p.label}${p.hasKey ? '' : '（未填 Key）'}` });
-        }
-        for (const p of data.providers || []) opts.push({ value: p.id, label: p.label });
-        const saved = localStorage.getItem(t.key) || 'auto';
-        t.el.innerHTML = opts.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
-        if ([...t.el.options].some((o) => o.value === saved)) t.el.value = saved;
-      }
-    } catch (_) { /* 拉取失败就保留默认项，不阻塞阅读器 */ }
+      if (data?.current && settings) settings.translateProvider = data.current;
+    } catch (_) { /* 拉不到就用本地 settings 的值，不阻塞阅读器 */ }
+    renderTranslateEngine();
   }
 
   // 划词面板的提示文案随文档格式走：读 EPUB 时别说成 PDF
@@ -10089,19 +10218,12 @@
     translateAbort = new AbortController();
     const { signal } = translateAbort;
     const target = $('prLangTo')?.value || 'zh';
-    // 翻译源就近优先：划词面板顶部选的引擎（#prSelSource）→ 设置页全局翻译源（#prTranslateSource）。
-    // auto = 跟随全局设置；llm:<profileId> = 指定某条大模型配置；其余为具体服务 id。
-    let provider;
-    let profileId;
-    const own = $('prSelSource')?.value || 'auto';
-    const src = own !== 'auto' ? own : ($('prTranslateSource')?.value || 'auto');
-    if (src.startsWith('llm:')) { provider = 'siliconflow'; profileId = src.slice(4); }
-    else if (src !== 'auto') provider = src;
+    // v2.1.9：引擎不再就近选择，统一由服务端按「设置 → 翻译引擎」决定
     box.innerHTML = '<div class="pr-loading">翻译中…</div>';
     try {
       const data = await api('/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, target, provider, profileId }), signal,
+        body: JSON.stringify({ text, target }), signal,
       });
       if (signal.aborted) return;
       box.innerHTML = `<div class="pr-trans-text">${esc(data.translation)}</div>`;
@@ -10726,10 +10848,6 @@
     // Markdown 译文 / 原文 PDF 双向切换
     $('prToggleMd').addEventListener('click', toggleMdViewer);
     $('prMdClose').addEventListener('click', hideMdViewer);
-    // 划词面板的翻译源下拉：记住用户的选择
-    $('prTranslateSource')?.addEventListener('change', () => {
-      localStorage.setItem('prTranslateSource', $('prTranslateSource').value);
-    });
 
     // 右侧页签：划词翻译 / 解析结果 / AI 对话
     document.querySelectorAll('.pr-tab').forEach((b) => b.addEventListener('click', () => switchPrTab(b.dataset.prtab)));
@@ -10981,9 +11099,6 @@
     $('prDoTranslate').addEventListener('click', doPanelTranslate);
     $('prSourceText').addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') doPanelTranslate();
-    });
-    $('prSelSource')?.addEventListener('change', () => {
-      localStorage.setItem('prSelSource', $('prSelSource').value);
     });
 
 
@@ -13884,16 +13999,11 @@ a { color: #176b87; }
     renderMailDetail();
 
     const target = $('prLangTo')?.value || 'zh';
-    let provider;
-    let profileId;
-    const src = $('prTranslateSource')?.value || 'auto';
-    if (src.startsWith('llm:')) { provider = 'siliconflow'; profileId = src.slice(4); }
-    else if (src !== 'auto') provider = src;
-
     try {
       const data = await api('/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, target, provider, profileId }),
+        // 引擎不传：服务端统一用「设置 → 翻译引擎」里的那一项
+        body: JSON.stringify({ text, target }),
       });
       // 期间用户可能已经切到别的邮件，避免把结果串到错的地方
       if (!mailTrans || mailTrans.uid !== uid) return;

@@ -1,3 +1,88 @@
+## v2.1.9：设置简化 + 引擎全局化 + 笔记译文误报 + 原图旋转（2026-11-17）
+
+> 用户反馈（四条）：
+> 1) 简化设置界面：删除视觉模型（现在所有模型都可以直接看图）；翻译去掉翻译源设置，
+>    只使用「翻译提供方」作为全局翻译引擎；
+> 2) 文献阅读里所有翻译引擎要跟随全局引擎变化并显示（选了 DeepL，各处都显示 DeepL）；
+> 3) 明明已经翻译了，笔记模式仍提示「未全文翻译」；
+> 4) 对照精读里图标点击无法弹出原图窗口，原图窗口还需要左右旋转。
+
+### 一、设置页：删两项，只留一个引擎
+
+| 删除 | 处理方式 |
+| --- | --- |
+| 视觉模型（必填下拉 + 提示） | `index.html` 删 `#visionSection` / `#setVisionProfile` / `#setVisionHint`；`app.js` 删 `renderVisionOptions()` 及全部调用；保存设置不再回写 `visionProfileId` |
+| 翻译源（`#prTranslateSource`） | 设置页删下拉；`app.js` 六处读取全部清掉，请求不再自带 `provider` —— 服务端 `translate()` 的 `opts.provider \|\| s.translateProvider` 就是唯一入口 |
+
+后端保留 `resolveVisionModel` 的**自动兜底**（`visionProfileId` 为空时自动挑一条被判为支持图片的配置），
+因为纯文本模型收到 `image_url` 会直接 400；只是这件事不再需要用户指定。设置页里那句
+「可到「AI 设置 → 两段式看图」指定一个视觉模型」的旧提示也一并改掉。
+
+### 二、引擎：一处设置，四处显示
+
+新增 `TR_ENGINE_LABEL`（引擎 id → 中文短名）与 `trEngineName()` / `renderTranslateEngine()`：
+
+| 位置 | 元素 | 以前 | 现在 |
+| --- | --- | --- | --- |
+| 设置页 | `#setTranslateProvider` | 下拉 | 仍在（唯一设置点） |
+| 划词翻译面板 | `#prSelSource` | 下拉（逐栏记忆） | 只读标签 `引擎：DeepL` |
+| 笔记模式中栏 | `#pnEngineChip` | 无 | 只读标签 |
+| 对照精读工具条 | `#cmpEngineChip` | 无（`#cmpEngineState` 只放块数统计） | 只读标签 |
+| 整篇翻译启动面板 | `#cmpEngine` | 下拉 | 只读标签 |
+
+`renderTranslateEngine()` 在四处触发：设置保存后、打开设置弹窗时、进入阅读器（`loadTranslateSources`）、
+`fillCmpForm()`。`loadTranslateSources()` 从「给三个下拉填选项」简化成「向服务端对齐 `current` 再刷标签」。
+
+`cmpResolveSource('auto')` 由返回 `provider: undefined` 改为返回**具体的全局引擎 id**：
+本地译文缓存 key 里带 provider，返回 undefined 会让「换了引擎还命中旧译文」。
+
+`CMP_AUTO_ENGINE` 从 `'volcweb'` 改成 `'auto'`：打开文献自动整篇翻译不再固定免密钥引擎，
+否则就是「设置归设置、后台归后台」。启动面板也不再提供引擎下拉（`startCmpTranslate` 固定传 `auto`）。
+
+### 三、笔记模式：译过就能看见
+
+根因：`renderPnLeftMd()` 只读 `pr.md?.text`，而 `pr.md` 仅在用户点开过 Markdown 译文查看器时才被赋值。
+译完整篇但没点过「查看译文」的用户，永远看到空态。
+
+改法：
+- `renderPnLeftMd()` 内存里没有译文就调 `loadPnLeftMd()`，先显示「正在查找这篇的全文译文…」；
+- `loadPnLeftMd()` 查 `/api/pdf-translate/jobs`（done、按时间倒序）：
+  ① 优先 `kind === 'md'` 成品；② 没有就用 `kind === 'align'` 的对照数据经 `pnAlignToMarkdown()`
+  拼成可读正文（按页分组、按 y/x 阅读顺序、标题保留 `#` / `###` 层级）；
+- 找不到才提示「还没有整篇译文：打开对照精读翻一遍…」，并且 `pn.mdFor` 复位 ——
+  用户看完提示去翻，切回来能重新读到；
+- 整篇翻译作业完成（`subscribeCmpJob` 的 `onDone`）时把 `pn.mdFor` 置空，刚翻完立刻生效；
+- 切换文献（`closeMdTranslation`）时一并清 `pn.mdFor` / `pn.mdPromise`。
+
+### 四、原图：图标入口 + 旋转
+
+- `cmp-pages.js` 的 `buildBlockEl()`：图表 / 表格 / 公式块右上角加 `.ctp-zoom` 按钮（放大镜），
+  平时 `opacity:0`，悬停这一块才出现；`onClick()` 里先拦它，走 `state.opts.onAsset(id)`。
+- `mountCmpPages()` 传 `onAsset: (id) => openCmpBlockImage(id)`。
+- `openCmpBlockImage()` 不再因 `!b.image` 直接 return：没有 assets 裁图时用
+  `CmpPages.capture(id)` 从已渲染画布截一块（`_dataUrl` 交给 `openBlockView`）。
+- 主栏底部的「原图」按钮也放宽到 `figure/table/formula` 或 `translatable === false`。
+- `openBlockView()` 里 `img.onerror` 兜底：裁图 404 时同样退回画布截取，避免空白弹窗。
+- 旋转：`BLOCK_VIEW.rotation` + `applyBlockTransform()`。90°/270° 时把 `max-width` 换成
+  视口高度、`max-height` 换成视口宽度 —— `rotate()` 只改绘制不改布局盒，不换约束会顶出可视区。
+  每次打开新图 `rotation = 0`；「适应」按钮同时归零。
+- 打印稿 / 打印预览里 `.ctp-zoom` 一律 `display:none`（纸上按不了，预览也不该有交互元件）。
+
+### 五、验证
+
+- 新增 `test/v219-features.test.mjs` 5 条（设置页无视觉模型 / 无翻译源、引擎四处展示位、
+  自动管线跟随全局、笔记译文回退链、原图图标与旋转）；同步更新两条过时断言
+  （`ai-token-budget` 的 `CMP_AUTO_ENGINE`、`pdf-translate` 的「设置页必须有 prTranslateSource」）。
+- `node --test` 全量 **827/827** 通过（Node 20.10）。
+- Playwright 端到端（真实 24 页 PDF，对照数据走路由伪造，不动用户数据）：
+  - 设置弹窗：无视觉模型区块、无翻译源下拉，分组标题出现「翻译引擎」；
+  - 把 `/api/settings` 与 `/api/translate/sources` 的 current 伪造成 `deepl` 后，
+    四处显示依次为 `引擎：DeepL` / `引擎：DeepL` / `引擎：DeepL` / `DeepL`；
+  - 笔记模式左栏显示译文正文（标题 + 段落），空态文案隐藏；
+  - 悬停表格块出现放大镜，点击弹出原图；角度标签 0° → 90° → 270°，
+    `transform` 依次为 `none` → `matrix(0,1,-1,0,0,0)` → `matrix(0,-1,1,0,0,0)`。
+- 截图复核：设置弹窗、笔记模式、对照精读工具条、原图旋转。
+
 ## v2.1.8：打印支持「版面还原的译文」（2026-11-17）
 
 > 用户需求：「点击打印时，要求能够支持打印版面还原版本的译文」。
