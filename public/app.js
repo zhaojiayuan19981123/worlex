@@ -5332,7 +5332,9 @@
     const pool = pr.citePool || [];
     if (!pool.length) return text;
     const block = pool.map((c, i) => `【引用 ${i + 1}${c.label ? '｜' + c.label : ''}】\n${c.text}`).join('\n\n');
-    const ask = String(text || '').trim() || '请综合以上引文，帮我梳理它们的要点、相互关系与可能的用法。';
+    // 只放了引文没写问题时，别替用户追加「梳理要点、相互关系与可能的用法」这种复合任务：
+    // 一句平实的问法，回答就不会自己长成一篇综述。
+    const ask = String(text || '').trim() || '这几段引文讲了什么？';
     return `下面是我从这篇文献里摘出的 ${pool.length} 段原文：\n\n${block}\n\n---\n我的问题：${ask}`;
   }
 
@@ -5381,9 +5383,9 @@
       toast(epub ? '没能取到本章正文，请等正文加载完再试' : '当前页没有提取到文字（可能是扫描版 PDF）', 'error');
       return;
     }
-    const prompt = `请用简体中文总结「${label}」的内容：先用一句话点出主旨，再分 3-5 条要点`
-      + `（要具体、可核查，涉及数据或结论请照抄关键数字），最后说明这一部分在全篇中的作用。\n\n`
-      + `【${label}正文】\n${text}`;
+    // 只提「总结这一段」，不再规定「一句话主旨 + 3-5 条要点 + 全篇作用」的三段式：
+    // 页内一小段话被套进那个模板，就会产出比原文还长的结构化作答。
+    const prompt = `请总结「${label}」的内容。\n\n【${label}正文】\n${text}`;
     askPrChatWith(prompt);
   }
 
@@ -5551,9 +5553,13 @@
 
     // 按本轮提问检索相关正文片段（全局性问题自动退回全文节选），不再每轮重发整篇全文
     const ctx = buildPaperContext(text);
-    const sys = '你是一位严谨的科研助理。用户正在精读一篇文献，请只围绕这篇论文回答，'
-      + '回答要具体、可核查，必要时指明依据来自论文的哪一部分。如果论文上下文里没有相关信息，'
-      + '请明确说「论文解析结果中没有提到」，不要编造。用简体中文和规范 Markdown 回答；适合比较的信息可用 Markdown 表格，代码使用带语言标识的围栏代码块，公式使用 $...$ 或 $$...$$。\n\n【当前论文解析结果】\n' + (ctx || '（这篇文献还没有解析结果）');    // 组织为多模态 content：文本 + 图片
+    // 提示词只交代「依据什么回答」，不规定结构与篇幅。
+    // 上一版写了「具体、可核查，必要时指明依据来自论文哪一部分」+ Markdown 表格 / 代码块 /
+    // 公式格式要求，模型于是把「这段话什么意思」也答成分节长文。详略交给用户的问题决定。
+    // 保留一条：输出用 Markdown（渲染层按 Markdown 显示），但不再指定表格/代码块/公式细则。
+    const sys = '请根据下面这篇论文的内容，回答我的问题。'
+      + '论文里没有提到的，就说论文中没有提到，不要编造。请用简体中文、Markdown 格式回答。\n\n【论文内容】\n'
+      + (ctx || '（这篇文献还没有解析结果）');
     const userContent = imgs.length
       ? [{ type: 'text', text: text || '请分析这些图片，并结合这篇论文回答我的问题。' },
          ...imgs.map((u) => ({ type: 'image_url', image_url: { url: u } }))]
@@ -10740,7 +10746,7 @@
     // AI 引用池：一起提问 / 清空
     $('prCiteAsk')?.addEventListener('click', () => {
       if (!pr.citePool.length) { toast('引用池是空的', 'error'); return; }
-      // 输入框里已经写了问题就照常发；空着则由 withCitePool 兜一句「综合以上引文」的默认问法
+      // 输入框里已经写了问题就照常发；空着则由 withCitePool 兜一句「这几段引文讲了什么？」
       askPrChatWith(String($('prChatInput')?.value || '').trim());
     });
     $('prCiteClear')?.addEventListener('click', () => {
