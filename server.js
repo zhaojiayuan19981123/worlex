@@ -1473,7 +1473,19 @@ export function createApp({
   let kbLlmBusy = false;
   let kbLlmError = '';
   let kbLlmTimer = null;
-  let kbLlmProgress = null;   // { done, total }：分批聚类时前端能显示进度
+  // 分批聚类的实时进度：前端轮询 /api/knowledge/status 就能画进度条。
+  // { stage: preparing|batching|merging|applying, done, total, batches, doneBatches, topics, startedAt }
+  // done / total 以「篇」为单位（批次完成才跳），前端按 stage 换算成百分比。
+  let kbLlmProgress = null;
+
+  /** 就地更新进度对象（保留 startedAt，前端据此算已用时）。 */
+  function patchClusterProgress(patch) {
+    if (!kbLlmProgress) {
+      kbLlmProgress = { stage: 'preparing', done: 0, total: 0, batches: 0, doneBatches: 0, topics: 0, startedAt: Date.now() };
+    }
+    Object.assign(kbLlmProgress, patch);
+    return kbLlmProgress;
+  }
 
   function knowledgeFile() {
     return path.join(store.getDataDir(), 'knowledge-base.json');
@@ -1519,7 +1531,10 @@ export function createApp({
       model: method === 'llm' ? (kbLlmClusters?.model || '') : '',
       running: kbLlmBusy,
       error: kbLlmError,
-      progress: kbLlmProgress,
+      // 附带已用时：前端不用和服务端对表，直接显示「已用时 x 秒」
+      progress: kbLlmProgress
+        ? { ...kbLlmProgress, elapsedMs: Math.max(0, Date.now() - (kbLlmProgress.startedAt || Date.now())) }
+        : null,
       stale: !!(kbLlmClusters && kbLlmClusters.signature !== kbSignature()),
     };
   }
@@ -1771,7 +1786,12 @@ export function createApp({
     const merged = new Map();
     const names = [];
     const errors = [];
-    kbLlmProgress = { done: 0, total: batches.length };
+    // 进度以「篇」为单位：批次完成才 +N，前端配个宽度过渡就不显得一顿一顿的。
+    // 批次总数先按计划批次算，拆批重试只影响时间、不影响这个数。
+    kbLlmProgress = {
+      stage: 'batching', done: 0, total: list.length,
+      batches: batches.length, doneBatches: 0, topics: 0, startedAt: Date.now(),
+    };
     let cursor = 0;
     const worker = async () => {
       while (cursor < batches.length) {
@@ -1797,7 +1817,10 @@ export function createApp({
         } catch (e) {
           errors.push(shortError(e));
         } finally {
-          kbLlmProgress.done += 1;
+          // 失败也算「处理完」：进度条描述的是处理进度，不是成功率
+          kbLlmProgress.done += batch.length;
+          kbLlmProgress.doneBatches += 1;
+          kbLlmProgress.topics = merged.size;
         }
       }
     };
@@ -1805,9 +1828,13 @@ export function createApp({
     if (!merged.size) throw new Error(errors[0] || '模型没有给出可用的主题分组');
     // 分批 + 同义主题膨胀：再让模型做一次「上位主题」归并，主题数落到 10 个以内
     let groups = [...merged.values()];
-    try {
-      groups = await mergeTopicGroups(am, groups);
-    } catch (_) { /* 合并失败就按原样用 */ }
+    if (groups.length > 10) {
+      patchClusterProgress({ stage: 'merging', done: list.length, topics: groups.length });
+      try {
+        groups = await mergeTopicGroups(am, groups);
+      } catch (_) { /* 合并失败就按原样用 */ }
+    }
+    patchClusterProgress({ topics: groups.length });
     return { groups, errors, batches: batches.length };
   }
 
@@ -1822,6 +1849,11 @@ export function createApp({
     if (kbLlmBusy) return { ok: false, busy: true, error: '正在聚类中，请稍候' };
     kbLlmBusy = true;
     kbLlmError = '';
+    // 先占个位：面板一打开就能看到「正在准备文献清单」，而不是空白等第一批结果
+    kbLlmProgress = {
+      stage: 'preparing', done: 0, total: (kbIndex.entries || []).length,
+      batches: 0, doneBatches: 0, topics: 0, startedAt: Date.now(),
+    };
     try {
       const { groups, errors } = await requestLlmClusters(am, kbIndex.entries);
       const prev = kbLlmClusters;
@@ -1831,6 +1863,7 @@ export function createApp({
         model: String(am.label || am.model || ''),
         groups,
       };
+      patchClusterProgress({ stage: 'applying', done: kbLlmProgress.total });
       rebuildGraphOnly();
       // 模型把 ID 改写成了序号之类 → 一条也对不上，别让用户以为聚类成功了
       if (kbGraphCache.method !== 'llm') {
@@ -1848,7 +1881,12 @@ export function createApp({
       return { ok: false, error: '大模型聚类失败：' + kbLlmError };
     } finally {
       kbLlmBusy = false;
-      kbLlmProgress = null;
+      // 成功时留一份「已完成」快照：前端最后一次轮询正好落在收尾瞬间也能把进度条走满；
+      // 失败时清空，免得界面停在某个假的百分比上。
+      if (kbLlmProgress) {
+        if (kbLlmError) kbLlmProgress = null;
+        else patchClusterProgress({ stage: 'done', done: kbLlmProgress.total || kbLlmProgress.done });
+      }
     }
   }
 

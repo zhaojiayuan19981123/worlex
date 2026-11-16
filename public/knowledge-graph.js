@@ -161,6 +161,9 @@
     // 当前可见簇的布局形态：只剩一个主题时铺满画布（节点摊开，才看得清彼此关系）
     layout: { single: false, clusters: 0 },
     sim: { frame: 0, frames: FRAMES, running: false },
+    // 聚类进度轮询：timer 非 0 表示正在盯；inflight 防同一时刻叠两个请求；
+    // doneAt 记录上一次看到的聚类完成时间，用来判断结果是否换了（换了才重载图谱）。
+    watch: { timer: 0, inflight: false, doneAt: '', wasRunning: false, hideTimer: 0, sending: false, onFinish: null },
     raf: 0,
     ro: null,
     drag: null,
@@ -247,6 +250,26 @@
     const tip = el('div', 'kg-tip');
     tip.setAttribute('role', 'tooltip');
 
+    // 聚类进度浮层：盖在画布左上角，不遮旧图谱（聚类期间旧结果仍然可看可点）
+    const progress = el('div', 'kg-progress');
+    progress.hidden = true;
+    progress.setAttribute('role', 'status');
+    progress.setAttribute('aria-live', 'polite');
+    const pHead = el('div', 'kg-progress-head');
+    const pDot = el('span', 'kg-progress-dot');
+    const pText = el('span', 'kg-progress-text', '');
+    const pPct = el('span', 'kg-progress-pct', '');
+    pHead.appendChild(pDot);
+    pHead.appendChild(pText);
+    pHead.appendChild(pPct);
+    const pTrack = el('div', 'kg-progress-track');
+    const pFill = el('div', 'kg-progress-fill');
+    pTrack.appendChild(pFill);
+    const pSub = el('div', 'kg-progress-sub', '');
+    progress.appendChild(pHead);
+    progress.appendChild(pTrack);
+    progress.appendChild(pSub);
+
     const status = el('div', 'kg-status');
     status.classList.add('is-off');
     status.setAttribute('aria-live', 'polite');
@@ -265,6 +288,7 @@
     mkZoom('复位', '重置视图', 1, true);
 
     stage.appendChild(tip);
+    stage.appendChild(progress);
     stage.appendChild(status);
     stage.appendChild(zoom);
 
@@ -281,7 +305,8 @@
     S.refs = {
       root, bar, search, sel, chk, rebuild, stats,
       main, stage, svg: svgRoot, viewport, clustersG, edgesG, nodesG,
-      tip, status, zoom, detail,
+      tip, progress, pText, pPct, pFill, pSub,
+      status, zoom, detail,
     };
   }
 
@@ -483,7 +508,14 @@
     } else {
       tips.push('按标题 / 关键词的词面相似度聚类，未调用大模型');
     }
-    if (c.running) tips.push('正在用大模型重新聚类…');
+    if (c.running) {
+      const p = c.progress || {};
+      const live = [];
+      if (p.stage && STAGE_TEXT[p.stage]) live.push(STAGE_TEXT[p.stage]);
+      if (p.total > 0) live.push(`已完成 ${Math.min(p.done || 0, p.total)}/${p.total} 篇`);
+      if (p.elapsedMs != null) live.push('已用时 ' + fmtDuration(p.elapsedMs));
+      tips.push(live.length ? '大模型聚类中：' + live.join(' · ') : '正在用大模型重新聚类…');
+    }
     else if (c.stale) tips.push('文献有更新，稍后会自动重新聚类');
     if (c.error) tips.push('上次大模型聚类失败：' + c.error);
     if (tips.length) box.title = tips.join('\n');
@@ -1298,32 +1330,210 @@
       .catch((err) => toast((err && err.message) || '标签保存失败', 'error'));
   }
 
+  // ==================== 聚类进度（轮询 + 浮层） ====================
+
+  // 后端把一次聚类拆成四段：准备清单 → 分批归类 → 合并同义主题 → 装配图谱。
+  // 每段的进度只有服务端知道，所以这里按秒轮询 /api/knowledge/status。
+  const STAGE_TEXT = {
+    preparing: '正在准备文献清单',
+    batching: '大模型正在分批归类',
+    merging: '正在合并同义主题',
+    applying: '正在装配图谱',
+    done: '聚类完成',
+  };
+
+  function fmtDuration(ms) {
+    const s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+    if (s < 60) return s + ' 秒';
+    const m = Math.floor(s / 60);
+    return m + ' 分 ' + String(s % 60).padStart(2, '0') + ' 秒';
+  }
+
+  /** 各阶段在整轮里占的百分比：归类占 5~90%，合并 92%，装配 97%，完成 100%。 */
+  function clusterPct(c) {
+    if (!c || !c.running) return 100;
+    const p = c.progress || {};
+    const stage = p.stage || 'preparing';
+    if (stage === 'merging') return 92;
+    if (stage === 'applying') return 97;
+    if (stage === 'batching' && p.total > 0) {
+      const ratio = Math.max(0, Math.min(1, (p.done || 0) / p.total));
+      return 5 + ratio * 85;
+    }
+    return 4;
+  }
+
+  /** 按钮文字跟着进度走：画布可能被详情面板挡住一半，眼睛在按钮上也能看见百分比。 */
+  function syncRebuildButton(pct, done) {
+    const b = S.refs.rebuild;
+    if (!b) return;
+    if (!b.dataset.label) b.dataset.label = b.textContent || 'AI 重新聚类';
+    const busy = !done && (S.watch.sending || S.watch.wasRunning);
+    b.disabled = busy;
+    b.textContent = busy
+      ? (pct == null ? '聚类中…' : '聚类中 ' + Math.round(pct) + '%')
+      : (b.dataset.label || 'AI 重新聚类');
+  }
+
+  function paintProgress(c, done) {
+    const r = S.refs;
+    if (!r.progress) return;
+    const p = (c && c.progress) || null;
+    const pct = done ? 100 : clusterPct(c);
+    const stage = done ? 'done' : ((p && p.stage) || 'preparing');
+    let text = STAGE_TEXT[stage] || '正在聚类';
+    // 「0/3 批」这种还没开始就报数的写法很怪，第一批回来之后才显示批次进度
+    if (!done && stage === 'batching' && p && p.batches && p.doneBatches > 0) {
+      text += '（已完成 ' + Math.min(p.doneBatches, p.batches) + '/' + p.batches + ' 批）';
+    }
+    if (!done && stage === 'merging' && p && p.topics) text += '（' + p.topics + ' 个）';
+    r.pText.textContent = text;
+    r.pPct.textContent = Math.round(pct) + '%';
+    r.pFill.style.width = Math.max(2, Math.min(100, pct)).toFixed(1) + '%';
+    const sub = [];
+    if (p && p.total > 0) sub.push('已完成 ' + Math.min(p.done || 0, p.total) + '/' + p.total + ' 篇');
+    if (p && p.topics > 0) sub.push('已归纳 ' + p.topics + ' 个主题');
+    if (p && p.elapsedMs != null) sub.push((done ? '用时 ' : '已用时 ') + fmtDuration(p.elapsedMs));
+    r.pSub.textContent = sub.join(' · ');
+    r.progress.hidden = false;
+    r.progress.classList.toggle('is-done', !!done);
+    r.progress.dataset.state = done ? 'done' : 'busy';
+    syncRebuildButton(pct, !!done);
+  }
+
+  /** 完成态停留几秒再收起，给 100% 一个被看见的机会。 */
+  function finishProgress(c) {
+    paintProgress(c, true);
+    if (S.watch.hideTimer) window.clearTimeout(S.watch.hideTimer);
+    S.watch.hideTimer = window.setTimeout(() => {
+      S.watch.hideTimer = 0;
+      const r = S.refs;
+      if (r.progress) r.progress.hidden = true;
+    }, 3600);
+  }
+
+  function hideProgress() {
+    if (S.watch.hideTimer) { window.clearTimeout(S.watch.hideTimer); S.watch.hideTimer = 0; }
+    const r = S.refs;
+    if (!r.progress) return;
+    r.progress.hidden = true;
+    r.progress.classList.remove('is-done');
+    r.progress.dataset.state = '';
+  }
+
+  function stopWatch() {
+    if (S.watch.timer) { window.clearTimeout(S.watch.timer); S.watch.timer = 0; }
+    S.watch.inflight = false;
+  }
+
+  /**
+   * 盯住这一轮聚类：每秒读一次 status，跑完时收尾。
+   * @param {object} seed            首个 clustering 快照（可为 {running:true}）
+   * @param {Function} [onFinish]    结束时回调 (clustering, changed)；不传则「结果有变就重载图谱」
+   */
+  function startWatch(seed, onFinish) {
+    if (!S.refs.progress) return;
+    if (seed) {
+      S.watch.wasRunning = true;
+      if (seed.at) S.watch.doneAt = seed.at;
+      if (typeof onFinish === 'function') S.watch.onFinish = onFinish;
+      paintProgress(seed, false);
+    }
+    if (S.watch.timer) return;              // 已经在盯了，别叠第二个定时器
+    const tick = async () => {
+      S.watch.timer = 0;
+      if (!S.mounted || !S.refs.progress) return;
+      if (!S.watch.inflight) {
+        S.watch.inflight = true;
+        let c = null;
+        try {
+          const st = await api('/api/knowledge/status');
+          c = (st && st.clustering) || null;
+        } catch (_) { c = null; }        // 单个请求失败不算结束，下一拍再试
+        S.watch.inflight = false;
+        if (!S.mounted || !S.refs.progress) return;
+        if (c && c.running) {
+          S.watch.wasRunning = true;
+          paintProgress(c, false);
+        } else if (S.watch.wasRunning) {
+          S.watch.wasRunning = false;
+          finishProgress(c);
+          const at = (c && c.at) || '';
+          const changed = !!at && at !== S.watch.doneAt;
+          S.watch.doneAt = at;
+          const cb = S.watch.onFinish;
+          S.watch.onFinish = null;
+          if (typeof cb === 'function') {
+            try { cb(c, changed); } catch (_) { /* 回调出错不影响界面 */ }
+          } else if (changed) {
+            load();
+          }
+          return;                        // 收尾了，不再续拍
+        } else {
+          hideProgress();
+        }
+      }
+      if (!S.watch.timer) S.watch.timer = window.setTimeout(tick, 1000);
+    };
+    S.watch.timer = window.setTimeout(tick, 900);
+  }
+
   function rebuild() {
-    const buttons = S.root ? S.root.querySelectorAll('.kg-rebuild') : [];
-    buttons.forEach((b) => {
-      b.disabled = true;
-      if (!b.dataset.label) b.dataset.label = b.textContent || 'AI 重新聚类';
-      b.textContent = '聚类中…';
-    });
-    // 走「大模型聚类」而不是本地重建：本地词面相似度常把中文文献熔成一两坨
-    setStatus('loading', '正在用大模型按研究主题归类…文献多时会分几批跑，约 1~3 分钟');
-    api('/api/knowledge/recluster', { method: 'POST' })
+    if (S.watch.sending) return;
+    // 后台已经在跑（加完文献 6 秒后自动触发的那种）→ 不再发一次请求，直接切到进度显示
+    api('/api/knowledge/status')
+      .then((st) => {
+        const c = (st && st.clustering) || {};
+        if (c.running) {
+          toast('后台正在聚类，已切换到进度显示');
+          startWatch(c, null);
+          return;
+        }
+        return sendRecluster();
+      })
+      .catch(() => sendRecluster());
+  }
+
+  function sendRecluster() {
+    if (S.watch.sending) return;
+    S.watch.sending = true;
+    // 旧图谱保持可见可点：聚类是后台换分类，没必要把画面清空
+    startWatch({ running: true, progress: null }, () => { /* 由下面的 finally 收尾 */ });
+    let ok = false;
+    let keepWatching = false;   // 这一轮其实是别人在跑（409），轮询要留着
+    return api('/api/knowledge/recluster', { method: 'POST' })
       .then((d) => {
+        ok = true;
         const t = Array.isArray(d && d.topics) ? d.topics.length : 0;
         const warn = d && d.warning ? `（部分失败：${d.warning}）` : '';
         toast(t ? `已用大模型分成 ${t} 个主题${warn}` : `已重新聚类${warn}`, warn ? 'info' : 'success');
         return load();
       })
       .catch((err) => {
+        if (err && err.status === 409) {          // 别人抢先起了：继续看进度就行
+          toast('已有聚类在进行，改为显示进度');
+          keepWatching = true;
+          return null;
+        }
         const msg = (err && err.message) || '重新聚类失败';
         toast(msg + '（已保留当前聚类结果）', 'error');
         return load();
       })
       .finally(() => {
-        buttons.forEach((b) => {
-          b.disabled = false;
-          b.textContent = b.dataset.label || 'AI 重新聚类';
-        });
+        S.watch.sending = false;
+        const c = (S.data && S.data.clustering) || null;
+        if (keepWatching || (c && c.running)) {
+          // 不是这一趟能收的尾：保持轮询，交给 tick 自己判断结束
+          S.watch.onFinish = null;
+          startWatch(c && c.running ? c : { running: true }, null);
+          return;
+        }
+        stopWatch();
+        S.watch.wasRunning = false;
+        S.watch.onFinish = null;
+        if (ok) finishProgress(c);
+        else hideProgress();
+        syncRebuildButton(null, true);
       });
   }
 
@@ -1401,7 +1611,12 @@
       if (!data || !Array.isArray(data.nodes)) throw new Error('返回数据格式不正确');
       S.data = data;
       S.items = itemsById();
-      if (S.mounted) apply();
+      if (S.mounted) {
+        apply();
+        // 后台自动聚类还在跑（加完文献那种）：把进度挂上，跑完自动刷新图谱
+        const c = data.clustering;
+        if (c && c.running && !S.watch.sending) startWatch(c, null);
+      }
     } catch (err) {
       if (S.mounted) setStatus('error', (err && err.message) || '未知错误');
     }
@@ -1426,6 +1641,9 @@
   function close() {
     if (S.raf) { window.cancelAnimationFrame(S.raf); S.raf = 0; }
     S.sim.running = false;
+    stopWatch();
+    if (S.watch.hideTimer) { window.clearTimeout(S.watch.hideTimer); S.watch.hideTimer = 0; }
+    S.watch = { timer: 0, inflight: false, doneAt: '', wasRunning: false, hideTimer: 0, sending: false, onFinish: null };
     if (S.ro) { try { S.ro.disconnect(); } catch (_) { /* ignore */ } S.ro = null; }
     ['global', 'nodes', 'detail', 'status'].forEach(clearBucket);
     hideTip();
