@@ -1,3 +1,51 @@
+## v2.1.10：阅读器内可就地改翻译引擎 + 排序改「按阅读热力」（2026-11-17）
+
+> 用户反馈：`对于划词翻译以及整篇翻译是要显示当前翻译引擎，同时也要能够支持修改引擎啊！！`
+> —— v2.1.9 把四处都做成只读标签，显示是有了，但想临时换引擎还得跑设置页。
+
+### 一、引擎：三处改回下拉，但仍是同一个全局值
+
+| 位置 | 元素 | 以前 | 现在 |
+| --- | --- | --- | --- |
+| 划词翻译面板 | `#prSelSource` | 只读标签 | `<select>`（前面加「翻译引擎」小标签 `.tr-engine-lead`） |
+| 整篇翻译启动卡 | `#cmpEngine` | 只读标签 | `<select class="tb-select w100">` |
+| 对照精读工具条 | `#cmpEngineChip` | 只读标签 | `<select class="cmp-bar-engine cmp-engine-chip">` |
+| 笔记模式中栏 | `#pnEngineChip` | 只读标签 | 保持只读（那里不是翻译入口，只负责显示） |
+
+- 选项由 `TR_ENGINE_ORDER`（与设置页下拉同序）+ `TR_ENGINE_SHORT`（窄处短名）生成；
+  `fillTrEngineSelects()` 用 `dataset.filled` 只填一次，避免每次刷新都把正在展开的下拉重置。
+- `renderTranslateEngine()` 现在既填选项、又设 `value` / `title`；遇到旧版设置里不在列表中的值，
+  末尾补一条 option，不让下拉显示成空。`title` 里写明「改这里 = 改设置里的翻译引擎」。
+- `setGlobalTranslateEngine(next, sourceId)`：
+  - **只 POST `{ translateProvider }`** —— 通用设置入口对 `dataDir` / 路由 / 代理有特殊处理，
+    带上会触发数据目录迁移，绝不能顺手打包整个 settings；
+  - 失败回滚到 `prev` 并 toast，成功用返回的 settings 覆盖本地；
+  - 选了需要 Key 的引擎（`TR_ENGINE_KEY_FIELD`：deepl / volcapi / youdaoapi / baidu / tencent）
+    而没填 Key 时，toast 直接说明「翻译会失败，请到设置补 Key」；
+  - `sourceId === 'prSelSource'` 且原文框有内容时，切完引擎立刻 `doPanelTranslate()` 重译，
+    避免屏幕上留着旧引擎的译文。
+- `bindEvents()` 里统一绑三处 `change`（`for (const id of TR_ENGINE_SELECTS)`），都带来源 id。
+- `init()` 在 `await loadModels()` 之后补一次 `renderTranslateEngine()`：
+  「当前大模型 · 模型名」里的模型名要等模型列表回来才有，否则永远显示成「当前激活的大模型」。
+
+### 二、文献中心排序：`#sortField` 的「按期刊」→「按阅读热力」
+
+- `index.html`：`<option value="journal">按期刊</option>` → `<option value="readingHeat">按阅读热力</option>`。
+- `filteredItems()` 的 `cmp` 新增 `f === 'readingHeat'` 分支：数值比较，
+  取数走 `window.ReadingHeat.total(id)`（与顶部「热 / 冷」筛选同一口径），
+  计时模块不可用时退回 `it.readingHeat?.total`。
+- 没有持久化排序选择（与改造前一致，每次启动仍是「默认排序」）。
+
+### 三、验证
+
+- 单测 **831/831**（Node 22.22.2）；新增 `test/v2110-features.test.mjs` 5 条，
+  另修正 `test/v219-features.test.mjs` 里「必须是只读 span」的断言。
+- Playwright（`_pw/verify-v2110.mjs`，纯静态服务 + `page.route` 伪造 `/api/*`，不碰真实数据目录）：
+  三处下拉各 10 项、初值跟随 settings；改 deepl 后三处 + 笔记标签同步为 DeepL，
+  请求体只有 `{translateProvider:"deepl"}`；改 free / builtin 同样同步；
+  热力 1800/600/30 降序为 C‑A‑B、切升序为 B‑A‑C。
+  截图核对布局：划词面板下拉 335×33 不溢出；工具条下拉 122×24 下最长选项「火山翻译 · 网页」不截断。
+
 ## v2.1.9：设置简化 + 引擎全局化 + 笔记译文误报 + 原图旋转（2026-11-17）
 
 > 用户反馈（四条）：

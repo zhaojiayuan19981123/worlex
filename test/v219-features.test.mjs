@@ -31,17 +31,18 @@ test('设置页：视觉模型整块移除，不再有必填项', () => {
   assert.ok(!/visionProfileId:\s*\$\('setVisionProfile'\)/.test(js), '保存设置不该再读视觉模型下拉');
 });
 
-test('设置页：只剩「翻译引擎」一处，阅读器里不再提供引擎选择', () => {
+test('设置页：只剩「翻译引擎」一处，阅读器里不另存一份引擎状态', () => {
   const html = read('public/index.html');
   const js = read('public/app.js');
   // 「翻译源」这个第二开关彻底删掉
   assert.ok(!html.includes('prTranslateSource'), '设置页不该再有「翻译源」');
   assert.ok(!js.includes('prTranslateSource'), 'app.js 不该再读「翻译源」');
-  // 划词面板 / 笔记模式 / 对照精读工具条上的引擎位置改成只读标签
-  assert.match(html, /<span[^>]*id="prSelSource"[^>]*>引擎：/, '划词面板应是只读引擎标签');
+  // 划词面板 / 笔记模式 / 对照精读工具条上都能看到引擎
+  // （v2.1.10 起划词 / 整篇 / 工具条这三处是可选下拉，见 v2110-features.test.mjs）
+  assert.match(html, /id="prSelSource"/, '划词面板应显示当前引擎');
   assert.match(html, /id="pnEngineChip"/, '笔记模式应显示当前引擎');
-  assert.match(html, /id="cmpEngineChip"[^>]*>引擎：/, '对照精读工具条应显示当前引擎');
-  assert.match(html, /<span[^>]*id="cmpEngine"[^>]*>/, '整篇翻译面板的引擎应是只读标签（不是下拉）');
+  assert.match(html, /id="cmpEngineChip"/, '对照精读工具条应显示当前引擎');
+  assert.match(html, /id="cmpEngine"/, '整篇翻译面板应显示当前引擎');
   // 所有单段翻译请求都不再自带 provider（交给服务端按全局设置决定）
   const sendSeg = between(js, 'async function cmpTranslateBlock(', 'const joined =');
   assert.ok(!/body:\s*JSON\.stringify\(\{\s*text,\s*target,\s*provider/.test(sendSeg), '单段翻译不该再带 provider');

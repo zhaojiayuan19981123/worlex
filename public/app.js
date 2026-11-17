@@ -783,6 +783,13 @@
     // 有搜索词时相关性是主序，这个 cmp 只在同分时决定次序；没搜索词时它就是唯一的排序规则
     const cmp = (a, b) => {
       let va = a[f] ?? '', vb = b[f] ?? '';
+      // 阅读热力：不在记录字段里，得问计时模块（和顶部「热 / 冷」筛选同一口径）
+      if (f === 'readingHeat') {
+        const H = window.ReadingHeat;
+        const heat = (it) => (H ? H.total(it.id) : Number(it.readingHeat?.total) || 0);
+        va = heat(a); vb = heat(b);
+        return sortOrder === 'asc' ? va - vb : vb - va;
+      }
       if (f === 'year' || f === 'rating') { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; return sortOrder === 'asc' ? va - vb : vb - va; }
       va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
       return sortOrder === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
@@ -3247,6 +3254,12 @@
 
     // 翻译提供方切换：即时显隐对应密钥字段
     $('setTranslateProvider').addEventListener('change', updateTranslateProviderFields);
+
+    // 阅读器里的引擎下拉（划词翻译 / 整篇翻译面板 / 对照精读工具条）：
+    // 三处改的是同一个全局值，改完立刻写回设置并同步所有显示
+    for (const id of TR_ENGINE_SELECTS) {
+      $(id)?.addEventListener('change', (e) => setGlobalTranslateEngine(e.target.value, id));
+    }
 
     // 全局字体/字号：下拉即预览，保存后持久化
     $('setAppFont').addEventListener('change', () => applyFont($('setAppFont').value));
@@ -10124,8 +10137,12 @@
   //
   // v2.1.9：删掉「翻译源」这个第二开关。原来设置页一个「翻译源」、划词面板一个
   // 「引擎」、对照精读再一个「翻译引擎」，三处各自记忆，用户选完 DeepL 发现
-  // 别处还在用内置模型。现在引擎只有一处设置（settings.translateProvider），
-  // 阅读器里只显示「当前用的是谁」，不再提供第二个选择。
+  // 别处还在用内置模型。现在引擎只有一处存储（settings.translateProvider）。
+  //
+  // v2.1.10：只读标签走向了另一个极端 —— 划词时想临时换 DeepL，得先关掉阅读器
+  // 跑一趟设置页，回来还得重翻。所以划词面板 / 整篇翻译面板 / 对照精读工具条
+  // 三处的引擎改成可选下拉：就地改，改的就是那**同一个全局值**（写回 /api/settings），
+  // 改完三处 + 设置页 + 笔记标签同步刷新，不存在第二份状态。
 
   /** 引擎 id → 展示名。刻意写死中文短名：接口返回的 label 带「（需单独 Key）」这类后缀，放进按钮太长 */
   const TR_ENGINE_LABEL = {
@@ -10141,6 +10158,32 @@
     free: '免费接口',
   };
 
+  /** 下拉里的短名：面板 / 工具条宽度有限，完整名放到 title 里 */
+  const TR_ENGINE_SHORT = {
+    builtin: '内置模型（免费）',
+    siliconflow: '当前大模型',
+    deepl: 'DeepL',
+    volcweb: '火山翻译 · 网页',
+    youdaoweb: '有道翻译 · 网页',
+    volcapi: '火山引擎',
+    youdaoapi: '有道智云',
+    baidu: '百度翻译',
+    tencent: '腾讯云',
+    free: '免费接口',
+  };
+  /** 顺序与设置页下拉一致，免得同一个引擎在两个列表里的位置对不上 */
+  const TR_ENGINE_ORDER = ['builtin', 'siliconflow', 'deepl', 'volcweb', 'youdaoweb', 'volcapi', 'youdaoapi', 'baidu', 'tencent', 'free'];
+  /** 需要单独 Key 的引擎 → [settings 字段, 字段名]。选了却没配 Key 当场提醒，别等翻译报错才发现 */
+  const TR_ENGINE_KEY_FIELD = {
+    deepl: ['deeplKey', 'DeepL API Key'],
+    volcapi: ['volcKey', '火山引擎 AccessKey'],
+    youdaoapi: ['youdaoKey', '有道智云密钥'],
+    baidu: ['baiduKey', '百度翻译密钥'],
+    tencent: ['tencentKey', '腾讯云密钥'],
+  };
+  /** 阅读器里三个「可改」的引擎下拉 */
+  const TR_ENGINE_SELECTS = ['prSelSource', 'cmpEngine', 'cmpEngineChip'];
+
   function trEngineName(id) {
     const key = id || settings?.translateProvider || 'siliconflow';
     if (key === 'siliconflow') {
@@ -10150,16 +10193,79 @@
     return TR_ENGINE_LABEL[key] || key;
   }
 
-  /** 把「引擎：XXX」刷到阅读器里所有需要显示引擎的位置 */
-  function renderTranslateEngine() {
-    const name = trEngineName();
-    for (const id of ['prSelSource', 'pnEngineChip', 'cmpEngineChip']) {
-      const el = $(id);
-      if (el) el.textContent = '引擎：' + name;
+  /** 三个下拉共用一份选项；只填一次，之后再调用不重建（避免把用户正在展开的下拉重置） */
+  function fillTrEngineSelects() {
+    const html = TR_ENGINE_ORDER
+      .map((k) => `<option value="${k}">${esc(TR_ENGINE_SHORT[k] || TR_ENGINE_LABEL[k] || k)}</option>`)
+      .join('');
+    for (const id of TR_ENGINE_SELECTS) {
+      const sel = $(id);
+      if (!sel || sel.dataset.filled === '1') continue;
+      sel.innerHTML = html;
+      sel.dataset.filled = '1';
     }
-    // 整篇翻译面板里自带「翻译引擎」这一栏标题，这里只写名字
-    const start = $('cmpEngine');
-    if (start) start.textContent = name;
+  }
+
+  /** 把当前引擎刷到阅读器里所有需要显示 / 可选的位置 */
+  function renderTranslateEngine() {
+    const cur = settings?.translateProvider || 'siliconflow';
+    const name = trEngineName();
+    fillTrEngineSelects();
+    for (const id of TR_ENGINE_SELECTS) {
+      const sel = $(id);
+      if (!sel) continue;
+      // 引擎可能来自旧版设置（值不在列表里）：补一条，别让下拉显示成空
+      if (!sel.querySelector(`option[value="${cur}"]`)) {
+        sel.insertAdjacentHTML('beforeend', `<option value="${esc(cur)}">${esc(name)}</option>`);
+      }
+      sel.value = cur;
+      sel.title = `当前引擎：${name}\n改这里 = 改「设置 → 翻译引擎」，划词 / 整篇 / 笔记一起生效`;
+    }
+    // 笔记模式只展示不修改（那里不是翻译入口）
+    const chip = $('pnEngineChip');
+    if (chip) {
+      chip.textContent = '引擎：' + name;
+      chip.title = '跟随全局设置（可在划词翻译 / 整篇翻译里改）';
+    }
+  }
+
+  /**
+   * 阅读器内改引擎：写回全局设置，所有显示同步。
+   * 不做「局部覆盖」——v2.1.9 的教训就是多处各记一套，用户以为换了其实没换。
+   */
+  async function setGlobalTranslateEngine(next, sourceId = '') {
+    const id = String(next || '');
+    if (!id) return;
+    const prev = settings?.translateProvider || 'siliconflow';
+    if (id === prev) return;
+    if (settings) settings.translateProvider = id;
+    renderTranslateEngine(); // 先就地响应，别等接口回来才动
+    try {
+      const saved = await api('/api/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        // 只提交这一个字段：通用设置入口对 dataDir / 路由 / 代理都做了特殊处理，带上反而危险
+        body: JSON.stringify({ translateProvider: id }),
+      });
+      if (saved && typeof saved === 'object') settings = { ...settings, ...saved };
+      renderTranslateEngine();
+    } catch (e) {
+      if (settings) settings.translateProvider = prev;
+      renderTranslateEngine();
+      toast('切换翻译引擎失败：' + e.message, 'error');
+      return;
+    }
+    // 选了要 Key 的引擎却没配 Key：这会直接体现成「翻译失败」，先说清楚
+    const need = TR_ENGINE_KEY_FIELD[id];
+    const hasKey = need ? !!String(settings?.[need[0]] || '').trim() : true;
+    if (need && !hasKey) {
+      toast(`已切到 ${trEngineName(id)}，但还没填 ${need[1]} —— 翻译会失败，请到「设置 → 翻译引擎」补上`, 'error');
+    } else {
+      toast(`翻译引擎已切换为：${trEngineName(id)}`, 'success');
+    }
+    // 划词面板里已经有原文：立刻用新引擎重译，不让屏幕上的译文还是旧引擎的
+    if (sourceId === 'prSelSource' && $('prSourceText')?.value.trim()) {
+      doPanelTranslate();
+    }
   }
 
   async function loadTranslateSources() {
@@ -15455,6 +15561,8 @@ a { color: #176b87; }
     // 否则首次渲染设置页时视觉模型下拉会显示成「自动」而丢掉用户已保存的指定。
     await loadModels();
     renderModelSwitcher();
+    // 「当前大模型」这个引擎名要带上模型名，而模型列表是上面这一句才有的：拿到后补刷一次
+    renderTranslateEngine();
     items.filter((i) => i.filename && !i.thumb).slice(0, 10).forEach((i) => ensureThumb(i));
     renderLibBar();
     switchView('home');

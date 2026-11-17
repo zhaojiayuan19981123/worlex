@@ -389,7 +389,7 @@
             <option value="year">按年份</option>
             <option value="title">按标题</option>
             <option value="rating">按评级</option>
-            <option value="journal">按期刊</option>
+            <option value="readingHeat">按阅读热力</option>
           </select>
           <button id="btnSortOrder" class="tb-btn"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>降序</button>
           <div class="tb-sep"></div>
@@ -1323,7 +1323,7 @@
         <label class="field"><span>easyScholar SecretKey</span><input id="setEasyKey" class="tb-input" type="password" placeholder="留空不查询" /></label>
         <div class="field-sep"></div>
         <h4 class="settings-group-title">翻译引擎</h4>
-        <p class="ml-desc" style="margin:-4px 0 8px">全局唯一：划词翻译、对照精读整篇翻译、笔记模式与全文翻译都使用这里选定的引擎。</p>
+        <p class="ml-desc" style="margin:-4px 0 8px">全局唯一：划词翻译、对照精读整篇翻译、笔记模式与全文翻译都用这一个引擎。划词面板和整篇翻译面板里也能直接换，换的是同一个值。</p>
         <label class="field"><span>翻译提供方</span>
           <select id="setTranslateProvider" class="tb-select w100">
             <option value="builtin">内置翻译模型（免费）</option>
@@ -1828,9 +1828,9 @@
           <p class="cmp-start-desc" id="cmpStartDesc"></p>
           <ol class="cmp-start-steps" id="cmpStartSteps"></ol>
           <div class="cmp-start-form">
-            <!-- v2.1.9：整篇翻译不再单独选引擎，与划词 / 笔记共用「设置 → 翻译引擎」 -->
+            <!-- v2.1.10：整篇翻译可以直接换引擎（全局值），不必绕到设置页去改 -->
             <div class="cmp-field"><span>翻译引擎</span>
-              <span class="tr-engine-chip" id="cmpEngine" title="在「设置 → 翻译引擎」里统一选择">读取中…</span>
+              <select id="cmpEngine" class="tb-select w100 tr-engine-select" title="全局生效：这里换了，划词 / 笔记 / 设置页一起变"></select>
             </div>
             <label class="cmp-field"><span>目标语言</span>
               <select id="cmpTarget" class="tb-select w100"></select>
@@ -1879,8 +1879,8 @@
           <option value="para">逐段配对</option>
           <option value="sentence">逐句配对</option>
         </select>
-        <!-- v2.1.9：工具条上直接显示当前全局引擎，不用点开任何面板就知道在用什么翻 -->
-        <span class="cmp-engine-chip tr-engine-chip" id="cmpEngineChip" title="在「设置 → 翻译引擎」里统一选择">引擎：—</span>
+        <!-- v2.1.10：工具条上既显示当前全局引擎，也能直接换（写回同一份全局设置） -->
+        <select class="cmp-bar-engine cmp-engine-chip tr-engine-select" id="cmpEngineChip" title="全局生效：这里换了，划词 / 笔记 / 设置页一起变"></select>
         <span class="cmp-engine-state" id="cmpEngineState"></span>
         <span class="cmp-hint" id="cmpSyncHint"></span>
         <span class="cmp-bar-spacer"></span>
@@ -2061,11 +2061,13 @@
         </div>
 
         <!-- ---------- 划词翻译 ----------
-             选中左侧 PDF / EPUB 文字后自动翻译到这里；引擎在顶部自选（跟随全局设置 / 指定模型 / 指定服务）。 -->
+             选中左侧 PDF / EPUB 文字后自动翻译到这里；引擎在顶部可直接换（换的是全局引擎）。 -->
         <div class="pr-panel-body pr-pane hidden" data-prpane="translate">
           <div class="pr-lang-row">
-            <!-- v2.1.9：引擎不再逐栏切换，统一跟随「设置 → 翻译引擎」，这里只显示当前用的是谁 -->
-            <span class="tr-engine-chip" id="prSelSource" title="在「设置 → 翻译引擎」里统一选择">引擎：—</span>
+            <!-- v2.1.10：引擎只有一份值（settings.translateProvider），但允许在这里就地改：
+                 改完即写回全局设置，笔记 / 对照精读 / 设置页三处同步，不会各记各的。 -->
+            <span class="tr-engine-lead">翻译引擎</span>
+            <select id="prSelSource" class="tb-select tr-engine-select" title="全局生效：这里换了，「设置 → 翻译引擎」和其它译文入口一起变"></select>
           </div>
           <textarea id="prSourceText" class="pr-src" placeholder="粘贴文本…"></textarea>
           <div class="pr-selection-options">

@@ -4085,6 +4085,10 @@ body.pn-resizing * { cursor: col-resize !important; }
 }
 .cmp-field > .tr-engine-chip { height: 32px; width: 100%; border-radius: 7px; padding: 0 10px; font-size: 12.5px; }
 .pn-head .tr-engine-chip { margin-left: auto; }
+/* v2.1.10：引擎从「只能看」改成「可以改」——划词面板 / 整篇翻译 / 对照精读工具条三处是下拉 */
+.tr-engine-lead { flex-shrink: 0; font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.pr-lang-row .tr-engine-select { flex: 1; min-width: 0; }
+.cmp-bar .tr-engine-select { border-radius: 6px; }
 /* 对照精读工具条比较挤：引擎标签只放一行、不换行，窄屏让位给块数统计 */
 .cmp-bar .cmp-engine-chip { height: 24px; font-size: 11px; flex-shrink: 0; max-width: 190px; }
 @media (max-width: 1120px) { .cmp-bar .cmp-engine-chip { display: none; } }
