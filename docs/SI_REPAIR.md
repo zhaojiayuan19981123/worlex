@@ -1,5 +1,54 @@
 # SI 征稿修复与接入说明
 
+## v2.2.4 官网核验与查询修复（2026-11-23）
+
+本节记录 v2.2.4 的官网来源核验、征稿解析和 ABS 查询修复。桌面安装包由仓库的标签发布工作流构建，可用平台及构建完成状态以 v2.2.4 GitHub Release 的实际附件为准。下文既有版本和验证记录保留为历史记录。
+
+### 官网入口与抓取规则
+
+- 新增 `scripts/audit-si-sources.mjs`、`src/specialIssueSourcePolicy.js` 和 `src/specialIssueSourceAudit.json`。166 本目录均有独立来源状态及候选主页；候选地址本身不是官网身份或征稿存在的证据。按期刊名拼接的地址、普通出版社品牌页和未核实聚合页不再成为默认征稿源。
+- 当前快照：74 本因 robots 禁止、robots 请求受限或无法安全核实而未自动访问；69 本官网访问受限；21 本仅主页身份确认；1 本仍未确认；1 本确认到当前征稿专题入口（JIBS）。以上合计 166 本，不能解读为已核实 166 个可用征稿入口。T&F 官方公开 JSON 另作为已核实聚合源覆盖其目录期刊。
+- Journal of Interactive Marketing 的 AMA 官方主页当前指向 Sage；主页中的 Special Issues 链接是 `/toc/` 已出版专刊。用户提供的 ScienceDirect 地址没有被当作已核实的当前征稿入口，也没有把已出版专刊导入为在征 SI。出版方修正为 Sage。
+- 核对 POMS、Wiley 和 JITM 官方资料后，修正 POM 为 Sage、JOM 为 Wiley、JITM 为 Association of Management，并更新候选主页。JITM 原站明确迁至 `home.thejitm.org`；新站在本次环境仍受访问限制。POMS 的征稿链接返回 404，故只记录主页确认，不认定征稿入口可用。
+- JBE 的 `https://link.springer.com/collections/hicgjgfhjd` 明确写有 “Closed for submissions”；快照保留关闭证据，移出已确认可投稿入口。同步时给出关闭诊断，不导入该专题。
+- Springer `/collections/` 主通知与相关论文链接分别处理，只提取主征稿，并读取侧栏 `submission-deadline`；不把文章标题误作独立征稿。过滤 Sage `/toc/`、`/loi/` 和明确关闭的专题。
+- 主页发现会保留所有符合条件的同源、同刊征稿链接，逐个请求、验证和记录诊断；不再静默限制前三个。166 本订阅均进入任务或明确的不可抓取诊断，不再截断第 120 个之后的任务。
+- T&F 公开接口经 HTTP 200 和字段结构复验，使用每页 100 条，遵守已记录的 10 秒访问间隔。本次 6 页可在默认 90 秒预算内完成；仍保留分页上限、超时和部分结果警告。JSON 响应直接走结构化解析，不送入 HTML 验证页解析器。
+
+### ABS 标注的实际完成范围
+
+每本目录固定展示 ABS 状态：已有返回等级、查询未返回 ABS、待查询。ABS 在 SI 卡片中优先显示，不因其他三类排名占位而隐藏。支持筛选当前组查询、全目录每批 20 本查询、七天缓存、最大每批 40 本、查询中切换视图后的状态恢复；显式空列表不会意外查询整个目录。失败项不会在同一轮无限重试。
+
+等级取自用户配置的 easyScholar，不把测试值写入真实目录。本次没有使用可用的真实密钥，也没有取得可逐条核验的正式 AJG 等级数据；**166 本的真实 ABS 数值尚未补齐，零条数值等级在本次验证中获得独立核实**。AJG 2024 官方介绍页在本环境返回 403。第三方响应的榜单年份也需要核对，不能未经证据统一标成 AJG 2024。没有 ABS 返回不等于未收录，当前目录也不宣称是官方认证的完整 ABS 名单。
+
+### 最终验证（北京时间）
+
+- Node.js 20.19.0：全套 `node --test --test-reporter=spec`，880 项通过，0 失败、0 跳过。新增覆盖官方来源证据、robots 规则、全目录覆盖、全部入口发现、Springer 主通知及侧栏日期、关闭通知、ABS 分批及缓存边界。
+- Edge 无头浏览器：166 行 ABS 状态、ABS 优先显示、筛选查询、全目录分批、缓存复用、查询期间关闭和重开、真实应用导航通过；390/768/1365 宽度下五个 SI 标签页无横向溢出，页面脚本错误为 0。等级接口使用明确标记的模拟数据，截图中的模拟等级不是真实排名；完整应用截图未填入模拟等级。
+- 最终源码真实联网同步于 2026-11-23 02:33:03 开始，耗时 52.596 秒，采用默认 90 秒预算、默认详情上限和已核实访问间隔，使用隔离数据。T&F 与 JIBS 两个来源成功，共 5 条未截止 SI，0 分页警告；JBE 关闭专题作为一条明确诊断排除。六本订阅中四本有返回，不能说六本都有征稿。
+
+| 期刊 | 主通知标题 | 截止日 |
+| --- | --- | --- |
+| Journal of International Business Studies | Special Issue on Microfoundations of International Business | 2026-11-30 |
+| Current Issues in Tourism | A Decade (2015-2025) of the Sustainable Development Goals (SDGs): Trends, Reflections, and Realignments in Hospitality and Tourism Research | 2026-12-01 |
+| Current Issues in Tourism | Tourism and the 2026 Middle East Crisis: International and Regional Implications | 2026-12-31 |
+| Asia Pacific Journal of Tourism Research | Walking and Working with AI: AI-Enabled Tourism Research and Practices | 2027-04-30 |
+| Journal of Sustainable Tourism | Sustainable Luxury Tourism: Opportunities, Tensions, and Impacts | 2027-05-31 |
+
+标题与日期仅为官方页面或接口当时返回的字段，不对专题中涉及的历史事件或研究论述背书。投稿前应重新核对开放状态、延期、摘要与全文阶段及时区。
+
+审计脚本遵守已获取的 robots 规则并限速，但没有对每一次自动 HTTP 重定向逐跳重新验证 robots；较早的部分受限记录也缺少完整 robots HTTP 元数据。运行时使用审计快照与间隔，不会动态重抓每个域名的 robots。因此本次不是对所有域名、所有重定向的实时合规保证。143 本受限记录不能当作无 SI；需要后续官网人工核实、有效授权渠道或用户粘贴导入。
+
+官方核对入口：
+
+- AMA JIM：`https://www.ama.org/journal-of-interactive-marketing/`
+- JIBS 主通知：`https://link.springer.com/collections/fbcifgfdga`
+- JBE 关闭专题：`https://link.springer.com/collections/hicgjgfhjd`
+- POMS：`https://www.poms.org/journal`
+- Wiley JOM：`https://onlinelibrary.wiley.com/journal/18731317`
+- JITM 迁址说明：`https://jitm.ubalt.edu/`
+- CABS AJG 2024：`https://www.charteredabs.org/academic-journal-guide/academic-journal-guide-2024`
+
 ## v2.2.3 补丁（2026-11-23）
 
 v2.2.3 移除失效的 Wiley 通用征稿入口及旧地址覆盖。支持主页发现的 Wiley 期刊使用目录内的 `journalUrl`，仅跟进主页列出的同刊官方征稿链接。用户配置的单刊征稿页优先。遇到 404、403/429 或无来源时，可在「抓取诊断」设置征稿页或粘贴导入。

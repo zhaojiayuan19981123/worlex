@@ -64,7 +64,7 @@
         </div>
         <div class="si-head-actions">
           <button class="tb-btn" data-si-act="add">${ico('plus')}添加 SI</button>
-          <button class="tb-btn" data-si-act="ranks">${ico('trophy')}期刊等级</button>
+          <button class="tb-btn" data-si-act="ranks" title="查询全部目录的 ABS 等级；使用已配置的 easyScholar 配额">${ico('trophy')}查询 ABS 等级</button>
           <button class="tb-btn accent" data-si-act="sync">${ico('refresh')}立即抓取</button>
         </div>
       </div>
@@ -271,7 +271,28 @@
       if (/SSCI|SCI/i.test(label)) return 'green';
       return 'gray';
     };
-    return rank.items.slice(0, limit).map((x) => `<span class="rank-chip rank-chip-${tone(x.label)}">${esc(x.label)} <b>${esc(x.value)}</b></span>`).join('');
+    const items = [...rank.items].sort((a, b) => Number(/^ABS$/i.test(b.label)) - Number(/^ABS$/i.test(a.label)));
+    return items.slice(0, limit).map((x) => `<span class="rank-chip rank-chip-${tone(x.label)}">${esc(x.label)} <b>${esc(x.value)}</b></span>`).join('');
+  }
+
+  function absChip(rank) {
+    const abs = rank?.items?.find((item) => /^ABS$/i.test(item.label) && String(item.value || '').trim());
+    const state = abs ? 'available' : rank?.queriedAt ? 'not-returned' : 'pending';
+    const title = rank?.queriedAt ? `easyScholar · 查询于 ${fmtTime(rank.queriedAt)}；未返回 ABS 不代表未收录` : '尚未查询 ABS；需配置 easyScholar SecretKey';
+    return `<span class="rank-chip rank-chip-${abs ? 'red' : 'gray'}" data-abs-state="${state}" title="${esc(title)}">ABS <b>${esc(abs ? abs.value : rank?.queriedAt ? '未返回' : '待查询')}</b></span>`;
+  }
+
+  function journalSource(j, d) {
+    const override = safeUrl(d.cfpOverrides?.[j.id]);
+    const source = j.sourceAudit || {};
+    const aggregate = (d.sources || []).find((entry) => entry.verified && entry.url === j.cfpUrl);
+    const labels = { 'cfp-confirmed': '征稿入口已核实', 'homepage-confirmed': '主页已核实 · 征稿待确认',
+      'access-limited': '官网访问受限', 'robots-restricted': '官网抓取受限', 'not-confirmed': '入口未确认' };
+    const label = override ? '自定义征稿入口' : aggregate ? '已核实出版社接口' : labels[source.state] || '入口未确认';
+    const url = override || safeUrl(j.cfpUrl) || safeUrl(j.journalUrl);
+    const checked = source.checks?.[0];
+    const title = [j.publisher, checked?.checkedAt, checked?.status ? `HTTP ${checked.status}` : '', source.note || ''].filter(Boolean).join(' · ');
+    return `<span class="si-journal-source" title="${esc(title)}">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ${ico('external', 'ico-sm')}</a>` : esc(label)}</span>`;
   }
 
   function issueCard(i, d) {
@@ -365,7 +386,7 @@
     const rows = Object.entries(d.sync || {});
     if (!rows.length) return emptyState('refresh', '尚无抓取记录', '订阅期刊或添加官方征稿页后点击立即抓取。');
     return `<div class="si-diagnostics">${rows.map(([key, s]) => {
-      const journal = (d.catalog || []).find((j) => j.id === key);
+      const journal = (d.catalog || []).find((j) => j.id === (s.journalId || key));
       const url = safeUrl(s.url);
       return `<section class="si-diagnostic">
         <b>${esc(journal?.title || key.replace(/^publisher:/, ''))}</b>
@@ -374,7 +395,7 @@
         ${(s.warnings || []).map((w) => `<p class="si-journal-line">${esc(w)}</p>`).join('')}
         <div class="si-actions">
           ${url ? `<a class="tb-btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ico('external')}打开官方来源</a>` : ''}
-          ${s.error && journal ? `<button class="tb-btn" data-si-act="configure-source" data-journal="${esc(key)}">设置征稿页</button>` : ''}
+          ${s.error && journal ? `<button class="tb-btn" data-si-act="configure-source" data-journal="${esc(journal.id)}">设置征稿页</button>` : ''}
           ${s.error && key !== 'ai' ? `<button class="tb-btn" data-si-act="paste-source" data-journal="${esc(journal?.id || '')}">粘贴导入</button>` : ''}
         </div>
       </section>`;
@@ -395,20 +416,22 @@
       <div class="si-manage-card">
         <h3>关注期刊</h3>
         <p>已选 ${selected.size} / ${catalog.length} 本 · 勾选即时保存，每日只抓取已选期刊的征稿页</p>
+        <p>ABS 来自 easyScholar 查询缓存；未返回不代表未收录。官网主页、征稿入口和访问限制分别标注。</p>
         <div class="si-preset-row"><span>方向预设</span>${presets.map(([id, x]) => `<button class="si-preset" data-si-preset="${esc(id)}">${esc(x.label)}</button>`).join('')}
           <button class="si-preset secondary" data-si-act="select-all">全选</button>
           <button class="si-preset secondary" data-si-act="clear-all">清空</button></div>
         <div class="si-filter-row">
           <label class="si-search-wrap">${ico('search', 'ico-sm')}<input class="si-input" id="siJournalQuery" type="search" placeholder="搜索期刊名 / 简称 / 出版社" value="${esc(S.journalQuery)}" autocomplete="off" aria-label="搜索 ABS 期刊"></label>
           <select class="si-select" id="siCategory" aria-label="按学科筛选"><option value="">全部学科</option>${(d.categories || []).map((c) => `<option value="${esc(c)}"${S.category === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>
+          <button class="tb-btn" data-si-act="ranks" data-si-rank-scope="visible" title="查询当前筛选范围，按每批 20 本使用 easyScholar 配额">${ico('trophy')}查询本组 ABS</button>
         </div>
         ${groups.length ? groups.map((g) => {
           const list = filtered.filter((j) => j.category === g);
           return `<section class="si-journal-group"><div class="si-group-head"><b>${esc(g)}</b><button class="as-link" data-si-category="${esc(g)}">全选此类</button></div>
             <div class="si-journal-options">${list.map((j) => `<label title="${esc(j.title)}">
               <input type="checkbox" data-si-journal="${esc(j.id)}" ${selected.has(j.id) ? 'checked' : ''}>
-              <span><b>${esc(j.shortTitle)}</b><small>${esc(j.title)}</small></span>
-              ${rankChips(d.ranks?.[j.id], 1) ? `<span class="si-rank-wrap">${rankChips(d.ranks[j.id], 1)}</span>` : `<span class="si-journal-line">${esc(j.publisher)}</span>`}
+              <span><b>${esc(j.shortTitle)}</b><small>${esc(j.title)}</small>${journalSource(j, d)}</span>
+              <span class="si-rank-wrap">${absChip(d.ranks?.[j.id])}</span>
             </label>`).join('')}</div></section>`;
         }).join('') : emptyState('search', '没有匹配的期刊', '换个关键词或学科再试')}
       </div>
@@ -704,11 +727,7 @@
       return;
     }
     if (act === 'ranks') {
-      post('/api/special-issues/ranks/refresh', {}, 'ranks').then(async (r) => {
-        if (!r) return;
-        toast(r.errors?.length ? `更新 ${Number(r.refreshed || 0)} 本，${r.errors.length} 本查询失败：${r.errors[0].error}` : r.refreshed ? `已更新 ${r.refreshed} 本期刊等级` : '暂无需要更新的期刊等级', r.errors?.length ? 'error' : 'success');
-        await load();
-      });
+      refreshAbsRanks(node?.dataset.siRankScope === 'visible');
       return;
     }
     if (act === 'select-all') { saveSubscriptions((d.catalog || []).map((j) => j.id)); return; }
@@ -798,6 +817,36 @@
       S.overrideDraft.splice(Number(node.dataset.idx), 1);
       S.sourcesDirty = true;
       put('/api/special-issues/sources', sourceSettings());
+    }
+  }
+
+  async function refreshAbsRanks(visibleOnly) {
+    if (S.busy.has('ranks')) return;
+    const root = S.root;
+    const q = S.journalQuery.trim().toLowerCase();
+    let remaining = (S.data?.catalog || []).filter((j) => !visibleOnly || ((!S.category || j.category === S.category)
+      && (!q || `${j.title} ${j.shortTitle} ${j.category} ${j.publisher}`.toLowerCase().includes(q)))).map((j) => j.id);
+    if (!remaining.length) return;
+    let refreshed = 0;
+    const errors = [];
+    const buttons = [...S.root.querySelectorAll('[data-si-act="ranks"]')].map((button) => [button, button.innerHTML]);
+    S.busy.add('ranks'); render();
+    try {
+      do {
+        const result = await api('/api/special-issues/ranks/refresh', { method: 'POST', body: { journalIds: remaining, limit: 20 } });
+        refreshed += Number(result.refreshed || 0);
+        errors.push(...(result.errors || []));
+        remaining = result.remainingJournalIds || [];
+        if (!S.mounted || S.root !== root) return;
+        S.data = result; render();
+        S.root.querySelectorAll('[data-si-act="ranks"]').forEach((button) => { button.textContent = `已更新 ${refreshed} · 待查 ${remaining.length}`; });
+      } while (remaining.length);
+      toast(errors.length ? `更新 ${refreshed} 本，${errors.length} 本失败：${errors[0].error}` : refreshed ? `已更新 ${refreshed} 本期刊等级` : '当前范围的等级缓存仍有效', errors.length ? 'error' : 'success');
+    } catch (error) { if (S.root === root) toast(`已更新 ${refreshed} 本；${error.message || '查询中断'}`, 'error'); }
+    finally {
+      S.busy.delete('ranks');
+      for (const [button, html] of buttons) if (button.isConnected) button.innerHTML = html;
+      if (S.mounted) { render(); await load(); }
     }
   }
 

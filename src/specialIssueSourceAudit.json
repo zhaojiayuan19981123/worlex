@@ -1,0 +1,2113 @@
+{
+  "checkedAt": "2026-11-22T18:32:48.688Z",
+  "method": "Official homepage identity check, linked CFP discovery, robots.txt and HTTP evidence. Restricted and unconfirmed pages are not verified CFPs.",
+  "journals": {
+    "jae": {
+      "id": "jae",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-accounting-and-economics",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "aos": {
+      "id": "aos",
+      "journalUrl": "https://www.sciencedirect.com/journal/accounting-organizations-and-society",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jar": {
+      "id": "jar",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/1475679X",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/1475679X",
+          "url": "https://onlinelibrary.wiley.com/journal/1475679X",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:54.644Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "japp": {
+      "id": "japp",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-accounting-and-public-policy",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "mar": {
+      "id": "mar",
+      "journalUrl": "https://www.sciencedirect.com/journal/management-accounting-research",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "bar": {
+      "id": "bar",
+      "journalUrl": "https://www.sciencedirect.com/journal/the-british-accounting-review",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "tar": {
+      "id": "tar",
+      "journalUrl": "https://publications.aaahq.org/accounting-review",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://publications.aaahq.org/accounting-review",
+          "url": "https://publications.aaahq.org/accounting-review",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:54.650Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ras": {
+      "id": "ras",
+      "journalUrl": "https://link.springer.com/journal/11142",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "homepage-confirmed",
+      "checkedAt": "2026-11-22T18:15:08.182Z",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/11142",
+          "url": "https://link.springer.com/journal/11142?error=cookies_not_supported&code=fba674e8-39c7-4e00-bbb9-86dc884acf33",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:15:08.182Z",
+          "title": "Home | Review of Accounting Studies | Springer Nature Link"
+        }
+      ]
+    },
+    "abr": {
+      "id": "abr",
+      "journalUrl": "https://www.tandfonline.com/journals/rabr20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rabr20",
+          "url": "https://www.tandfonline.com/journals/rabr20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:56.985Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "car": {
+      "id": "car",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/19113846",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/19113846",
+          "url": "https://onlinelibrary.wiley.com/journal/19113846",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:57.094Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jcaae": {
+      "id": "jcaae",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-contemporary-accounting-and-economics",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ah": {
+      "id": "ah",
+      "journalUrl": "https://publications.aaahq.org/accounting-horizons",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://publications.aaahq.org/accounting-horizons",
+          "url": "https://publications.aaahq.org/accounting-horizons",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:57.167Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jfe": {
+      "id": "jfe",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-financial-economics",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ijoa": {
+      "id": "ijoa",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/10991123",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/10991123",
+          "url": "https://onlinelibrary.wiley.com/journal/10991123",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:59.208Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ajpt": {
+      "id": "ajpt",
+      "journalUrl": "https://publications.aaahq.org/ajpt",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://publications.aaahq.org/ajpt",
+          "url": "https://publications.aaahq.org/ajpt",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:59.257Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jbf": {
+      "id": "jbf",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-banking-and-finance",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jcf": {
+      "id": "jcf",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-corporate-finance",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "af": {
+      "id": "af",
+      "journalUrl": "https://www.tandfonline.com/journals/racc20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/racc20",
+          "url": "https://www.tandfonline.com/journals/racc20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:59.496Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "rfs": {
+      "id": "rfs",
+      "journalUrl": "https://academic.oup.com/rfs",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/rfs",
+          "url": "https://academic.oup.com/rfs",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:06:59.512Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jfm": {
+      "id": "jfm",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-financial-markets",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jfi": {
+      "id": "jfi",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-financial-intermediation",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jfqa": {
+      "id": "jfqa",
+      "journalUrl": "https://www.cambridge.org/core/journals/journal-of-financial-and-quantitative-analysis",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jimf": {
+      "id": "jimf",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-international-money-and-finance",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "irfa": {
+      "id": "irfa",
+      "journalUrl": "https://www.sciencedirect.com/journal/international-review-of-financial-analysis",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jef": {
+      "id": "jef",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-empirical-finance",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jof": {
+      "id": "jof",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15406261",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15406261",
+          "url": "https://onlinelibrary.wiley.com/journal/15406261",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:01.304Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "frl": {
+      "id": "frl",
+      "journalUrl": "https://www.sciencedirect.com/journal/finance-research-letters",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "pbfj": {
+      "id": "pbfj",
+      "journalUrl": "https://www.sciencedirect.com/journal/pacific-basin-finance-journal",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ear": {
+      "id": "ear",
+      "journalUrl": "https://www.tandfonline.com/journals/rear20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rear20",
+          "url": "https://www.tandfonline.com/journals/rear20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:01.591Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "rof": {
+      "id": "rof",
+      "journalUrl": "https://academic.oup.com/rof",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/rof",
+          "url": "https://academic.oup.com/rof",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:02.049Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "fm": {
+      "id": "fm",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/1755053X",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/1755053X",
+          "url": "https://onlinelibrary.wiley.com/journal/1755053X",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:03.432Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jbfin": {
+      "id": "jbfin",
+      "journalUrl": "https://www.tandfonline.com/journals/hbhf20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/hbhf20",
+          "url": "https://www.tandfonline.com/journals/hbhf20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:03.684Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ms": {
+      "id": "ms",
+      "journalUrl": "https://pubsonline.informs.org/journal/mnsc",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/mnsc",
+          "url": "https://pubsonline.informs.org/journal/mnsc",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:03.876Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jom": {
+      "id": "jom",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/18731317",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "access-limited",
+      "checkedAt": "2026-11-22T18:32:34.153Z",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/18731317",
+          "url": "https://onlinelibrary.wiley.com/journal/18731317",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:32:34.153Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ejor": {
+      "id": "ejor",
+      "journalUrl": "https://www.sciencedirect.com/journal/european-journal-of-operational-research",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jmcb": {
+      "id": "jmcb",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15384616",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15384616",
+          "url": "https://onlinelibrary.wiley.com/journal/15384616",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:05.504Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "omega": {
+      "id": "omega",
+      "journalUrl": "https://www.sciencedirect.com/journal/omega",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ijpe": {
+      "id": "ijpe",
+      "journalUrl": "https://www.sciencedirect.com/journal/international-journal-of-production-economics",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "or": {
+      "id": "or",
+      "journalUrl": "https://pubsonline.informs.org/journal/opre",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/opre",
+          "url": "https://pubsonline.informs.org/journal/opre",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:06.464Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ds": {
+      "id": "ds",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15405915",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "access-limited",
+      "checkedAt": "2026-11-22T18:15:07.154Z",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15405915",
+          "url": "https://onlinelibrary.wiley.com/journal/15405915",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:15:07.154Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "efm": {
+      "id": "efm",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/1468036X",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/1468036X",
+          "url": "https://onlinelibrary.wiley.com/journal/1468036X",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:07.609Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijopm": {
+      "id": "ijopm",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/ijopm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "scm": {
+      "id": "scm",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/scm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ijpr": {
+      "id": "ijpr",
+      "journalUrl": "https://www.tandfonline.com/journals/tprs20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/tprs20",
+          "url": "https://www.tandfonline.com/journals/tprs20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:08.263Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "msom": {
+      "id": "msom",
+      "journalUrl": "https://pubsonline.informs.org/journal/msom",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/msom",
+          "url": "https://pubsonline.informs.org/journal/msom",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:08.569Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jscm": {
+      "id": "jscm",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/1745493X",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/1745493X",
+          "url": "https://onlinelibrary.wiley.com/journal/1745493X",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:09.957Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "iise": {
+      "id": "iise",
+      "journalUrl": "https://www.tandfonline.com/journals/uiie21",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/uiie21",
+          "url": "https://www.tandfonline.com/journals/uiie21",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:10.613Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijoc": {
+      "id": "ijoc",
+      "journalUrl": "https://pubsonline.informs.org/journal/ijoc",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/ijoc",
+          "url": "https://pubsonline.informs.org/journal/ijoc",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:10.629Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "nrl": {
+      "id": "nrl",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15206750",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15206750",
+          "url": "https://onlinelibrary.wiley.com/journal/15206750",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:12.059Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jmis": {
+      "id": "jmis",
+      "journalUrl": "https://www.tandfonline.com/journals/mmis20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/mmis20",
+          "url": "https://www.tandfonline.com/journals/mmis20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:12.704Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "orsp": {
+      "id": "orsp",
+      "journalUrl": "https://link.springer.com/journal/291?error=cookies_not_supported&code=caa64c53-f57e-4935-9f3b-356df2327768",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/291",
+          "url": "https://link.springer.com/journal/291?error=cookies_not_supported&code=caa64c53-f57e-4935-9f3b-356df2327768",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:12.733Z",
+          "title": "Home | OR Spectrum | Springer Nature Link"
+        }
+      ]
+    },
+    "im": {
+      "id": "im",
+      "journalUrl": "https://www.sciencedirect.com/journal/information-and-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "dss": {
+      "id": "dss",
+      "journalUrl": "https://www.sciencedirect.com/journal/decision-support-systems",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "isr": {
+      "id": "isr",
+      "journalUrl": "https://pubsonline.informs.org/journal/isre",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/isre",
+          "url": "https://pubsonline.informs.org/journal/isre",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:12.910Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "misq": {
+      "id": "misq",
+      "journalUrl": "https://misq.umn.edu/",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://misq.umn.edu/",
+          "url": "https://misq.umn.edu/",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:12.951Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "pom": {
+      "id": "pom",
+      "journalUrl": "https://www.poms.org/journal",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "homepage-confirmed",
+      "checkedAt": "2026-11-22T18:32:34.438Z",
+      "checks": [
+        {
+          "requestedUrl": "https://www.poms.org/journal",
+          "url": "https://www.poms.org/journal",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:32:34.438Z",
+          "title": "POM Journal | Production and Operations Management Society"
+        }
+      ]
+    },
+    "jit": {
+      "id": "jit",
+      "journalUrl": "https://journals.sagepub.com/home/jina",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "chb": {
+      "id": "chb",
+      "journalUrl": "https://www.sciencedirect.com/journal/computers-in-human-behavior",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "isj": {
+      "id": "isj",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/13652575",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/13652575",
+          "url": "https://onlinelibrary.wiley.com/journal/13652575",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:13.894Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijim": {
+      "id": "ijim",
+      "journalUrl": "https://www.sciencedirect.com/journal/international-journal-of-information-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ejis": {
+      "id": "ejis",
+      "journalUrl": "https://www.tandfonline.com/journals/tjis20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/tjis20",
+          "url": "https://www.tandfonline.com/journals/tjis20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:15.082Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "iacr": {
+      "id": "iacr",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/intr",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jais": {
+      "id": "jais",
+      "journalUrl": "https://aisel.aisnet.org/jais/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://aisel.aisnet.org/jais/",
+          "url": "https://aisel.aisnet.org/jais/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:15.502Z",
+          "title": " Journal of the Association for Information Systems | AIS Journals | Association for Information Systems "
+        }
+      ]
+    },
+    "isf": {
+      "id": "isf",
+      "journalUrl": "https://link.springer.com/journal/10796?error=cookies_not_supported&code=a5c9aa86-1e24-4b55-a27b-d7889acca3a4",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/10796",
+          "url": "https://link.springer.com/journal/10796?error=cookies_not_supported&code=a5c9aa86-1e24-4b55-a27b-d7889acca3a4",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:15.956Z",
+          "title": "Home | Information Systems Frontiers | Springer Nature Link"
+        }
+      ]
+    },
+    "jm": {
+      "id": "jm",
+      "journalUrl": "https://www.ama.org/journal-of-marketing/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://www.ama.org/journal-of-marketing/",
+          "url": "https://www.ama.org/journal-of-marketing/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:17.770Z",
+          "title": "Journal of Marketing | American Marketing Association"
+        }
+      ]
+    },
+    "jcr": {
+      "id": "jcr",
+      "journalUrl": "https://academic.oup.com/jcr",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/jcr",
+          "url": "https://academic.oup.com/jcr",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:18.422Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "bise": {
+      "id": "bise",
+      "journalUrl": "https://link.springer.com/journal/12599?error=cookies_not_supported&code=99de46a9-702b-410a-9300-2c72b29ad51d",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/12599",
+          "url": "https://link.springer.com/journal/12599?error=cookies_not_supported&code=99de46a9-702b-410a-9300-2c72b29ad51d",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:18.486Z",
+          "title": "Home | Business & Information Systems Engineering | Springer Nature Link"
+        }
+      ]
+    },
+    "mksc": {
+      "id": "mksc",
+      "journalUrl": "https://pubsonline.informs.org/journal/mksc",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/mksc",
+          "url": "https://pubsonline.informs.org/journal/mksc",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:19.070Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jr": {
+      "id": "jr",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-retailing",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ijrm": {
+      "id": "ijrm",
+      "journalUrl": "https://www.sciencedirect.com/journal/international-journal-of-research-in-marketing",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jbr": {
+      "id": "jbr",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-business-research",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "aor": {
+      "id": "aor",
+      "journalUrl": "https://link.springer.com/journal/10479",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "homepage-confirmed",
+      "checkedAt": "2026-11-22T18:15:08.817Z",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/10479",
+          "url": "https://link.springer.com/journal/10479?error=cookies_not_supported&code=a9f9d237-6ded-4ee2-bd69-3762ca3d4dfe",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:15:08.817Z",
+          "title": "Home | Annals of Operations Research | Springer Nature Link"
+        }
+      ]
+    },
+    "jcp": {
+      "id": "jcp",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15327663",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15327663",
+          "url": "https://onlinelibrary.wiley.com/journal/15327663",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:19.620Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jar_res": {
+      "id": "jar_res",
+      "journalUrl": "https://journals.sagepub.com/home/jar",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jsr": {
+      "id": "jsr",
+      "journalUrl": "https://journals.sagepub.com/home/jsra",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jsm": {
+      "id": "jsm",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/jsm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ejm": {
+      "id": "ejm",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/ejm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "imm": {
+      "id": "imm",
+      "journalUrl": "https://www.sciencedirect.com/journal/industrial-marketing-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jpi": {
+      "id": "jpi",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15405885",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "access-limited",
+      "checkedAt": "2026-11-22T18:15:09.251Z",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15405885",
+          "url": "https://onlinelibrary.wiley.com/journal/15405885",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:15:09.251Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jmr": {
+      "id": "jmr",
+      "journalUrl": "https://www.ama.org/journal-of-marketing-research/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://www.ama.org/journal-of-marketing-research/",
+          "url": "https://www.ama.org/journal-of-marketing-research/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:19.836Z",
+          "title": "Journal of Marketing Research"
+        }
+      ]
+    },
+    "ja": {
+      "id": "ja",
+      "journalUrl": "https://www.tandfonline.com/journals/ujoa20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/ujoa20",
+          "url": "https://www.tandfonline.com/journals/ujoa20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:20.035Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "em": {
+      "id": "em",
+      "journalUrl": "https://link.springer.com/journal/12525?error=cookies_not_supported&code=2046eec9-176c-4370-8daf-4c8492d8e65c",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/12525",
+          "url": "https://link.springer.com/journal/12525?error=cookies_not_supported&code=2046eec9-176c-4370-8daf-4c8492d8e65c",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:20.111Z",
+          "title": "Home | Electronic Markets | Springer Nature Link"
+        }
+      ]
+    },
+    "jim": {
+      "id": "jim",
+      "journalUrl": "https://www.ama.org/journal-of-interactive-marketing/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://www.ama.org/journal-of-interactive-marketing/",
+          "url": "https://www.ama.org/journal-of-interactive-marketing/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:21.935Z",
+          "title": "Journal of Interactive Marketing"
+        }
+      ]
+    },
+    "jcm": {
+      "id": "jcm",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/jcm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "pam": {
+      "id": "pam",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15206793",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15206793",
+          "url": "https://onlinelibrary.wiley.com/journal/15206793",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:21.989Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jams": {
+      "id": "jams",
+      "journalUrl": "https://link.springer.com/journal/11747?error=cookies_not_supported&code=bd00641e-efe9-4b2e-937e-d9c3bd5b57ce",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/11747",
+          "url": "https://link.springer.com/journal/11747?error=cookies_not_supported&code=bd00641e-efe9-4b2e-937e-d9c3bd5b57ce",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:22.629Z",
+          "title": "Home | Journal of the Academy of Marketing Science | Springer Nature Link"
+        }
+      ]
+    },
+    "jppm": {
+      "id": "jppm",
+      "journalUrl": "https://www.ama.org/journal-of-public-policy-marketing/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://www.ama.org/journal-of-public-policy-marketing/",
+          "url": "https://www.ama.org/journal-of-public-policy-marketing/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:24.030Z",
+          "title": "Journal of Public Policy & Marketing"
+        }
+      ]
+    },
+    "asq": {
+      "id": "asq",
+      "journalUrl": "https://journals.sagepub.com/home/asqa",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ml": {
+      "id": "ml",
+      "journalUrl": "https://link.springer.com/journal/11002?error=cookies_not_supported&code=03a0edb3-b0dc-4864-b251-359a953ba011",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/11002",
+          "url": "https://link.springer.com/journal/11002?error=cookies_not_supported&code=03a0edb3-b0dc-4864-b251-359a953ba011",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:24.260Z",
+          "title": "Home | Marketing Letters | Springer Nature Link"
+        }
+      ]
+    },
+    "amj": {
+      "id": "amj",
+      "journalUrl": "https://journals.aom.org/journal/amj",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://journals.aom.org/journal/amj",
+          "url": "https://journals.aom.org/journal/amj",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:24.338Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jomg": {
+      "id": "jomg",
+      "journalUrl": "https://journals.sagepub.com/home/joma",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "smj": {
+      "id": "smj",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/10970266",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/10970266",
+          "url": "https://onlinelibrary.wiley.com/journal/10970266",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:24.576Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "os": {
+      "id": "os",
+      "journalUrl": "https://pubsonline.informs.org/journal/orsc",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://pubsonline.informs.org/journal/orsc",
+          "url": "https://pubsonline.informs.org/journal/orsc",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:24.913Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "obhdp": {
+      "id": "obhdp",
+      "journalUrl": "https://www.sciencedirect.com/journal/organizational-behavior-and-human-decision-processes",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jitm": {
+      "id": "jitm",
+      "journalUrl": "https://home.thejitm.org/index.shtml",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "robots": {
+        "requestedUrl": "https://home.thejitm.org/robots.txt",
+        "url": "https://home.thejitm.org/robots.txt",
+        "status": 0,
+        "checkedAt": "2026-11-22T18:32:31.933Z",
+        "error": "fetch failed"
+      },
+      "checkedAt": "2026-11-22T18:32:31.935Z",
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "pp": {
+      "id": "pp",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/17446570",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "access-limited",
+      "checkedAt": "2026-11-22T18:15:11.342Z",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/17446570",
+          "url": "https://onlinelibrary.wiley.com/journal/17446570",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:15:11.342Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jms": {
+      "id": "jms",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/14676486",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/14676486",
+          "url": "https://onlinelibrary.wiley.com/journal/14676486",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:26.709Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jbm": {
+      "id": "jbm",
+      "journalUrl": "https://link.springer.com/journal/41262?error=cookies_not_supported&code=deb152ae-2b1e-4510-b7ae-c4038166915e",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/41262",
+          "url": "https://link.springer.com/journal/41262?error=cookies_not_supported&code=deb152ae-2b1e-4510-b7ae-c4038166915e",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:26.842Z",
+          "title": "Home | Journal of Brand Management | Springer Nature Link"
+        }
+      ]
+    },
+    "cmr": {
+      "id": "cmr",
+      "journalUrl": "https://journals.sagepub.com/home/cmra",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "lrp": {
+      "id": "lrp",
+      "journalUrl": "https://www.sciencedirect.com/journal/long-range-planning",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "amr": {
+      "id": "amr",
+      "journalUrl": "https://journals.aom.org/journal/amr",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://journals.aom.org/journal/amr",
+          "url": "https://journals.aom.org/journal/amr",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:27.128Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jwb": {
+      "id": "jwb",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-world-business",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jap": {
+      "id": "jap",
+      "journalUrl": "https://www.apa.org/pubs/journals/apl",
+      "cfpUrl": "",
+      "state": "not-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://www.apa.org/pubs/journals/apl",
+          "url": "https://www.apa.org/pubs/journals/apl",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:27.344Z",
+          "title": ""
+        }
+      ],
+      "note": "HTTP 200 but journal identity was not confirmed."
+    },
+    "amp": {
+      "id": "amp",
+      "journalUrl": "https://journals.aom.org/journal/amp",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://journals.aom.org/journal/amp",
+          "url": "https://journals.aom.org/journal/amp",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:28.948Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "job": {
+      "id": "job",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/10991379",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/10991379",
+          "url": "https://onlinelibrary.wiley.com/journal/10991379",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:29.049Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "org": {
+      "id": "org",
+      "journalUrl": "https://journals.sagepub.com/home/orga",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "osr": {
+      "id": "osr",
+      "journalUrl": "https://journals.sagepub.com/home/ossa",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "humrel": {
+      "id": "humrel",
+      "journalUrl": "https://journals.sagepub.com/home/huma",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jbv": {
+      "id": "jbv",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-business-venturing",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "etp": {
+      "id": "etp",
+      "journalUrl": "https://journals.sagepub.com/home/etpb",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "hbr": {
+      "id": "hbr",
+      "journalUrl": "https://hbr.org/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://hbr.org/",
+          "url": "https://hbr.org/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:29.931Z",
+          "title": "Harvard Business Review - Ideas and Advice for Leaders"
+        }
+      ]
+    },
+    "bjmt": {
+      "id": "bjmt",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/14678551",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/14678551",
+          "url": "https://onlinelibrary.wiley.com/journal/14678551",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:30.915Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "rp": {
+      "id": "rp",
+      "journalUrl": "https://www.sciencedirect.com/journal/research-policy",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "tech": {
+      "id": "tech",
+      "journalUrl": "https://www.sciencedirect.com/journal/technovation",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "rdm": {
+      "id": "rdm",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/14679310",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "access-limited",
+      "checkedAt": "2026-11-22T18:15:13.455Z",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/14679310",
+          "url": "https://onlinelibrary.wiley.com/journal/14679310",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:15:13.455Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "sloan": {
+      "id": "sloan",
+      "journalUrl": "https://sloanreview.mit.edu/",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://sloanreview.mit.edu/",
+          "url": "https://sloanreview.mit.edu/",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:31.224Z",
+          "title": " MIT Sloan Management Review "
+        }
+      ]
+    },
+    "jetm": {
+      "id": "jetm",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-engineering-and-technology-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jkm": {
+      "id": "jkm",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/jkm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "tfs": {
+      "id": "tfs",
+      "journalUrl": "https://www.sciencedirect.com/journal/technological-forecasting-and-social-change",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "sbe": {
+      "id": "sbe",
+      "journalUrl": "https://link.springer.com/journal/11187?error=cookies_not_supported&code=dc6832c7-7ee9-4adb-8209-fa0f7d7b0136",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/11187",
+          "url": "https://link.springer.com/journal/11187?error=cookies_not_supported&code=dc6832c7-7ee9-4adb-8209-fa0f7d7b0136",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:31.715Z",
+          "title": "Home | Small Business Economics | Springer Nature Link"
+        }
+      ]
+    },
+    "tm": {
+      "id": "tm",
+      "journalUrl": "https://www.sciencedirect.com/journal/tourism-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "atr": {
+      "id": "atr",
+      "journalUrl": "https://www.sciencedirect.com/journal/annals-of-tourism-research",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jtr": {
+      "id": "jtr",
+      "journalUrl": "https://journals.sagepub.com/home/jtrb",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jost": {
+      "id": "jost",
+      "journalUrl": "https://www.tandfonline.com/journals/rsus20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rsus20",
+          "url": "https://www.tandfonline.com/journals/rsus20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:32.384Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijhm": {
+      "id": "ijhm",
+      "journalUrl": "https://www.sciencedirect.com/journal/international-journal-of-hospitality-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jhtr": {
+      "id": "jhtr",
+      "journalUrl": "https://journals.sagepub.com/home/jht",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "chq": {
+      "id": "chq",
+      "journalUrl": "https://journals.sagepub.com/home/cqx",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jdmm": {
+      "id": "jdmm",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-destination-marketing-and-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "gsj": {
+      "id": "gsj",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/20425805",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/20425805",
+          "url": "https://onlinelibrary.wiley.com/journal/20425805",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:32.994Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jibs": {
+      "id": "jibs",
+      "journalUrl": "https://link.springer.com/journal/41267",
+      "cfpUrl": "https://link.springer.com/collections/fbcifgfdga",
+      "cfpUrls": [
+        "https://link.springer.com/collections/fbcifgfdga"
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T18:28:08.356Z",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/41267",
+          "url": "https://link.springer.com/journal/41267?error=cookies_not_supported&code=cf3b8983-8f5b-425e-9239-dc693df1951c",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:28:08.356Z",
+          "title": "Home | Journal of International Business Studies | Springer Nature Link"
+        },
+        {
+          "requestedUrl": "https://link.springer.com/collections/fbcifgfdga",
+          "url": "https://link.springer.com/collections/fbcifgfdga?error=cookies_not_supported&code=b6803483-34b5-4f9d-bbe5-2f03f3847370",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:28:10.733Z",
+          "evidence": {
+            "confirmed": true,
+            "headings": "Call for Papers: Special Issue on Microfoundations of International Business | Springer Nature Link | Call for Papers: Special Issue on Microfoundations of International Business | info",
+            "identity": true,
+            "closed": false
+          }
+        }
+      ]
+    },
+    "jtf": {
+      "id": "jtf",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/jtf",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "tmp": {
+      "id": "tmp",
+      "journalUrl": "https://www.sciencedirect.com/journal/tourism-management-perspectives",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jhtm": {
+      "id": "jhtm",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-hospitality-and-tourism-management",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "tg": {
+      "id": "tg",
+      "journalUrl": "https://www.tandfonline.com/journals/rtxg20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rtxg20",
+          "url": "https://www.tandfonline.com/journals/rtxg20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:34.469Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijtm": {
+      "id": "ijtm",
+      "journalUrl": "https://www.inderscience.com/jhome.php?jcode=ijtm",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://www.inderscience.com/jhome.php?jcode=ijtm",
+          "url": "https://www.inderscience.com/jhome.php?jcode=ijtm",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:34.950Z",
+          "title": "International Journal of Technology Management (IJTM) Inderscience Publishers - linking academia, business and industry through research"
+        }
+      ]
+    },
+    "sej": {
+      "id": "sej",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/1932443X",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/1932443X",
+          "url": "https://onlinelibrary.wiley.com/journal/1932443X",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:35.096Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "te": {
+      "id": "te",
+      "journalUrl": "https://journals.sagepub.com/home/teu",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "cit": {
+      "id": "cit",
+      "journalUrl": "https://www.tandfonline.com/journals/rcit20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rcit20",
+          "url": "https://www.tandfonline.com/journals/rcit20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:36.596Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijtr": {
+      "id": "ijtr",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15221970",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15221970",
+          "url": "https://onlinelibrary.wiley.com/journal/15221970",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:37.198Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijcthr": {
+      "id": "ijcthr",
+      "journalUrl": "https://www.emeraldgrouppublishing.com/journal/ijchm",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "apjtr": {
+      "id": "apjtr",
+      "journalUrl": "https://www.tandfonline.com/journals/rapt20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rapt20",
+          "url": "https://www.tandfonline.com/journals/rapt20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:38.690Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jttm": {
+      "id": "jttm",
+      "journalUrl": "https://www.tandfonline.com/journals/wttm20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/wttm20",
+          "url": "https://www.tandfonline.com/journals/wttm20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:40.776Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ieee_tem": {
+      "id": "ieee_tem",
+      "journalUrl": "https://www.ieee-tems.org/ieee-transactions-on-engineering-management/",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "qje": {
+      "id": "qje",
+      "journalUrl": "https://academic.oup.com/qje",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/qje",
+          "url": "https://academic.oup.com/qje",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:41.431Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ecma": {
+      "id": "ecma",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/14680262",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/14680262",
+          "url": "https://onlinelibrary.wiley.com/journal/14680262",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:41.488Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "restud": {
+      "id": "restud",
+      "journalUrl": "https://academic.oup.com/restud",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/restud",
+          "url": "https://academic.oup.com/restud",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:43.538Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "joe": {
+      "id": "joe",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-econometrics",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jpe": {
+      "id": "jpe",
+      "journalUrl": "https://www.journals.uchicago.edu/toc/jpe/current",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.journals.uchicago.edu/toc/jpe/current",
+          "url": "https://www.journals.uchicago.edu/toc/jpe/current",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:43.760Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jebeo": {
+      "id": "jebeo",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-economic-behavior-and-organization",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "jht": {
+      "id": "jht",
+      "journalUrl": "https://www.tandfonline.com/journals/rjht20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rjht20",
+          "url": "https://www.tandfonline.com/journals/rjht20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:44.258Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "bas": {
+      "id": "bas",
+      "journalUrl": "https://journals.sagepub.com/home/basa",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "oae": {
+      "id": "oae",
+      "journalUrl": "https://journals.sagepub.com/home/oaex",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "bse": {
+      "id": "bse",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/10990836",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/10990836",
+          "url": "https://onlinelibrary.wiley.com/journal/10990836",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:44.804Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "trr": {
+      "id": "trr",
+      "journalUrl": "https://www.tandfonline.com/journals/rtrr20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rtrr20",
+          "url": "https://www.tandfonline.com/journals/rtrr20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:44.989Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jcleanprod": {
+      "id": "jcleanprod",
+      "journalUrl": "https://www.sciencedirect.com/journal/journal-of-cleaner-production",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ee": {
+      "id": "ee",
+      "journalUrl": "https://www.sciencedirect.com/journal/ecological-economics",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "ej": {
+      "id": "ej",
+      "journalUrl": "https://academic.oup.com/ej",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/ej",
+          "url": "https://academic.oup.com/ej",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:45.633Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "csrem": {
+      "id": "csrem",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15353966",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15353966",
+          "url": "https://onlinelibrary.wiley.com/journal/15353966",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:46.916Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "ijhmc": {
+      "id": "ijhmc",
+      "journalUrl": "https://www.tandfonline.com/journals/whmm20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/whmm20",
+          "url": "https://www.tandfonline.com/journals/whmm20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:47.080Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jpart": {
+      "id": "jpart",
+      "journalUrl": "https://academic.oup.com/jpart",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://academic.oup.com/jpart",
+          "url": "https://academic.oup.com/jpart",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:47.991Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "aer": {
+      "id": "aer",
+      "journalUrl": "https://www.aeaweb.org/journals/aer",
+      "cfpUrl": "",
+      "state": "robots-restricted",
+      "checks": [],
+      "note": "robots.txt disallows access or could not be checked safely."
+    },
+    "par": {
+      "id": "par",
+      "journalUrl": "https://onlinelibrary.wiley.com/journal/15406210",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://onlinelibrary.wiley.com/journal/15406210",
+          "url": "https://onlinelibrary.wiley.com/journal/15406210",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:49.011Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "pmr": {
+      "id": "pmr",
+      "journalUrl": "https://www.tandfonline.com/journals/rpxm20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/rpxm20",
+          "url": "https://www.tandfonline.com/journals/rpxm20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:49.196Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "he": {
+      "id": "he",
+      "journalUrl": "https://link.springer.com/journal/10734?error=cookies_not_supported&code=1f68cfa9-5135-4be5-82ba-722f55cfc83d",
+      "cfpUrl": "",
+      "state": "homepage-confirmed",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/10734",
+          "url": "https://link.springer.com/journal/10734?error=cookies_not_supported&code=1f68cfa9-5135-4be5-82ba-722f55cfc83d",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:07:50.549Z",
+          "title": "Home | Higher Education | Springer Nature Link"
+        }
+      ]
+    },
+    "she": {
+      "id": "she",
+      "journalUrl": "https://www.tandfonline.com/journals/cshe20",
+      "cfpUrl": "",
+      "state": "access-limited",
+      "checks": [
+        {
+          "requestedUrl": "https://www.tandfonline.com/journals/cshe20",
+          "url": "https://www.tandfonline.com/journals/cshe20",
+          "status": 403,
+          "checkedAt": "2026-11-22T18:07:51.295Z",
+          "title": "Just a moment..."
+        }
+      ]
+    },
+    "jbe": {
+      "id": "jbe",
+      "journalUrl": "https://link.springer.com/journal/10551",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "homepage-confirmed",
+      "checkedAt": "2026-11-22T18:28:09.047Z",
+      "checks": [
+        {
+          "requestedUrl": "https://link.springer.com/journal/10551",
+          "url": "https://link.springer.com/journal/10551?error=cookies_not_supported&code=869b63d0-fdd7-4740-a54c-4eca0cb0a844",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:28:09.047Z",
+          "title": "Home | Journal of Business Ethics | Springer Nature Link"
+        },
+        {
+          "requestedUrl": "https://link.springer.com/collections/hicgjgfhjd",
+          "url": "https://link.springer.com/collections/hicgjgfhjd?error=cookies_not_supported&code=3051a94a-7bb9-44c3-b550-95d20d9ce3e7",
+          "status": 200,
+          "checkedAt": "2026-11-22T18:28:12.835Z",
+          "evidence": {
+            "confirmed": false,
+            "headings": "Call for Papers - Sufficiency: An Ethic for Ecologically Constrained Organizations | Springer Nature Link | Call for Papers - Sufficiency: An Ethic for Ecologically Constrained Organizations",
+            "identity": true,
+            "closed": true
+          }
+        }
+      ],
+      "closedCfpUrls": [
+        "https://link.springer.com/collections/hicgjgfhjd"
+      ]
+    }
+  },
+  "aggregates": [
+    {
+      "id": "emerald",
+      "label": "Emerald",
+      "url": "https://www.emeraldgrouppublishing.com/calls-for-papers",
+      "publisher": "Emerald",
+      "state": "robots-restricted"
+    },
+    {
+      "id": "sage",
+      "label": "SAGE Journals",
+      "url": "https://journals.sagepub.com/call-for-papers",
+      "publisher": "Sage",
+      "state": "robots-restricted"
+    },
+    {
+      "id": "informs",
+      "label": "INFORMS",
+      "url": "https://pubsonline.informs.org/page/calls-for-papers",
+      "publisher": "INFORMS",
+      "requestedUrl": "https://pubsonline.informs.org/page/calls-for-papers",
+      "status": 403,
+      "checkedAt": "2026-11-22T18:08:06.278Z",
+      "state": "not-confirmed"
+    },
+    {
+      "id": "frontiers",
+      "label": "Frontiers Research Topics",
+      "url": "https://www.frontiersin.org/research-topics",
+      "publisher": "Frontiers",
+      "verified": false,
+      "checkedAt": "2026-11-22T18:15:40.338Z",
+      "crawlDelayMs": 0,
+      "requestedUrl": "https://www.frontiersin.org/research-topics",
+      "status": 200,
+      "evidence": {
+        "confirmed": false,
+        "headings": "Research Topics | Frontiers | 54,932 Research Topics | research topics | Epithelial cell homeostasis, survival and membrane trafficking in intestinal inflammation: Mechanisms and Therapeutic Opportunities | Environmental Enrichment and Welfare of Farmed Fish | Biologics Meet Nanotechnology: Unlocking the Therapeutic Potential of Proteins and RNA | From Networks to Medicines: Systems Pharmacology Approaches for Experimental Drug Discovery | Integrative exercise biology in clinical prevention and rehabilitation | Harnessing Persistent Free Radicals for Enhanced Microbial Bioremediation | Beyond ",
+        "identity": true
+      },
+      "state": "not-confirmed"
+    },
+    {
+      "id": "springer",
+      "label": "Springer",
+      "url": "https://link.springer.com/brands/springer",
+      "publisher": "Springer",
+      "verified": false,
+      "checkedAt": "2026-11-22T18:19:34.005Z",
+      "crawlDelayMs": 0,
+      "requestedUrl": "https://www.springer.com/gp/authors-editors/journal-author/call-for-papers",
+      "status": 200,
+      "evidence": {
+        "confirmed": false,
+        "headings": "Springer, serving the global research community | Serving the global research community",
+        "identity": true
+      },
+      "state": "not-confirmed"
+    },
+    {
+      "id": "tandf",
+      "label": "Taylor & Francis",
+      "url": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "publisher": "T&F",
+      "verified": true,
+      "checkedAt": "2026-11-22T18:32:48.685Z",
+      "crawlDelayMs": 10000,
+      "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "status": 200,
+      "evidence": {
+        "confirmed": true,
+        "format": "official-special-issues-json",
+        "records": 100
+      },
+      "state": "aggregate-confirmed"
+    }
+  ]
+}

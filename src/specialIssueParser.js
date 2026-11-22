@@ -1,5 +1,6 @@
 // Parse nested publisher markup without treating a whole list as one SI card.
-import { parseDocument } from 'htmlparser2';
+import { parseDocument, DomUtils } from 'htmlparser2';
+import { cfpPageEvidence } from './specialIssueSourcePolicy.js';
 
 const SIGNAL = /special[\s-]+issue|call[\s-]+for[\s-]+papers|research[\s-]+topic|guest[\s-]+edit|专刊|特刊|征稿|\bcfp\b/i;
 const GENERIC = /^(?:special issues?|calls? for papers|open calls?|research topics?|view all|read more|learn more|details|征稿|专刊)$/i;
@@ -47,11 +48,23 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
     const url = urlOf(href, baseUrl);
     title = clean(title);
     if (!title || GENERIC.test(title) || title.length < 8 || !url) return;
+    if (/\/(?:toc|loi)\//i.test(new URL(url).pathname)) return;
+    if (/\b(?:published special issue|submissions? closed|call (?:is )?closed)\b/i.test(body)) return;
     const key = url + '|' + title.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
     candidates.push({ title, text: body, href: url });
   };
+  // Springer collections are one call with related articles, not a CFP list.
+  let pageUrl;
+  try { pageUrl = new URL(baseUrl); } catch { /* Pasted content may have no source URL. */ }
+  if (pageUrl?.hostname === 'link.springer.com' && /^\/collections\/[^/]+\/?$/i.test(pageUrl.pathname)) {
+    const h1 = headings.find((node) => node.name === 'h1');
+    const main = walk(doc, (node) => node.name === 'main')[0] || doc;
+    const deadline = DomUtils.findOne((node) => node.attribs?.['data-test'] === 'submission-deadline', doc.children);
+    if (h1 && cfpPageEvidence(html, baseUrl).confirmed) add(text(h1), text(main) + '\n' + text(deadline), baseUrl);
+    return candidates;
+  }
   const linked = anchors.filter((a) => {
     const label = clean(text(a));
     const href = a.attribs.href;
@@ -100,6 +113,7 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
 
 export function publisherPageError(html) {
   const s = String(html || '');
+  if (/^\s*[\[{]/.test(s)) return '';
   if (/<(?:title|h1|h2)\b[^>]*>\s*(?:(?:error\s+)?404(?:\s*[-:]?\s*page not found)?|page not found)\s*(?:<\/|[|])/i.test(s)) {
     return 'HTTP 404：征稿页已移除或地址有误，请更新该刊征稿页';
   }
@@ -114,17 +128,23 @@ export function publisherPageError(html) {
 /** Journal homepages may link their CFP pages in the main navigation. */
 export function discoverJournalCfpPages(html, baseUrl) {
   const journal = new URL(baseUrl);
-  const journalPath = /\/(?:page\/)?journal\/([a-z0-9]+)/i.exec(journal.pathname)?.[1]?.toLowerCase();
-  if (!journalPath) return [];
+  const journalPath = /\/(?:page\/)?journal\/([^/]+)/i.exec(journal.pathname)?.[1]?.toLowerCase();
   const pages = new Set();
   const doc = parseDocument(String(html || ''));
   const visit = (node) => {
+    if (['script', 'style', 'footer'].includes(node.name)) return;
     if (node.name === 'a' && node.attribs?.href && /calls?\s+for\s+papers|open\s+(?:calls|special issues)/i.test(clean(text(node)))) {
       const href = urlOf(node.attribs.href, baseUrl);
       if (href && mayFetchDetail(href, baseUrl)) {
         const target = new URL(href);
-        const targetJournal = /\/(?:page\/)?journal\/([a-z0-9]+)/i.exec(target.pathname)?.[1]?.toLowerCase();
-        if (targetJournal === journalPath && /calls?[-_]?(?:for[-_]?)?papers|open[-_](?:calls|special[-_]issues)/i.test(target.pathname)) {
+        const targetJournal = /\/(?:page\/)?journal\/([^/]+)/i.exec(target.pathname)?.[1]?.toLowerCase();
+        const sameJournal = !journalPath || targetJournal === journalPath;
+        const isWiley = journal.hostname === 'onlinelibrary.wiley.com';
+        const isArchive = /\/(?:toc|loi)\/|archive|published[-_]special[-_]issues/i.test(target.pathname);
+        const isCall = /calls?[-_]?(?:for[-_]?)?papers|open[-_](?:calls|special[-_]issues)|\/collections\//i.test(target.pathname);
+        // Wiley's shared CFP URL is obsolete. Other publishers may link a
+        // journal-specific call on an official /calls-for-papers/ topic page.
+        if (!isArchive && (sameJournal || (!isWiley && !targetJournal)) && isCall) {
           pages.add(href);
         }
       }
@@ -132,7 +152,7 @@ export function discoverJournalCfpPages(html, baseUrl) {
     for (const child of node.children || []) visit(child);
   };
   visit(doc);
-  return [...pages].slice(0, 3);
+  return [...pages];
 }
 
 export function mayFetchDetail(url, sourceUrl) {

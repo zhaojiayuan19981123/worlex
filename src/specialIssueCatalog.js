@@ -3,13 +3,19 @@
 // 设计取舍（重要）：
 // 1) 目录只放「期刊身份信息」（名称 / 简称 / 学科 / 出版社），**不写死期刊等级**。
 //    等级一律由 easyScholar 的 ajg(ABS) / utd24 / 中科院等字段实时查询并缓存，避免内置一份会过期的榜单。
-// 2) 出版社的征稿页结构千差万别，且随时改版。因此每刊只有一个「默认征稿页地址」，
-//    用户可在「期刊管理」里改成实际页面，也可额外添加自定义征稿页；抓取器是通用的，
-//    换 URL 不需要改代码。
+// 2) 默认入口来自官网核验快照，不按期刊名或简称拼接征稿地址。
+//    主页确认与 CFP 确认分开记录；用户仍可覆盖单刊来源。
 // 3) 主题词表只用于「本地确定性的热点聚合 / 相关性计算」，不产生任何编造的数据。
 
 // 每条：[id, 期刊全名, 简称, ABS 学科, 出版社]
 // 覆盖 ABS/AJG 指南中经管、旅游、信息系统、会计金融等主要学科的常用期刊。
+import { readFileSync } from 'node:fs';
+import { canonicalSourceUrl } from './specialIssueSourcePolicy.js';
+
+let SOURCE_AUDIT = { journals: {}, aggregates: [] };
+try { SOURCE_AUDIT = JSON.parse(readFileSync(new URL('./specialIssueSourceAudit.json', import.meta.url), 'utf8')); }
+catch (error) { if (error.code !== 'ENOENT') throw error; }
+
 const RAW = [
   // 会计
   ['tar', 'The Accounting Review', 'TAR', '会计', 'AAA'],
@@ -51,8 +57,8 @@ const RAW = [
   ['ms', 'Management Science', 'MS', '运营与运筹', 'INFORMS'],
   ['or', 'Operations Research', 'OR', '运营与运筹', 'INFORMS'],
   ['msom', 'Manufacturing & Service Operations Management', 'M&SOM', '运营与运筹', 'INFORMS'],
-  ['pom', 'Production and Operations Management', 'POM', '运营与运筹', 'Wiley'],
-  ['jom', 'Journal of Operations Management', 'JOM', '运营与运筹', 'Elsevier'],
+  ['pom', 'Production and Operations Management', 'POM', '运营与运筹', 'Sage'],
+  ['jom', 'Journal of Operations Management', 'JOM', '运营与运筹', 'Wiley'],
   ['ejor', 'European Journal of Operational Research', 'EJOR', '运营与运筹', 'Elsevier'],
   ['ijoc', 'INFORMS Journal on Computing', 'IJOC', '运营与运筹', 'INFORMS'],
   ['omega', 'Omega', 'Omega', '运营与运筹', 'Elsevier'],
@@ -82,7 +88,7 @@ const RAW = [
   ['ijim', 'International Journal of Information Management', 'IJIM', '信息系统', 'Elsevier'],
   ['em', 'Electronic Markets', 'EM', '信息系统', 'Springer'],
   ['iacr', 'Internet Research', 'IR', '信息系统', 'Emerald'],
-  ['jitm', 'Journal of Information Technology Management', 'JITM', '信息系统', 'Springer'],
+  ['jitm', 'Journal of Information Technology Management', 'JITM', '信息系统', 'Association of Management'],
   // 市场营销
   ['jm', 'Journal of Marketing', 'JM', '市场营销', 'Sage'],
   ['jmr', 'Journal of Marketing Research', 'JMR', '市场营销', 'Sage'],
@@ -102,7 +108,7 @@ const RAW = [
   ['jpi', 'Journal of Product Innovation Management', 'JPIM', '市场营销', 'Wiley'],
   ['ml', 'Marketing Letters', 'ML', '市场营销', 'Springer'],
   ['pam', 'Psychology & Marketing', 'P&M', '市场营销', 'Wiley'],
-  ['jim', 'Journal of Interactive Marketing', 'JIM', '市场营销', 'Elsevier'],
+  ['jim', 'Journal of Interactive Marketing', 'JIM', '市场营销', 'Sage'],
   ['jppm', 'Journal of Public Policy & Marketing', 'JPPM', '市场营销', 'Sage'],
   ['jcm', 'Journal of Consumer Marketing', 'JCM', '市场营销', 'Emerald'],
   ['jbm', 'Journal of Brand Management', 'JBM', '市场营销', 'Palgrave'],
@@ -188,8 +194,6 @@ const RAW = [
   ['she', 'Studies in Higher Education', 'SHE', '教育学', 'T&F'],
 ];
 
-const slug = (s) => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-
 // Online ISSNs for journal homepages. CFP links are discovered from the page itself.
 const WILEY_ONLINE_ISSN = {
   jar: '1475679X', car: '19113846', ijoa: '10991123', jof: '15406261',
@@ -211,18 +215,21 @@ export function isLegacyWileyCfpUrl(url) {
 export const CFP_SOURCES = [
   { id: 'emerald', label: 'Emerald', url: 'https://www.emeraldgrouppublishing.com/calls-for-papers', publisher: 'Emerald' },
   { id: 'sage', label: 'SAGE Journals', url: 'https://journals.sagepub.com/call-for-papers', publisher: 'Sage' },
-  { id: 'tandf', label: 'Taylor & Francis', url: 'https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=50&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy', publisher: 'T&F' },
+  { id: 'tandf', label: 'Taylor & Francis', url: 'https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy', publisher: 'T&F' },
   { id: 'springer', label: 'Springer', url: 'https://www.springer.com/gp/authors-editors/journal-author/call-for-papers', publisher: 'Springer' },
   { id: 'frontiers', label: 'Frontiers Research Topics', url: 'https://www.frontiersin.org/research-topics', publisher: 'Frontiers' },
   { id: 'informs', label: 'INFORMS', url: 'https://pubsonline.informs.org/page/calls-for-papers', publisher: 'INFORMS' },
-];
+].map((source) => {
+  const audit = SOURCE_AUDIT.aggregates.find((entry) => entry.id === source.id);
+  return { ...source, verified: audit?.state === 'aggregate-confirmed' && canonicalSourceUrl(audit.requestedUrl || audit.url) === source.url,
+    checkedAt: audit?.checkedAt || '', crawlDelayMs: audit?.crawlDelayMs || 0 };
+});
 
-/** 期刊级征稿页：ScienceDirect / Emerald 的期刊页有稳定的 call-for-papers 子页。 */
+/** Only confirmed CFP URLs or a confirmed official publisher feed are defaults. */
 export function defaultCfpUrl(journal) {
-  const p = String(journal?.publisher || '');
-  if (p === 'Elsevier') return `https://www.sciencedirect.com/journal/${slug(journal.title)}/about/call-for-papers`;
-  if (p === 'Emerald') return `https://www.emeraldgrouppublishing.com/journal/${slug(journal.shortTitle || journal.title)}/call-for-papers`;
-  const hit = CFP_SOURCES.find((s) => s.publisher === p);
+  const audit = SOURCE_AUDIT.journals[journal?.id];
+  if (audit?.state === 'cfp-confirmed' && audit.cfpUrl) return canonicalSourceUrl(audit.cfpUrl);
+  const hit = CFP_SOURCES.find((s) => s.publisher === journal?.publisher && s.verified);
   return hit ? hit.url : '';
 }
 
@@ -231,7 +238,11 @@ export const ABS_JOURNALS = RAW.map(([id, title, shortTitle, category, publisher
 })).map((j) => ({
   ...j,
   cfpUrl: defaultCfpUrl(j),
-  ...(WILEY_ONLINE_ISSN[j.id] && { journalUrl: `https://onlinelibrary.wiley.com/journal/${WILEY_ONLINE_ISSN[j.id]}` }),
+  cfpUrls: SOURCE_AUDIT.journals[j.id]?.state === 'cfp-confirmed'
+    ? (SOURCE_AUDIT.journals[j.id].cfpUrls || [SOURCE_AUDIT.journals[j.id].cfpUrl]).filter(Boolean).map(canonicalSourceUrl) : [],
+  journalUrl: SOURCE_AUDIT.journals[j.id]?.journalUrl ? canonicalSourceUrl(SOURCE_AUDIT.journals[j.id].journalUrl)
+    : (WILEY_ONLINE_ISSN[j.id] ? `https://onlinelibrary.wiley.com/journal/${WILEY_ONLINE_ISSN[j.id]}` : ''),
+  sourceAudit: SOURCE_AUDIT.journals[j.id] || { state: 'not-confirmed', checks: [] },
 }));
 
 export const ABS_CATEGORIES = [...new Set(ABS_JOURNALS.map((j) => j.category))];

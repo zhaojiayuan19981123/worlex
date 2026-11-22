@@ -161,6 +161,7 @@ test('抓取：注入式 fetch、单源失败隔离、订阅与偏好写回', as
     return { ok: true, status: 200, text: async () => CFP_HTML };
   };
   const state = setSubscriptions(createSpecialIssueState(), ['tm']);
+  state.cfpOverrides.tm = 'https://example.com/tm/call-for-papers';
   const result = await syncSpecialIssues(state, { fetchImpl, now: new Date(), concurrency: 2 });
   assert.ok(result.total > 0);
   assert.ok(result.added > 0);
@@ -354,6 +355,10 @@ test('HTTP：订阅 → 抓取 → 列表 / 热点 / 推荐 / 定时状态全链
 
     const subscribed = await send('/api/special-issues/subscriptions', 'PUT', { selectedJournalIds: ['tm', 'atr'] });
     assert.deepEqual(subscribed.selectedJournalIds, ['tm', 'atr']);
+
+    await send('/api/special-issues/sources', 'PUT', { cfpOverrides: {
+      tm: 'https://example.com/tm/call-for-papers', atr: 'https://example.com/atr/call-for-papers',
+    } });
 
     const synced = await send('/api/special-issues/sync', 'POST', {});
     assert.equal(synced.ok, true);

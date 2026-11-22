@@ -46,6 +46,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     readLLMResponse = null,
     translateImpl = translate,
     queryRankImpl = queryPublicationRank,
+    respectCrawlDelay = fetchImpl === globalThis.fetch,
     logger = () => {},
   } = deps;
 
@@ -108,6 +109,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const useAi = opts.aiExtract === true || (opts.aiExtract == null && state.preferences.aiExtract);
     const result = await syncSpecialIssues(state, {
       fetchImpl,
+      respectCrawlDelay,
       journalIds: opts.journalIds || null,
       aiExtract: useAi ? async (text, ctx) => {
         try { return await aiExtract(text, ctx); } catch (e) { logger('[SI] AI 抽取跳过：' + (e?.message || e)); return null; }
@@ -343,12 +345,17 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const settings = store.getSettings();
     if (!settings.easyScholarKey) return res.status(400).json({ error: '未配置 easyScholar SecretKey，请在「AI 设置」中填写' });
     const state = readState();
-    const wanted = Array.isArray(req.body?.journalIds) && req.body.journalIds.length
+    const wanted = Array.isArray(req.body?.journalIds)
       ? req.body.journalIds
+      : req.body?.scope === 'catalog' ? ABS_JOURNALS.map((journal) => journal.id)
       : [...new Set([...state.selectedJournalIds, ...state.issues.map((i) => i.journalId).filter(Boolean)])];
-    const targets = wanted.map((id) => journalById(id)).filter(Boolean)
-      .filter((j) => !state.ranks[j.id] || Date.now() - Date.parse(state.ranks[j.id].queriedAt || 0) > 7 * DAY)
-      .slice(0, Number(req.body?.limit) > 0 ? Math.min(40, Number(req.body.limit)) : 20);
+    const journals = [...new Set(wanted)].map((id) => journalById(id)).filter(Boolean);
+    const due = journals.filter((j) => {
+      const queriedAt = Date.parse(state.ranks[j.id]?.queriedAt || '');
+      return !Number.isFinite(queriedAt) || queriedAt > Date.now() || Date.now() - queriedAt > 7 * DAY;
+    });
+    const requestedLimit = Math.floor(Number(req.body?.limit));
+    const targets = due.slice(0, requestedLimit > 0 ? Math.min(40, requestedLimit) : 20);
     const updated = {};
     const errors = [];
     for (const j of targets) {
@@ -356,7 +363,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
         const data = await queryRankImpl(j.title, settings.easyScholarKey);
         if (data?.code !== 200) { errors.push({ journal: j.title, error: data?.msg || '未查询到' }); continue; }
         const f = formatRank(data.data);
-        updated[j.id] = { summary: f.summary, items: f.items, queriedAt: new Date().toISOString(), journal: j.title };
+        updated[j.id] = { summary: f.summary, items: f.items, queriedAt: new Date().toISOString(), journal: j.title, source: 'easyScholar' };
       } catch (e) {
         errors.push({ journal: j.title, error: compact(e?.message || '查询失败', 120) });
       }
@@ -365,7 +372,9 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       const latest = readState();
       writeState({ ...latest, ranks: { ...latest.ranks, ...updated } });
     }
-    res.json({ ...payload(), refreshed: Object.keys(updated).length, errors });
+    res.json({ ...payload(), refreshed: Object.keys(updated).length, errors,
+      attempted: targets.length, cached: journals.length - due.length,
+      remainingJournalIds: due.slice(targets.length).map((journal) => journal.id) });
   });
 
   app.post('/api/special-issues/:id/translate', async (req, res) => {

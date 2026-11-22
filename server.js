@@ -5486,6 +5486,7 @@ export function createApp({
     store,
     getGraph: () => kbGraphCache,
     fetchImpl: modelFetch,
+    respectCrawlDelay: true,
     resolveRequestModel,
     fetchModelCompletion,
     readLLMResponse,

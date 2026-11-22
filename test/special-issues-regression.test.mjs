@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
-import { publisherPageError } from '../src/specialIssueParser.js';
+import { publisherPageError, discoverJournalCfpPages } from '../src/specialIssueParser.js';
+import { canonicalSourceUrl, robotsPolicy, cfpPageEvidence } from '../src/specialIssueSourcePolicy.js';
+import { ABS_JOURNALS, CFP_SOURCES, defaultCfpUrl } from '../src/specialIssueCatalog.js';
 import { registerSpecialIssueRoutes } from '../src/specialIssueRoutes.js';
 import { createSpecialIssueScheduler } from '../src/specialIssueScheduler.js';
 import {
@@ -84,6 +86,7 @@ test('publisher: nested card headings and detail-only deadline remain intact', (
 });
 
 test('official JSON: exact journal metadata, manuscript deadline and public fields only', () => {
+  assert.equal(publisherPageError(JSON.stringify([{ description: '<div class="captcha-container">Research about verification</div>' }])), '');
   const records = [record('Journal of Sustainable Tourism'), record('Not in the catalogue', 2)];
   records[1].title.rendered = 'Tourism Management and other journals are discussed here';
   records[0].special_issues.contact_email = ['private@example.org'];
@@ -112,7 +115,7 @@ test('official API pagination filters selected journals and never fetches HTML d
       seen.push(url);
       assert.match(url, /wp-json/);
       return response(JSON.stringify(new URL(url).searchParams.has('page') ? [record('Journal of Sustainable Tourism', 99)]
-        : Array.from({ length: 50 }, (_, i) => record('Other Journal', i))), url, 2);
+        : Array.from({ length: Number(new URL(url).searchParams.get('per_page')) }, (_, i) => record('Other Journal', i))), url, 2);
     },
   });
   assert.equal(seen.length, 2);
@@ -167,7 +170,7 @@ test('Wiley: only follows an official same-journal CFP link and retains the manu
         <a href="/page/journal/10990836/homepage/call-for-papers">Calls for Papers</a>
         <a href="${new URL(wileyCalls).pathname}">Calls for Papers</a></nav>`, url);
       assert.equal(url, wileyCalls);
-      return response('<main><h1>Calls for Papers</h1><article><h2><a href="/doi/example">Tourism Futures</a></h2><p>Manuscript deadline: 30 April 2027</p></article></main>', url);
+      return response('<main><h1>Calls for Papers</h1><p>International Journal of Tourism Research</p><article><h2><a href="/doi/example">Tourism Futures</a></h2><p>Manuscript deadline: 30 April 2027</p></article></main>', url);
     },
   });
   assert.deepEqual(seen, [wileyHome, wileyCalls]);
@@ -177,14 +180,15 @@ test('Wiley: only follows an official same-journal CFP link and retains the manu
   assert.equal(result.state.sync.ijtr.url, wileyCalls);
 });
 
-test('Wiley: missing sources, 404 pages and access restrictions are distinguishable', async () => {
+test('sources: 404 pages, HTTP restrictions and robots restrictions are distinguishable', async () => {
   assert.match(publisherPageError('<h1>Error 404</h1><h2>Page not found</h2>'), /404/);
-  const result = await syncSpecialIssues({ selectedJournalIds: ['ijtr', 'ds'] }, {
-    now, fetchImpl: async (url) => { assert.equal(url, wileyHome); return { ok: false, status: 403 }; },
+  const result = await syncSpecialIssues({ selectedJournalIds: ['ijtr', 'ds', 'tm'] }, {
+    now, fetchImpl: async (url) => { assert.ok([wileyHome, 'https://onlinelibrary.wiley.com/journal/15405915'].includes(url)); return { ok: false, status: 403 }; },
   });
   assert.equal(result.state.lastSyncAt, '');
   assert.match(result.state.sync.ijtr.error, /403/);
-  assert.match(result.state.sync.ds.error, /没有已配置/);
+  assert.match(result.state.sync.ds.error, /403/);
+  assert.match(result.state.sync.tm.error, /robots/);
 });
 
 test('single Chinese graph keyword or entity recommends English tourism; word boundaries prevent AI false positives', () => {
@@ -317,4 +321,167 @@ test('scheduler: disabling prevents catchup; cleanup runs hourly even with autoS
   const count = cleanups;
   t.mock.timers.tick(3600000);
   assert.equal(cleanups, count);
+});
+
+test('source policy: journal identity and primary headings distinguish CFPs from brand footers and archives', () => {
+  const brand = '<title>Springer, serving the global research community</title><main><h1>Serving the global research community</h1><h2>Resources</h2></main><footer><h2>Calls for Papers</h2></footer>';
+  assert.equal(cfpPageEvidence(brand, 'https://link.springer.com/brands/springer').confirmed, false);
+  const collection = '<title>Call for Papers - Sustainable organizations</title><main><h1>Sustainable organizations</h1><p>Participating journal: Journal of Business Ethics</p></main>';
+  assert.equal(cfpPageEvidence(collection, 'https://link.springer.com/collections/example', 'Journal of Business Ethics').confirmed, true);
+  assert.equal(cfpPageEvidence(collection, 'https://link.springer.com/collections/example', 'Journal of International Business Studies').confirmed, false);
+  assert.equal(cfpPageEvidence(collection, 'https://journals.sagepub.com/toc/jnma/58/2-3').confirmed, false);
+  assert.equal(cfpPageEvidence('<h1>Published Special Issues | Calls for Papers</h1>', 'https://example.org/calls').confirmed, false);
+});
+
+test('source policy: robots agent specificity, merged groups, longest rule and end anchors', () => {
+  const rules = 'User-agent: *\nDisallow: /\nCrawl-delay: 10\nUser-agent: WorlexSI\nDisallow: /private/*\nAllow: /private/open$\nCrawl-delay: 3\nUser-agent: WorlexSI\nDisallow: /drafts\n';
+  assert.deepEqual(robotsPolicy(rules, 'https://example.org/journal'), { allowed: true, crawlDelayMs: 3000 });
+  assert.equal(robotsPolicy(rules, 'https://example.org/private/open').allowed, true);
+  assert.equal(robotsPolicy(rules, 'https://example.org/private/open/more').allowed, false);
+  assert.equal(robotsPolicy(rules, 'https://example.org/drafts').allowed, false);
+  assert.equal(robotsPolicy(rules, 'https://example.org/journal', 'otherbot').allowed, false);
+  assert.equal(robotsPolicy('User-agent: *\nDisallow: /same\nAllow: /same', 'https://example.org/same').allowed, true);
+  assert.equal(robotsPolicy('User-agent: *\nDisallow: /*?secret=', 'https://example.org/list?secret=value').allowed, false);
+});
+
+test('Springer collections: parse the primary call, ignore article links and reject explicitly closed calls', async () => {
+  const baseUrl = 'https://link.springer.com/collections/example';
+  const html = '<title>Call for Papers: Microfoundations</title><main><h1>Call for Papers: Special Issue on Microfoundations of International Business</h1>'
+    + '<p>Participating journal: Journal of International Business Studies</p>'
+    + '<aside><span data-test="submission-deadline">Submission deadline<date>31 December 2027</date></span></aside>'
+    + '<h2>Articles</h2><article><h3><a href="/article/10.example/1">Published research on global firms</a></h3></article>'
+    + '<article><h3><a href="/article/10.example/2">Another article about business</a></h3></article></main>';
+  for (const detail of [false, true]) {
+    const parsed = parseSpecialIssueDocument(html, { baseUrl, now, detail });
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].url, baseUrl);
+    assert.match(parsed[0].title, /Microfoundations/);
+    assert.equal(parsed[0].deadline, '2027-12-31');
+  }
+  const closed = html.replace('<h2>Articles</h2>', '<p><strong>Closed for submissions</strong></p><h2>Articles</h2>');
+  assert.equal(cfpPageEvidence(closed, baseUrl).confirmed, false);
+  assert.equal(cfpPageEvidence(closed, baseUrl).closed, true);
+  assert.deepEqual(parseSpecialIssueDocument(closed, { baseUrl, now }), []);
+  const result = await syncSpecialIssues({ selectedJournalIds: ['jibs'], cfpOverrides: { jibs: baseUrl } }, {
+    now, maxDetailPages: 0, fetchImpl: async (url) => response(closed, url),
+  });
+  assert.equal(result.fetched.length, 0);
+  assert.ok(result.failed.length > 0);
+  const automatic = await syncSpecialIssues({ selectedJournalIds: ['jibs'] }, {
+    now, maxDetailPages: 0, fetchImpl: async (url) => response(closed, url),
+  });
+  assert.equal(automatic.fetched.length, 0);
+  assert.match(automatic.failed[0].error, /已关闭投稿/);
+});
+
+test('source policy: canonical URLs drop transient cookie errors and preserve meaningful queries', () => {
+  assert.equal(canonicalSourceUrl('https://link.springer.com/journal/41267?error=cookies_not_supported&code=token&page=2#x'), 'https://link.springer.com/journal/41267?page=2');
+  assert.equal(canonicalSourceUrl('https://example.org/cfp?code=journal&error=other#x'), 'https://example.org/cfp?code=journal&error=other');
+});
+
+test('discovery: keeps complete journal slugs and all same-journal links, skips archives and other journals', () => {
+  const base = 'https://www.sciencedirect.com/journal/journal-of-interactive-marketing';
+  const valid = Array.from({ length: 5 }, (_, i) => `${base}/call-for-papers/${i}`);
+  const html = valid.map((url) => `<a href="${url}">Call for papers</a>`).join('')
+    + '<a href="/journal/journal-of-other/call-for-papers">Call for papers</a>'
+    + '<a href="/toc/jnma/58/2-3">Open special issues</a>'
+    + '<a href="/journal/journal-of-interactive-marketing/published-special-issues">Call for papers</a>'
+    + '<footer><a href="/calls-for-papers">Call for papers</a></footer>';
+  assert.deepEqual(discoverJournalCfpPages(html, base), valid);
+  assert.equal(parseSpecialIssueDocument('<main><h1>Special Issues</h1><h2><a href="/toc/jnma/58/2-3">Published Special Issue: Interactive Marketing</a></h2></main>', { baseUrl: 'https://journals.sagepub.com/home/jnma', now }).length, 0);
+});
+
+test('catalogue: every journal is covered by a task or explicit diagnostic and no unverified aggregate is a default', () => {
+  const ids = ABS_JOURNALS.map((journal) => journal.id);
+  const tasks = buildSyncTasks({ selectedJournalIds: ids });
+  const covered = new Set(tasks.flatMap((task) => [task.journalId, ...(task.journalIds || [])]).filter(Boolean));
+  assert.equal(ids.length, 166);
+  assert.deepEqual(ids.filter((id) => !covered.has(id)), []);
+  for (const journal of ABS_JOURNALS) {
+    const url = defaultCfpUrl(journal);
+    assert.equal(url.includes('cookies_not_supported'), false);
+    if (journal.sourceAudit.state !== 'cfp-confirmed' && url) {
+      assert.ok(CFP_SOURCES.some((source) => source.verified && source.url === url));
+    }
+  }
+  assert.equal(CFP_SOURCES.find((source) => source.id === 'springer').verified, false);
+  const jim = ABS_JOURNALS.find((journal) => journal.id === 'jim');
+  assert.equal(jim.publisher, 'Sage');
+  assert.equal(jim.cfpUrls.length, 0);
+  assert.equal(ABS_JOURNALS.find((journal) => journal.id === 'pom').publisher, 'Sage');
+  assert.equal(ABS_JOURNALS.find((journal) => journal.id === 'jom').publisher, 'Wiley');
+  assert.equal(ABS_JOURNALS.find((journal) => journal.id === 'jitm').publisher, 'Association of Management');
+  assert.equal(new URL(CFP_SOURCES.find((source) => source.id === 'tandf').url).searchParams.get('per_page'), '100');
+});
+
+test('sync: all discovered calls are fetched and independently diagnosed; generic redirects fail closed', async () => {
+  const links = Array.from({ length: 4 }, (_, i) => `${wileyCalls}-${i}`);
+  const seen = [];
+  const result = await syncSpecialIssues({ selectedJournalIds: ['ijtr'] }, { now, maxDetailPages: 0,
+    fetchImpl: async (url) => {
+      seen.push(url);
+      if (url === wileyHome) return response(links.map((link) => `<a href="${link}">Call for papers</a>`).join(''), url);
+      if (url === links[0]) return response('<h1>Wiley homepage</h1><footer><h2>Calls for papers</h2></footer>', 'https://onlinelibrary.wiley.com/');
+      return response(`<main><h1>Call for papers: International Journal of Tourism Research</h1><article><h2><a href="/cfp/${links.indexOf(url)}">Tourism research special issue ${links.indexOf(url)}</a></h2><p>Manuscript deadline: 30 April 2027</p></article></main>`, url);
+    },
+  });
+  assert.deepEqual(new Set(seen), new Set([wileyHome, ...links]));
+  assert.equal(result.synced.length, 3);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /未确认/);
+  assert.equal(Object.keys(result.state.sync).length, 4);
+  assert.ok(Object.values(result.state.sync).every((entry) => entry.journalId === 'ijtr'));
+});
+
+const rankResponse = { code: 200, data: { officialRank: { all: { sciUp: '1区', xr: 'A', ssci: 'Q1', ajg: '3' } } } };
+
+test('HTTP ranks: explicit empty list queries nothing; duplicate and unknown IDs are filtered', async (t) => {
+  const calls = [];
+  const h = await harness(t, { settings: { easyScholarKey: 'fixture-only' }, queryRankImpl: async (title) => { calls.push(title); return rankResponse; } });
+  assert.equal((await h.request('/ranks/refresh', 'POST', { journalIds: [] })).attempted, 0);
+  const result = await h.request('/ranks/refresh', 'POST', { journalIds: ['tm', 'tm', 'unknown'] });
+  assert.equal(result.refreshed, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(result.ranks.tm.items.find((item) => item.label === 'ABS').value, '3');
+  assert.equal(result.ranks.tm.source, 'easyScholar');
+});
+
+test('HTTP ranks: full catalogue batches default to 20 and enforce maximum 40 without losing journals', async (t) => {
+  const seen = [];
+  const h = await harness(t, { settings: { easyScholarKey: 'fixture-only' }, queryRankImpl: async (title) => { seen.push(title); return rankResponse; } });
+  let result = await h.request('/ranks/refresh', 'POST', { scope: 'catalog' });
+  assert.equal(result.attempted, 20);
+  assert.equal(result.remainingJournalIds.length, 146);
+  result = await h.request('/ranks/refresh', 'POST', { journalIds: result.remainingJournalIds, limit: 999 });
+  assert.equal(result.attempted, 40);
+  while (result.remainingJournalIds.length) result = await h.request('/ranks/refresh', 'POST', { journalIds: result.remainingJournalIds });
+  assert.equal(seen.length, 166);
+  assert.equal(new Set(seen).size, 166);
+  assert.equal(Object.keys(result.ranks).length, 166);
+  assert.equal((await h.request('/ranks/refresh', 'POST', { scope: 'catalog' })).cached, 166);
+});
+
+test('HTTP ranks: invalid, future and expired cache dates refresh; fresh entries are reused', async (t) => {
+  const ranks = { tm: { queriedAt: 'invalid' }, atr: { queriedAt: '2099-01-01T00:00:00Z' },
+    jost: { queriedAt: new Date().toISOString() }, cit: { queriedAt: '2020-01-01T00:00:00Z' } };
+  const h = await harness(t, { initial: { ranks }, settings: { easyScholarKey: 'fixture-only' }, queryRankImpl: async () => rankResponse });
+  const result = await h.request('/ranks/refresh', 'POST', { journalIds: Object.keys(ranks) });
+  assert.equal(result.attempted, 3);
+  assert.equal(result.cached, 1);
+  assert.deepEqual(result.remainingJournalIds, []);
+});
+
+test('HTTP ranks: failures terminate the current queue; successful responses without ABS do not invent a grade', async (t) => {
+  const h = await harness(t, { settings: { easyScholarKey: 'fixture-only' }, queryRankImpl: async (title) => {
+    if (title === 'Tourism Management') throw new Error('fixture quota exhausted');
+    return { code: 200, data: { officialRank: { all: { sciUp: '1区' } } } };
+  } });
+  const result = await h.request('/ranks/refresh', 'POST', { journalIds: ['tm', 'atr'], limit: 1 });
+  assert.equal(result.errors.length, 1);
+  assert.deepEqual(result.remainingJournalIds, ['atr']);
+  const last = await h.request('/ranks/refresh', 'POST', { journalIds: result.remainingJournalIds });
+  assert.deepEqual(last.remainingJournalIds, []);
+  assert.ok(last.ranks.atr.queriedAt);
+  assert.ok(!last.ranks.atr.items.some((item) => item.label === 'ABS'));
+  assert.equal(last.ranks.tm, undefined);
 });
