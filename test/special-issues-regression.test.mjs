@@ -367,11 +367,14 @@ test('Springer collections: parse the primary call, ignore article links and rej
   });
   assert.equal(result.fetched.length, 0);
   assert.ok(result.failed.length > 0);
+  // jibs 的旧 Springer collection 链接无法复核，已从默认源移除；
+  // 未配置征稿源时应明确提示，而不是用不可靠的旧链接抓取。
   const automatic = await syncSpecialIssues({ selectedJournalIds: ['jibs'] }, {
     now, maxDetailPages: 0, fetchImpl: async (url) => response(closed, url),
   });
   assert.equal(automatic.fetched.length, 0);
-  assert.match(automatic.failed[0].error, /已关闭投稿/);
+  assert.ok(automatic.failed.length > 0);
+  assert.match(automatic.failed[0].error, /没有已配置的征稿源|未找到公开征稿入口|已关闭投稿/);
 });
 
 test('source policy: canonical URLs drop transient cookie errors and preserve meaningful queries', () => {

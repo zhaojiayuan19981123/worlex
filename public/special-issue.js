@@ -285,13 +285,19 @@
   function journalSource(j, d) {
     const override = safeUrl(d.cfpOverrides?.[j.id]);
     const source = j.sourceAudit || {};
+    const detailLinks = (j.verifiedSiUrls || []).map(safeUrl).filter(Boolean);
     const aggregate = (d.sources || []).find((entry) => entry.verified && entry.url === j.cfpUrl);
     const labels = { 'cfp-confirmed': '征稿入口已核实', 'homepage-confirmed': '主页已核实 · 征稿待确认',
       'access-limited': '官网访问受限', 'robots-restricted': '官网抓取受限', 'not-confirmed': '入口未确认' };
-    const label = override ? '自定义征稿入口' : aggregate ? '已核实出版社接口' : labels[source.state] || '入口未确认';
+    let label = override ? '自定义征稿入口' : aggregate ? '已核实出版社接口' : labels[source.state] || '入口未确认';
+    if (!override && detailLinks.length && source.state === 'cfp-confirmed') label = `已核验 SI · ${detailLinks.length} 条`;
     const url = override || safeUrl(j.cfpUrl) || safeUrl(j.journalUrl);
     const checked = source.checks?.[0];
-    const title = [j.publisher, checked?.checkedAt, checked?.status ? `HTTP ${checked.status}` : '', source.note || ''].filter(Boolean).join(' · ');
+    const evidenceBits = [];
+    if (source.source === 'tandf-official-api') evidenceBits.push('来源：Taylor & Francis 官方征稿接口');
+    if (source.recordCount) evidenceBits.push(`接口记录 ${source.recordCount} 条`);
+    if (detailLinks.length) evidenceBits.push(`逐条核验 ${detailLinks.length} 个 SI 详情页`);
+    const title = [j.publisher, source.checkedAt, checked?.status ? `HTTP ${checked.status}` : '', ...evidenceBits, source.note || ''].filter(Boolean).join(' · ');
     return `<span class="si-journal-source" title="${esc(title)}">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ${ico('external', 'ico-sm')}</a>` : esc(label)}</span>`;
   }
 

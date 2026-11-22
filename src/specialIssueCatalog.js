@@ -240,6 +240,8 @@ export const ABS_JOURNALS = RAW.map(([id, title, shortTitle, category, publisher
   cfpUrl: defaultCfpUrl(j),
   cfpUrls: SOURCE_AUDIT.journals[j.id]?.state === 'cfp-confirmed'
     ? (SOURCE_AUDIT.journals[j.id].cfpUrls || [SOURCE_AUDIT.journals[j.id].cfpUrl]).filter(Boolean).map(canonicalSourceUrl) : [],
+  // 从官方结构化接口逐条核验过的真实 SI 详情页，供用户核对；抓取仍走官方聚合接口以免单条过期。
+  verifiedSiUrls: (SOURCE_AUDIT.journals[j.id]?.verifiedSiUrls || []).filter(Boolean).map(canonicalSourceUrl),
   journalUrl: SOURCE_AUDIT.journals[j.id]?.journalUrl ? canonicalSourceUrl(SOURCE_AUDIT.journals[j.id].journalUrl)
     : (WILEY_ONLINE_ISSN[j.id] ? `https://onlinelibrary.wiley.com/journal/${WILEY_ONLINE_ISSN[j.id]}` : ''),
   sourceAudit: SOURCE_AUDIT.journals[j.id] || { state: 'not-confirmed', checks: [] },

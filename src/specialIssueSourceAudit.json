@@ -1,6 +1,6 @@
 {
-  "checkedAt": "2026-11-22T18:32:48.688Z",
-  "method": "Official homepage identity check, linked CFP discovery, robots.txt and HTTP evidence. Restricted and unconfirmed pages are not verified CFPs.",
+  "checkedAt": "2026-11-22T19:32:19.748Z",
+  "method": "Official structured call-for-papers API (T&F). Per-journal CFP links come only from API records; no URL guessing. Each link is an actual Special Issue detail page with journal title and deadline.",
   "journals": {
     "jae": {
       "id": "jae",
@@ -198,17 +198,35 @@
     },
     "af": {
       "id": "af",
-      "journalUrl": "https://www.tandfonline.com/journals/racc20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/guardians-of-accountability/",
+          "title": "Guardians of accountability: Accounting professionals’ roles in fraud prevention and early internal detection",
+          "siTitle": "Special Issue: Guardians of Accountability",
+          "deadline": "31 March 2027",
+          "deadlineText": "31 March 2027",
+          "updatedAt": "2025-10-03T06:01:40"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/racc20",
-          "url": "https://www.tandfonline.com/journals/racc20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:06:59.496Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/guardians-of-accountability/"
       ]
     },
     "rfs": {
@@ -501,17 +519,62 @@
     },
     "ijpr": {
       "id": "ijpr",
-      "journalUrl": "https://www.tandfonline.com/journals/tprs20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ijpr-steel/",
+          "title": "Intelligent, Sustainable and Resilient Steel Production and Supply Chain for the Future",
+          "siTitle": "Intelligent, Sustainable and Resilient Steel Production and Supply Chain for the Future",
+          "deadline": "30 September 2027",
+          "deadlineText": "30 September 2027",
+          "updatedAt": "2026-11-06T16:16:43"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ai-driven-decision-making/",
+          "title": "AI-Driven Decision Making under Uncertain Environments: Theory, Methods, and Industrial Applications",
+          "siTitle": "AI-Driven Decision Making under Uncertain Environments",
+          "deadline": "31 January 2027",
+          "deadlineText": "31 January 2027",
+          "updatedAt": "2026-05-14T16:54:49"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ijpr-ripple-effect/",
+          "title": "Ripple Effect Research in Supply Chains",
+          "siTitle": "Ripple Effect Research in Supply Chains",
+          "deadline": "31 May 2027",
+          "deadlineText": "31 May 2027",
+          "updatedAt": "2026-11-06T15:59:41"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ijpr-hazardous-chemicals/",
+          "title": "Management Theories and Methods for Safe Operations of Hazardous Chemicals in Production and Logistics Systems",
+          "siTitle": "Safe Operations of Hazardous Chemicals in Production and Logistics Systems",
+          "deadline": "31 October 2027",
+          "deadlineText": "31 October 2027",
+          "updatedAt": "2026-09-15T15:54:32"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/tprs20",
-          "url": "https://www.tandfonline.com/journals/tprs20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:08.263Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/ijpr-steel/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/ai-driven-decision-making/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/ijpr-ripple-effect/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/ijpr-hazardous-chemicals/"
       ]
     },
     "msom": {
@@ -546,17 +609,35 @@
     },
     "iise": {
       "id": "iise",
-      "journalUrl": "https://www.tandfonline.com/journals/uiie21",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/practice-driven-research-challenges-pdrc/",
+          "title": "Practice-Driven Research Challenges (PDRC)",
+          "siTitle": "Practice-Driven Research Challenges (PDRC)",
+          "deadline": "31 December 2027",
+          "deadlineText": "31 December 2027",
+          "updatedAt": "2025-12-09T15:28:11"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/uiie21",
-          "url": "https://www.tandfonline.com/journals/uiie21",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:10.613Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/practice-driven-research-challenges-pdrc/"
       ]
     },
     "ijoc": {
@@ -723,17 +804,62 @@
     },
     "ejis": {
       "id": "ejis",
-      "journalUrl": "https://www.tandfonline.com/journals/tjis20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ejis-native-is-theories/",
+          "title": "Native IS Theories",
+          "siTitle": "Native IS Theories",
+          "deadline": "01 December 2027",
+          "deadlineText": "01 December 2027",
+          "updatedAt": "2026-02-10T16:36:41"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/theorizing-the-data-ai-nexus/",
+          "title": "Theorizing the Data-AI Nexus",
+          "siTitle": "Theorizing the Data-AI Nexus",
+          "deadline": "15 January 2027",
+          "deadlineText": "15 January 2027",
+          "updatedAt": "2026-05-13T09:38:09"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/digital-health-ecosystems/",
+          "title": "The future of creating and distributing value in digital health ecosystems",
+          "siTitle": "The future of creating and distributing value in digital health ecosystems",
+          "deadline": "30 November 2026",
+          "deadlineText": "30 November 2026",
+          "updatedAt": "2025-08-13T13:16:47"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ejis-digital-visibility/",
+          "title": "Digital Visibility: Design, Management, & Impacts (incl. Paper Development Workshop)",
+          "siTitle": "Digital Visibility: Design, Management, & Impacts",
+          "deadline": "31 March 2027",
+          "deadlineText": "31 March 2027",
+          "updatedAt": "2026-03-31T15:34:33"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/tjis20",
-          "url": "https://www.tandfonline.com/journals/tjis20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:15.082Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/ejis-native-is-theories/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/theorizing-the-data-ai-nexus/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/digital-health-ecosystems/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/ejis-digital-visibility/"
       ]
     },
     "iacr": {
@@ -892,11 +1018,45 @@
     },
     "jar_res": {
       "id": "jar_res",
-      "journalUrl": "https://journals.sagepub.com/home/jar",
-      "cfpUrl": "",
-      "state": "robots-restricted",
-      "checks": [],
-      "note": "robots.txt disallows access or could not be checked safely."
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/machines-as-method-the-use-of-artificial-intelligence-in-advertising-research/",
+          "title": "Machines as Method: The Use of Artificial Intelligence in Advertising Research",
+          "siTitle": "Machines as Method",
+          "deadline": "01 August 2027",
+          "deadlineText": "01 August 2027",
+          "updatedAt": "2026-09-15T21:37:40"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/ai-and-the-future-of-advertising-creativity/",
+          "title": "AI and the Future of Advertising Creativity",
+          "siTitle": "AI and the Future of Advertising Creativity",
+          "deadline": "15 October 2027",
+          "deadlineText": "15 October 2027",
+          "updatedAt": "2026-06-16T11:50:07"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
+      "checks": [
+        {
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
+        }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/machines-as-method-the-use-of-artificial-intelligence-in-advertising-research/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/ai-and-the-future-of-advertising-creativity/"
+      ]
     },
     "jsr": {
       "id": "jsr",
@@ -964,17 +1124,35 @@
     },
     "ja": {
       "id": "ja",
-      "journalUrl": "https://www.tandfonline.com/journals/ujoa20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/the-power-of-visuals-in-advertising-research/",
+          "title": "Beyond What Meets the Eyes: The Power of Visuals in Advertising Research",
+          "siTitle": "Special Issue: The Power of Visuals in Advertising Research",
+          "deadline": "01 April 2027",
+          "deadlineText": "01 April 2027",
+          "updatedAt": "2026-10-23T12:11:14"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/ujoa20",
-          "url": "https://www.tandfonline.com/journals/ujoa20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:20.035Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/the-power-of-visuals-in-advertising-research/"
       ]
     },
     "em": {
@@ -1475,17 +1653,35 @@
     },
     "jost": {
       "id": "jost",
-      "journalUrl": "https://www.tandfonline.com/journals/rsus20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/sustainable-luxury-tourism-opportunities-tensions/",
+          "title": "Sustainable Luxury Tourism: Opportunities, Tensions, and Impacts",
+          "siTitle": "Sustainable Luxury Tourism",
+          "deadline": "31 May 2027",
+          "deadlineText": "31 May 2027",
+          "updatedAt": "2026-07-21T16:54:03"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/rsus20",
-          "url": "https://www.tandfonline.com/journals/rsus20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:32.384Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/sustainable-luxury-tourism-opportunities-tensions/"
       ]
     },
     "ijhm": {
@@ -1538,11 +1734,9 @@
     "jibs": {
       "id": "jibs",
       "journalUrl": "https://link.springer.com/journal/41267",
-      "cfpUrl": "https://link.springer.com/collections/fbcifgfdga",
-      "cfpUrls": [
-        "https://link.springer.com/collections/fbcifgfdga"
-      ],
-      "state": "cfp-confirmed",
+      "cfpUrl": "",
+      "cfpUrls": [],
+      "state": "homepage-confirmed",
       "checkedAt": "2026-11-22T18:28:08.356Z",
       "checks": [
         {
@@ -1564,7 +1758,8 @@
             "closed": false
           }
         }
-      ]
+      ],
+      "note": "Springer collection link could not be re-verified (HTTP 303); homepage kept, CFP not used as default source."
     },
     "jtf": {
       "id": "jtf",
@@ -1645,17 +1840,44 @@
     },
     "cit": {
       "id": "cit",
-      "journalUrl": "https://www.tandfonline.com/journals/rcit20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/a-decade-2015-2025-of-the-sustainable-development-goals-sdgs-trends-reflections-and-realignments-in-hospitality-and-tourism-research/",
+          "title": "A Decade (2015-2025) of the Sustainable Development Goals (SDGs): Trends, Reflections, and Realignments in Hospitality and Tourism Research",
+          "siTitle": "A Decade (2015-2025) of the Sustainable Development Goals (SDGs): Trends, Reflections, and Realignments in Hospitality and Tourism Research",
+          "deadline": "01 December 2026",
+          "deadlineText": "01 December 2026",
+          "updatedAt": "2026-03-25T09:54:34"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/tourism-and-the-2026-middle-east-crisis-international-and-regional-implications/",
+          "title": "Tourism and the 2026 Middle East Crisis: International and Regional Implications",
+          "siTitle": "Tourism and the 2026 Middle East Crisis: International and Regional Implications",
+          "deadline": "31 December 2026",
+          "deadlineText": "31 December 2026",
+          "updatedAt": "2026-06-18T18:54:47"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/rcit20",
-          "url": "https://www.tandfonline.com/journals/rcit20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:36.596Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/a-decade-2015-2025-of-the-sustainable-development-goals-sdgs-trends-reflections-and-realignments-in-hospitality-and-tourism-research/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/tourism-and-the-2026-middle-east-crisis-international-and-regional-implications/"
       ]
     },
     "ijtr": {
@@ -1683,17 +1905,35 @@
     },
     "apjtr": {
       "id": "apjtr",
-      "journalUrl": "https://www.tandfonline.com/journals/rapt20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/walking-and-working-with-ai/",
+          "title": "Walking and Working with AI: AI-Enabled Tourism Research and Practices",
+          "siTitle": "Walking and Working with AI: AI-Enabled Tourism Research and Practices",
+          "deadline": "30 April 2027",
+          "deadlineText": "30 April 2027",
+          "updatedAt": "2026-09-25T04:36:34"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/rapt20",
-          "url": "https://www.tandfonline.com/journals/rapt20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:38.690Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/walking-and-working-with-ai/"
       ]
     },
     "jttm": {
@@ -1957,17 +2197,62 @@
     },
     "pmr": {
       "id": "pmr",
-      "journalUrl": "https://www.tandfonline.com/journals/rpxm20",
-      "cfpUrl": "",
-      "state": "access-limited",
+      "journalUrl": "",
+      "cfpUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=100&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy",
+      "cfpUrls": [],
+      "issues": [
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/administrative-inequality-conceptualization-and-micro-mechanisms/",
+          "title": "Administrative Inequality: Conceptualization and Micro-Mechanisms",
+          "siTitle": "Special Issue: Administrative Inequality: Conceptualization and Micro-Mechanisms",
+          "deadline": "01 August 2027",
+          "deadlineText": "01 August 2027",
+          "updatedAt": "2026-10-08T12:10:44"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/challenging-public-administration-and-management-theory-emerging-perspectives-from-asia-and-the-global-south/",
+          "title": "Challenging Public Administration and Management Theory: Emerging Perspectives from Asia and the Global South",
+          "siTitle": "Challenging PA and Management Theory: Emerging Perspectives from Asia and the Global South",
+          "deadline": "06 September 2027",
+          "deadlineText": "06 September 2027",
+          "updatedAt": "2026-11-09T11:15:27"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/coping-with-tensions-challenges-and-limitations-of-boundary-spanning-work-in-collaborative-governance-and-public-service-delivery-in-turbulent-times/",
+          "title": "Coping with tensions, challenges and limitations of boundary spanning work in collaborative governance and public service delivery in turbulent times",
+          "siTitle": "Special Issue: boundary spanning work in collaborative governance",
+          "deadline": "15 January 2027",
+          "deadlineText": "15 January 2027",
+          "updatedAt": "2026-01-08T10:29:26"
+        },
+        {
+          "url": "https://callforpapers.taylorandfrancis.com/special_issues/place-based-strategy-design-for-value-creation/",
+          "title": "Place-Based Strategy Design for Value Creation",
+          "siTitle": "Special Issue: Place-Based Strategy Design for Value Creation",
+          "deadline": "30 April 2027",
+          "deadlineText": "30 April 2027",
+          "updatedAt": "2025-12-02T12:34:59"
+        }
+      ],
+      "state": "cfp-confirmed",
+      "checkedAt": "2026-11-22T19:32:19.748Z",
+      "source": "tandf-official-api",
       "checks": [
         {
-          "requestedUrl": "https://www.tandfonline.com/journals/rpxm20",
-          "url": "https://www.tandfonline.com/journals/rpxm20",
-          "status": 403,
-          "checkedAt": "2026-11-22T18:07:49.196Z",
-          "title": "Just a moment..."
+          "requestedUrl": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+          "status": 200,
+          "checkedAt": "2026-11-22T19:32:19.748Z",
+          "evidence": {
+            "format": "official-special-issues-json",
+            "records": 574
+          }
         }
+      ],
+      "verifiedSiUrls": [
+        "https://callforpapers.taylorandfrancis.com/special_issues/administrative-inequality-conceptualization-and-micro-mechanisms/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/challenging-public-administration-and-management-theory-emerging-perspectives-from-asia-and-the-global-south/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/coping-with-tensions-challenges-and-limitations-of-boundary-spanning-work-in-collaborative-governance-and-public-service-delivery-in-turbulent-times/",
+        "https://callforpapers.taylorandfrancis.com/special_issues/place-based-strategy-design-for-value-creation/"
       ]
     },
     "he": {
@@ -2039,14 +2324,16 @@
       "label": "Emerald",
       "url": "https://www.emeraldgrouppublishing.com/calls-for-papers",
       "publisher": "Emerald",
-      "state": "robots-restricted"
+      "state": "unverified",
+      "verified": false
     },
     {
       "id": "sage",
       "label": "SAGE Journals",
       "url": "https://journals.sagepub.com/call-for-papers",
       "publisher": "Sage",
-      "state": "robots-restricted"
+      "state": "unverified",
+      "verified": false
     },
     {
       "id": "informs",
@@ -2056,7 +2343,8 @@
       "requestedUrl": "https://pubsonline.informs.org/page/calls-for-papers",
       "status": 403,
       "checkedAt": "2026-11-22T18:08:06.278Z",
-      "state": "not-confirmed"
+      "state": "unverified",
+      "verified": false
     },
     {
       "id": "frontiers",
@@ -2073,7 +2361,7 @@
         "headings": "Research Topics | Frontiers | 54,932 Research Topics | research topics | Epithelial cell homeostasis, survival and membrane trafficking in intestinal inflammation: Mechanisms and Therapeutic Opportunities | Environmental Enrichment and Welfare of Farmed Fish | Biologics Meet Nanotechnology: Unlocking the Therapeutic Potential of Proteins and RNA | From Networks to Medicines: Systems Pharmacology Approaches for Experimental Drug Discovery | Integrative exercise biology in clinical prevention and rehabilitation | Harnessing Persistent Free Radicals for Enhanced Microbial Bioremediation | Beyond ",
         "identity": true
       },
-      "state": "not-confirmed"
+      "state": "unverified"
     },
     {
       "id": "springer",
@@ -2090,7 +2378,7 @@
         "headings": "Springer, serving the global research community | Serving the global research community",
         "identity": true
       },
-      "state": "not-confirmed"
+      "state": "unverified"
     },
     {
       "id": "tandf",
@@ -2109,5 +2397,7 @@
       },
       "state": "aggregate-confirmed"
     }
-  ]
+  ],
+  "source": "https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues",
+  "recordCount": 574
 }

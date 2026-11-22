@@ -8,7 +8,8 @@
 
 import crypto from 'node:crypto';
 import { canonicalSourceUrl, cfpPageEvidence } from './specialIssueSourcePolicy.js';
-import { discoverJournalCfpPages, publisherCandidates, publisherPageError, mayFetchDetail } from './specialIssueParser.js';
+import { discoverJournalCfpPages, publisherCandidates, publisherPageError, mayFetchDetail, officialSiDetailCandidates } from './specialIssueParser.js';
+import { officialSiDetailEvidence } from './specialIssueSourcePolicy.js';
 import {
   ABS_JOURNALS, ABS_CATEGORIES, CFP_SOURCES, SI_PRESETS, TOPIC_LEXICON,
   journalById, defaultCfpUrl, isLegacyWileyCfpUrl,
@@ -292,9 +293,13 @@ export function parseSpecialIssueDocument(text, opts = {}) {
     }).filter(Boolean);
   }
   const isFeed = /<(?:rss|feed|rdf:RDF)\b/i.test(raw.slice(0, 2000));
+  const isOfficialDetail = /^callforpapers\.taylorandfrancis\.com$/i.test((() => { try { return new URL(baseUrl).hostname; } catch { return ''; } })())
+    && /^\/special_issues\/[^/]+\/?$/i.test((() => { try { return new URL(baseUrl).pathname; } catch { return ''; } })());
   const candidates = isFeed
     ? rssItems(raw).map((x) => ({ title: x.title, text: x.text, href: x.href }))
-    : publisherCandidates(raw, baseUrl, { detail: opts.detail === true });
+    : isOfficialDetail
+      ? officialSiDetailCandidates(raw, baseUrl, journal)
+      : publisherCandidates(raw, baseUrl, { detail: opts.detail === true });
 
   const seen = new Set();
   const out = [];
@@ -810,8 +815,10 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
         const journal = task.journalId ? journalById(task.journalId) : null;
         if (task.verifyCfp) {
           const evidence = cfpPageEvidence(text, page.url, journal?.title);
-          if (evidence.closed) throw new Error('官网明确标注已关闭投稿，该专题不作为在征 SI 导入');
-          if (!evidence.confirmed) throw new Error('页面未确认是该刊征稿入口，可能已重定向或属于已出版专刊；请核实原文');
+          const detailEvidence = evidence.confirmed ? null : officialSiDetailEvidence(text, page.url, journal?.title);
+          const confirmed = evidence.confirmed || detailEvidence?.confirmed;
+          if (evidence.closed || detailEvidence?.closed) throw new Error('官网明确标注已关闭投稿，该专题不作为在征 SI 导入');
+          if (!confirmed) throw new Error('页面未确认是该刊征稿入口，可能已重定向或属于已出版专刊；请核实原文');
         }
         let parsed = parseSpecialIssueDocument(text, { baseUrl: page.url, journal, now, rows: rowsPerSource });
         const warnings = [];

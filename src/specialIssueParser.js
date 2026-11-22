@@ -111,6 +111,36 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
   return candidates.slice(0, 200);
 }
 
+/**
+ * T&F 官方 SI 详情页：每页就是一条专刊，标题在 <title>/<h1>，期刊名有专门字段。
+ * 用整页正文抽取字段，避免通用启发式把导航链接（"View all Calls for Papers"）误当 SI。
+ */
+export function officialSiDetailCandidates(html, baseUrl, journal = null) {
+  const doc = parseDocument(String(html || ''), { decodeEntities: true });
+  const headings = walk(doc, (n) => /^h[1-2]$/.test(n.name));
+  // <title> is the real SI title; h1 on these pages is usually the journal name.
+  const titleTag = walk(doc, (n) => n.name === 'title')[0];
+  const h1 = headings.find((n) => /^h1$/.test(n.name));
+  const headingTexts = headings.map((n) => clean(text(n))).filter(Boolean);
+  const titleTagText = clean(titleTag ? text(titleTag) : '');
+  const h1Text = clean(h1 ? text(h1) : '');
+  const journalFromPage = headingTexts.find((h) => h !== titleTagText && h.length < 90 && !/special issue|editor|deadline|submit/i.test(h)) || '';
+  // 真实 T&F 详情页用 <title> 作 SI 短标题、h1 作期刊名；旧 fixture / 部分页面没有 <title>，
+  // 此时取 h2（SI 标题），避免误把 h1 的期刊名当标题。
+  const h2Text = clean(headings.filter((n) => /^h2$/.test(n.name)).map((n) => text(n)).join(' '));
+  const rawTitle = titleTagText && titleTagText !== journalFromPage
+    ? titleTagText
+    : (h2Text || (h1Text && h1Text !== journalFromPage ? h1Text : titleTagText));
+  if (!rawTitle || /^(just a moment|access denied|attention required)/i.test(rawTitle)) return [];
+  const journalName = journal?.title || journalFromPage;
+  const body = clean(text(walk(doc, (n) => n.name === 'main')[0] || doc));
+  const deadlineMatch = body.match(/(?:submission\s+deadline|deadline)\s*[:\-–]?\s*([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4}|[A-Za-z]+\s+[0-9]{1,2},?\s+[0-9]{4}|\d{4}-\d{2}-\d{2})/i);
+  const deadline = deadlineMatch?.[1] || '';
+  const description = body.replace(rawTitle, '').replace(/special issue\s*/i, '').replace(/submit your manuscript.*$/i, '').trim().slice(0, 12000);
+  if (!/special issue|deadline/i.test(body + ' ' + rawTitle)) return [];
+  return [{ title: rawTitle, text: [rawTitle, journalName, deadline, description].filter(Boolean).join('\n'), href: baseUrl, journalName }];
+}
+
 export function publisherPageError(html) {
   const s = String(html || '');
   if (/^\s*[\[{]/.test(s)) return '';

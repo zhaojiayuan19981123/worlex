@@ -66,3 +66,30 @@ export function cfpPageEvidence(html, url, journalTitle = '') {
   return { confirmed: identity && focused && call.test(headings + ' ' + text) && !archive && !closed,
     headings: headings.slice(0, 600), identity, closed };
 }
+
+/**
+ * 官方征稿 API 返回的 SI 详情页：标题就是专刊标题，没有 "Call for Papers" 栏目标签，
+ * 因此 cfpPageEvidence 的列表页判据不适用。这类页面由以下特征确认：
+ *   1) 来自官方 CFP 域名 /special_issues/ 路径；
+ *   2) 正文明确含 special issue 与 submission deadline；
+ *   3) 给出期刊名（identity）。
+ * 只用于「可信来源提供的详情页」，不会被用来把任意出版社主页误判成征稿页。
+ */
+export function officialSiDetailEvidence(html, url, journalTitle = '') {
+  const document = parseDocument(String(html || ''));
+  const headings = DomUtils.findAll((node) => ['title', 'h1', 'h2'].includes(node.name), document.children)
+    .map((node) => DomUtils.textContent(node).replace(/\s+/g, ' ').trim()).join(' | ');
+  const text = content(document).replace(/\s+/g, ' ');
+  let pathOk = false;
+  try {
+    const parsed = new URL(url);
+    pathOk = /^callforpapers\.taylorandfrancis\.com$/i.test(parsed.hostname)
+      && /^\/special_issues\/[^/]+\/?$/i.test(parsed.pathname);
+  } catch { /* invalid url */ }
+  const identity = !journalTitle || normalize(text).includes(normalize(journalTitle));
+  const si = /special\s+issue|专刊|特刊/i.test(headings + ' ' + text);
+  const deadline = /submission\s+deadline|deadline|截止/i.test(headings + ' ' + text);
+  const closed = /\bclosed for submissions\b|\bsubmissions? (?:are |is )?(?:now )?closed\b/i.test(headings + ' ' + text);
+  return { confirmed: pathOk && identity && si && deadline && !closed,
+    headings: headings.slice(0, 600), identity, closed, detail: true };
+}
