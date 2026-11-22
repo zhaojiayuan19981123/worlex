@@ -16,6 +16,7 @@
     tab: 'issues', query: '', sort: 'deadline', topic: '', favoriteOnly: false,
     journalQuery: '', category: '', busy: false, loading: false,
     expanded: new Set(), dismissed: new Set(), sourceDraft: [], overrideDraft: [],
+    addMode: 'manual', pasteItems: [], pasteChecked: new Set(),
     timer: null,
   };
 
@@ -358,24 +359,111 @@
     </div>`;
   }
 
+  async function parsePaste(btn) {
+    const text = (S.root.querySelector('#siPasteText')?.value || '').trim();
+    if (!text) { toast('请先粘贴征稿页面内容', 'error'); return; }
+    const original = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = `${ico('loader', 'ico-sm')}解析中`;
+    try {
+      const r = await api('/api/special-issues/parse-paste', {
+        method: 'POST',
+        body: {
+          text,
+          url: S.root.querySelector('#siPasteUrl')?.value || '',
+          journalId: S.root.querySelector('#siPasteJournal')?.value || '',
+          aiExtract: !!S.root.querySelector('#siPasteAi')?.checked,
+        },
+      });
+      S.pasteItems = r.items || [];
+      S.pasteChecked = new Set(S.pasteItems.map((_, idx) => idx));
+      renderPasteResult();
+      if (!S.pasteItems.length) toast('没有识别到征稿条目，可勾选 AI 补充识别或改用手动填写', 'error');
+      else toast(`识别到 ${S.pasteItems.length} 条，请确认后导入`, 'success');
+    } catch (e) {
+      toast(e.message || '解析失败', 'error');
+    } finally {
+      btn.disabled = false; btn.innerHTML = original;
+    }
+  }
+
+  async function importPaste(btn) {
+    const items = [...S.pasteChecked].sort((a, b) => a - b).map((i) => S.pasteItems[i]).filter(Boolean);
+    if (!items.length) return;
+    const original = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = `${ico('loader', 'ico-sm')}导入中`;
+    try {
+      const r = await api('/api/special-issues/import', { method: 'POST', body: { items } });
+      S.data = r;
+      closeModal();
+      render();
+      toast(`已导入 ${r.added?.length || 0} 条${r.skipped?.length ? `，跳过 ${r.skipped.length} 条重复` : ''}`, 'success');
+    } catch (e) {
+      toast(e.message || '导入失败', 'error');
+      btn.disabled = false; btn.innerHTML = original;
+    }
+  }
+
   function openAddModal() {
     const box = S.root?.querySelector('#siModal');
     if (!box) return;
     const catalog = S.data?.catalog || [];
+    const journalOptions = `<option value="">未指定 / 自动识别</option>${catalog.map((j) => `<option value="${esc(j.id)}">${esc(j.shortTitle)} — ${esc(j.title)}</option>`).join('')}`;
+    const manual = `<form id="siAddForm">
+      <label>专刊标题 <i>*</i><input class="si-input" id="siAddTitle" required maxlength="240" placeholder="Special Issue: ..."></label>
+      <label>期刊<select class="si-select" id="siAddJournal">${journalOptions}</select></label>
+      <label>主题简介<textarea class="si-input" id="siAddDesc" rows="3" maxlength="900" placeholder="征稿主题、投稿要求…"></textarea></label>
+      <label>截止日期<input class="si-input" id="siAddDeadline" placeholder="2027-06-30 或 30 June 2027"></label>
+      <label>原文链接<input class="si-input" id="siAddUrl" type="url" placeholder="https://…"></label>
+      <div class="si-modal-foot"><button type="button" class="tb-btn" data-si-act="close-modal">取消</button><button type="submit" class="tb-btn accent">添加</button></div>
+    </form>`;
+    const paste = `<div id="siPasteForm">
+      <label>征稿页面内容 <i>*</i><textarea class="si-input" id="siPasteText" rows="9" maxlength="400000" placeholder="在浏览器打开征稿页，全选复制后粘贴到这里"></textarea></label>
+      <div class="si-paste-row">
+        <label>来源链接<input class="si-input" id="siPasteUrl" type="url" placeholder="https://…（可选）"></label>
+        <label>期刊<select class="si-select" id="siPasteJournal">${journalOptions}</select></label>
+      </div>
+      <label class="si-paste-ai"><input type="checkbox" id="siPasteAi">使用 AI 补充识别（可选）</label>
+      <div class="si-modal-foot"><button class="tb-btn" data-si-act="close-modal">取消</button><button class="tb-btn accent" data-si-act="parse-paste" id="siParseBtn">${ico('search')}解析</button></div>
+      <div id="siPasteResult"></div>
+    </div>`;
     box.innerHTML = `<div class="si-modal-mask">
-      <div class="si-modal" role="dialog" aria-modal="true" aria-label="添加 SI 征稿">
+      <div class="si-modal si-modal-wide" role="dialog" aria-modal="true" aria-label="添加 SI 征稿">
         <div class="si-modal-head"><b>添加 SI 征稿</b><button class="si-rec-close" data-si-act="close-modal" aria-label="关闭">${ico('x')}</button></div>
-        <form id="siAddForm">
-          <label>专刊标题 <i>*</i><input class="si-input" id="siAddTitle" required maxlength="240" placeholder="Special Issue: ..."></label>
-          <label>期刊<select class="si-select" id="siAddJournal"><option value="">未指定 / 自动识别</option>${catalog.map((j) => `<option value="${esc(j.id)}">${esc(j.shortTitle)} — ${esc(j.title)}</option>`).join('')}</select></label>
-          <label>主题简介<textarea class="si-input" id="siAddDesc" rows="3" maxlength="900" placeholder="征稿主题、投稿要求…"></textarea></label>
-          <label>截止日期<input class="si-input" id="siAddDeadline" placeholder="2027-06-30 或 30 June 2027"></label>
-          <label>原文链接<input class="si-input" id="siAddUrl" type="url" placeholder="https://…"></label>
-          <div class="si-modal-foot"><button type="button" class="tb-btn" data-si-act="close-modal">取消</button><button type="submit" class="tb-btn accent">添加</button></div>
-        </form>
+        <div class="si-add-tabs"><button class="${S.addMode === 'manual' ? 'active' : ''}" data-si-act="add-mode" data-mode="manual">手动填写</button><button class="${S.addMode === 'paste' ? 'active' : ''}" data-si-act="add-mode" data-mode="paste">从网页粘贴</button></div>
+        ${S.addMode === 'paste' ? paste : manual}
       </div>
     </div>`;
-    box.querySelector('#siAddTitle')?.focus();
+    if (S.addMode === 'manual') box.querySelector('#siAddTitle')?.focus();
+    else renderPasteResult();
+  }
+
+  function renderPasteResult() {
+    const box = S.root?.querySelector('#siPasteResult');
+    if (!box) return;
+    const items = S.pasteItems || [];
+    if (!items.length) { box.innerHTML = ''; return; }
+    const rows = items.map((it, idx) => {
+      const checked = S.pasteChecked.has(idx);
+      const dl = deadlineMetaLocal(it);
+      return `<label class="si-paste-cand ${checked ? 'is-checked' : ''}">
+        <input type="checkbox" data-si-cand="${idx}" ${checked ? 'checked' : ''}>
+        <span class="si-paste-cand-body">
+          <b>${esc(it.title)}</b>
+          <span class="si-paste-cand-meta">${esc(it.journal || '未指定期刊')}${it.deadline || dl.date ? ` · 截稿 ${esc(it.deadline || dl.date)}` : ''}</span>
+          ${it.description ? `<span class="si-paste-cand-desc">${esc(it.description.slice(0, 140))}</span>` : ''}
+        </span>
+      </label>`;
+    }).join('');
+    box.innerHTML = `<div class="si-paste-list">${rows}</div>
+      <div class="si-paste-foot"><span class="si-paste-count">已选 ${S.pasteChecked.size} / ${items.length}</span><button class="tb-btn accent" data-si-act="import-paste" ${S.pasteChecked.size ? '' : 'disabled'}>${ico('plus')}导入所选</button></div>`;
+  }
+
+  function deadlineMetaLocal(issue) {
+    if (!issue?.deadline) return {};
+    const d = new Date(issue.deadline + 'T23:59:59');
+    if (Number.isNaN(d.getTime())) return {};
+    const days = Math.ceil((d.getTime() - Date.now()) / 86400000);
+    return { date: issue.deadline, days };
   }
 
   function closeModal() {
@@ -461,6 +549,16 @@
 
   function onChange(e) {
     const t = e.target;
+    if (t.matches('[data-si-cand]')) {
+      const idx = Number(t.dataset.siCand);
+      if (t.checked) S.pasteChecked.add(idx); else S.pasteChecked.delete(idx);
+      t.closest('.si-paste-cand')?.classList.toggle('is-checked', t.checked);
+      const count = S.root.querySelector('.si-paste-count');
+      if (count) count.textContent = `已选 ${S.pasteChecked.size} / ${S.pasteItems.length}`;
+      const btn = S.root.querySelector('[data-si-act="import-paste"]');
+      if (btn) btn.disabled = S.pasteChecked.size === 0;
+      return;
+    }
     if (t.id === 'siRecommendChk') { put('/api/special-issues/preferences', { recommendEnabled: t.checked }); return; }
     if (t.id === 'siFavChk') { S.favoriteOnly = t.checked; load(); return; }
     if (t.id === 'siSort') { S.sort = t.value; load(); return; }
@@ -524,8 +622,14 @@
       const q = S.root.querySelector('#siQuery'); if (q) q.value = '';
       load(); return;
     }
-    if (act === 'add') { openAddModal(); return; }
+    if (act === 'add') { S.addMode = 'manual'; S.pasteItems = []; S.pasteChecked = new Set(); openAddModal(); return; }
     if (act === 'close-modal') { closeModal(); return; }
+    if (act === 'add-mode') {
+      S.addMode = node.dataset.mode === 'paste' ? 'paste' : 'manual';
+      openAddModal(); return;
+    }
+    if (act === 'parse-paste') { parsePaste(node); return; }
+    if (act === 'import-paste') { importPaste(node); return; }
     if (act === 'save-custom') {
       const title = (S.root.querySelector('#siAddTitle')?.value || '').trim();
       if (!title) { toast('请填写专刊标题', 'error'); return; }

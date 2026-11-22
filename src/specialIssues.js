@@ -254,7 +254,7 @@ export function extractKeywords(text, limit = 8) {
  * 只做公开列表信息的字段抽取：标题 / 简介 / deadline / 原文链接。
  */
 export function parseSpecialIssueDocument(text, opts = {}) {
-  const { baseUrl = '', journal = null, now = new Date(), rows = 60 } = opts;
+  const { baseUrl = '', journal = null, now = new Date(), rows = 60, requireUrl = true } = opts;
   const raw = str(text);
   if (!raw.trim()) return [];
   const isFeed = /<(?:rss|feed|rdf:RDF)\b/i.test(raw.slice(0, 2000));
@@ -271,7 +271,7 @@ export function parseSpecialIssueDocument(text, opts = {}) {
     title = title.replace(/^(?:call\s+for\s+papers|special\s+issue|cfp)\s*[：:|\-–—]\s*/i, '').trim();
     if (!title || title.length < 8) continue;
     const url = (c.href ? safeUrl(c.href, baseUrl) : '') || safeUrl(baseUrl, baseUrl);
-    if (!url) continue;
+    if (requireUrl && !url) continue;
     const key = url + '|' + title.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -298,6 +298,108 @@ export function parseSpecialIssueDocument(text, opts = {}) {
       discoveredAt: now.toISOString(),
       updatedAt: now.toISOString(),
       source: isFeed ? 'rss' : 'html',
+    });
+    if (out.length >= Math.max(1, Math.min(200, rows))) break;
+  }
+  return out;
+}
+
+/**
+ * 解析用户从浏览器粘贴的征稿内容（网页源码 HTML 或渲染后的纯文本）。
+ * 与自动抓取不同：内容来自用户可见页面，不依赖服务端出网；允许没有链接，
+ * 用来源 URL / 标题兜底，让单条征稿通知也能导入。
+ */
+export function parsePastedContent(text, opts = {}) {
+  const { baseUrl = '', journal = null, now = new Date(), rows = 60 } = opts;
+  const raw = str(text);
+  if (!raw.trim()) return [];
+  const looksHtml = /<(?:a|div|p|li|h[1-6]|article|section|table|br|ul|ol|span)\b[^>]*>/i.test(raw);
+  const items = looksHtml
+    ? parseSpecialIssueDocument(raw, { baseUrl, journal, now, rows, requireUrl: false })
+    : parsePlainTextContent(raw, { baseUrl, journal, now, rows });
+  const source = safeUrl(baseUrl, baseUrl);
+  return items.map((i) => ({
+    ...i,
+    source: 'pasted',
+    url: i.url || source,
+    sourceUrl: i.sourceUrl || source,
+  }));
+}
+
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'）)，。、]+/gi;
+const BODY_SIGNAL = /(deadline|截止|we invite|submissions?\s+(?:are|should|must)|please submit|guest editor|submission deadline)/i;
+
+/**
+ * 从一行文字里识别专刊标题：只认行首的明确标记，且排除「 Call for papers on …
+ * Submission deadline: …」这类把正文写在标题行里的长句。返回空串表示不是标题行。
+ */
+function pastedHeading(line) {
+  const s = clean(line);
+  if (!s || s.length > 240) return '';
+  if (s.length > 90 && BODY_SIGNAL.test(s)) return '';
+  const m = /^(?:special\s+(?:issue|section)|research\s+topic|cfp|专刊|特刊|征稿)\s*[：:|\-–—]?\s*(.+)$/i.exec(s);
+  if (m && clean(m[1]).length >= 6) return clean(m[1]);
+  const c = /^call\s+for\s+(?:papers|submissions|abstracts)\s*[：:|\-–—]\s*(.+)$/i.exec(s);
+  if (c && clean(c[1]).length >= 6) return clean(c[1]);
+  return '';
+}
+
+/** 纯文本（浏览器「复制」后的渲染文字）按专刊标题行切成多条候选。 */
+function parsePlainTextContent(raw, { baseUrl = '', journal = null, now = new Date(), rows = 60 } = {}) {
+  const lines = str(raw).replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  let cur = null;
+  for (const line of lines) {
+    const heading = pastedHeading(line);
+    if (heading) {
+      if (cur) blocks.push(cur);
+      cur = { title: heading, lines: [] };
+      continue;
+    }
+    if (cur) cur.lines.push(line);
+  }
+  if (cur) blocks.push(cur);
+  // 没有任何标题行时，把整段当作一条（单条征稿通知的场景）
+  if (!blocks.length && SI_KEY.test(str(raw))) {
+    blocks.push({ title: '', lines: lines });
+  }
+
+  const out = [];
+  const seen = new Set();
+  for (const block of blocks) {
+    const linesIn = block.lines.map(clean).filter(Boolean);
+    const title = block.title || linesIn.find((l) => l.length >= 12 && !/^https?:\/\//i.test(l))?.slice(0, 240) || '';
+    if (title.length < 8) continue;
+    const body = [title, ...linesIn].join(' ').slice(0, 1200);
+    if (!SI_KEY.test(body)) continue;
+    const prose = linesIn.filter((l) => !/^https?:\/\//i.test(l)).join(' ').trim();
+    const description = (prose.length >= 20 ? prose : body).slice(0, 900);
+    const dl = normalizeDeadline(body, now);
+    const urls = (linesIn.join(' ').match(URL_IN_TEXT) || []).map((u) => safeUrl(u, baseUrl)).filter(Boolean);
+    const url = urls[0] || safeUrl(baseUrl, baseUrl);
+    const key = url + '|' + title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const journalId = journal?.id || matchJournal(body + ' ' + title);
+    const j = journalId ? journalById(journalId) : null;
+    out.push({
+      id: stableId(['pasted', journalId || 'unknown', url, title]),
+      journalId,
+      journal: j?.title || clean(journal?.title || ''),
+      journalShort: j?.shortTitle || clean(journal?.shortTitle || ''),
+      publisher: j?.publisher || clean(journal?.publisher || ''),
+      category: j?.category || '',
+      title,
+      description,
+      deadline: dl.date,
+      deadlineText: dl.text,
+      url,
+      sourceUrl: safeUrl(baseUrl, baseUrl),
+      topics: detectTopics(title + ' ' + body),
+      keywords: extractKeywords(title + ' ' + body),
+      discoveredAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      source: 'pasted',
     });
     if (out.length >= Math.max(1, Math.min(200, rows))) break;
   }
@@ -723,6 +825,31 @@ export function addCustomIssue(stateInput, raw, opts = {}) {
   }
   state.favoriteIds = [...new Set([...state.favoriteIds, issue.id])].slice(0, 2000);
   return { state, issue: state.issues.find((i) => i.id === issue.id) || issue, error: '' };
+}
+
+/**
+ * 批量导入浏览粘贴解析出的候选：逐条按 addCustomIssue 的规范化处理，
+ * 已存在的（同标题+链接）自动跳过，返回真正新增的条目。
+ */
+export function importPastedIssues(stateInput, items, opts = {}) {
+  let state = createSpecialIssueState(stateInput);
+  const { now = new Date() } = opts;
+  const added = [];
+  const skipped = [];
+  const list = Array.isArray(items) ? items.slice(0, 100) : [];
+  for (const it of list) {
+    if (!it || typeof it !== 'object') { skipped.push({ title: '', reason: '无效条目' }); continue; }
+    const before = new Set(state.issues.map((i) => i.id));
+    const res = addCustomIssue(state, {
+      title: it.title, url: it.url, journalId: it.journalId, journal: it.journal,
+      description: it.description, deadline: it.deadline || it.deadlineText,
+    }, { now });
+    if (res.error) { skipped.push({ title: str(it.title), reason: res.error }); continue; }
+    state = res.state;
+    if (before.has(res.issue.id)) { skipped.push({ title: res.issue.title, reason: '已存在' }); continue; }
+    added.push(res.issue);
+  }
+  return { state, added, skipped };
 }
 
 /** 到期自动清除：移除已过 deadline 的 SI，并清理译文 / 收藏 / 推荐黑名单里的残留 id。 */

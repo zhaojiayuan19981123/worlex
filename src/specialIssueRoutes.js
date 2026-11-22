@@ -16,6 +16,7 @@ import {
   profileFromGraph, recommendIssues, computeHotTopics, topicSnapshot,
   specialIssueSummary, setSubscriptions, setPreferences, dismissRecommendation,
   normalizeAiIssue, toggleFavorite, addCustomIssue, purgeExpiredIssues,
+  parsePastedContent, importPastedIssues,
 } from './specialIssues.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -170,6 +171,39 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     if (error) return res.status(400).json({ error });
     writeState(state);
     res.json({ ...payload(), issue });
+  });
+
+  // ---------- 浏览器辅助导入：解析粘贴的网页内容（不出网），再批量确认导入 ----------
+  app.post('/api/special-issues/parse-paste', async (req, res) => {
+    const body = req.body || {};
+    const text = str(body.text).slice(0, 400000);
+    if (!text.trim()) return res.status(400).json({ error: '请先从浏览器复制征稿页面内容并粘贴进来' });
+    const journalId = ABS_JOURNALS.some((j) => j.id === str(body.journalId)) ? str(body.journalId) : '';
+    const journal = journalId ? journalById(journalId) : null;
+    const baseUrl = /^https?:\/\//i.test(str(body.url).trim()) ? str(body.url).trim() : '';
+    const now = new Date();
+    let items = parsePastedContent(text, { baseUrl, journal, now });
+    // 纯文本 / 非常规页面正则抓不全时，用已配置的模型补一次结构化（可选，失败不影响结果）
+    if (body.aiExtract === true && typeof fetchModelCompletion === 'function') {
+      try {
+        const extra = await aiExtract(text, { journal, sourceUrl: baseUrl, now });
+        if (Array.isArray(extra) && extra.length) {
+          items = mergeIssues(items, extra.map((x) => {
+            const n = normalizeAiIssue(x, { journal, now, sourceUrl: baseUrl });
+            return n ? { ...n, source: 'pasted' } : null;
+          }).filter(Boolean));
+        }
+      } catch (e) { logger('[SI] 粘贴解析 AI 增强跳过：' + (e?.message || e)); }
+    }
+    res.json({ items, count: items.length });
+  });
+
+  app.post('/api/special-issues/import', (req, res) => {
+    const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 100) : [];
+    if (!items.length) return res.status(400).json({ error: '请先勾选要导入的征稿条目' });
+    const { state, added, skipped } = importPastedIssues(readState(), items, { now: new Date() });
+    writeState(state);
+    res.json({ ...payload(), added, skipped });
   });
 
   app.post('/api/special-issues/purge', (_req, res) => {
