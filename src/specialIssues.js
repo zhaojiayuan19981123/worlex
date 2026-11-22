@@ -7,10 +7,10 @@
 // 抓取的是出版社/期刊「征稿页」的公开列表信息，不抓全文、不绕登录。
 
 import crypto from 'node:crypto';
-import { publisherCandidates, publisherPageError, mayFetchDetail } from './specialIssueParser.js';
+import { discoverJournalCfpPages, publisherCandidates, publisherPageError, mayFetchDetail } from './specialIssueParser.js';
 import {
   ABS_JOURNALS, ABS_CATEGORIES, CFP_SOURCES, SI_PRESETS, TOPIC_LEXICON,
-  journalById, defaultCfpUrl,
+  journalById, defaultCfpUrl, isLegacyWileyCfpUrl,
 } from './specialIssueCatalog.js';
 
 export { ABS_JOURNALS, ABS_CATEGORIES, CFP_SOURCES, SI_PRESETS, TOPIC_LEXICON, journalById };
@@ -55,16 +55,18 @@ export function createSpecialIssueState(value = {}) {
     version: 1,
     selectedJournalIds: [...new Set(ids.filter((id) => typeof id === 'string' && ABS_JOURNALS.some((j) => j.id === id)))],
     cfpOverrides: Object.fromEntries(Object.entries(overrides)
-      .filter(([id, url]) => typeof id === 'string' && ABS_JOURNALS.some((j) => j.id === id) && typeof url === 'string' && /^https?:\/\//i.test(url))
+      .filter(([id, url]) => ABS_JOURNALS.some((j) => j.id === id) && typeof url === 'string'
+        && /^https?:\/\//i.test(url) && !isLegacyWileyCfpUrl(url))
       .slice(0, 300)),
     customSources: (Array.isArray(v.customSources) ? v.customSources : [])
-      .filter((s) => s && typeof s.url === 'string' && /^https?:\/\//i.test(s.url))
+      .filter((s) => s && typeof s.url === 'string' && /^https?:\/\//i.test(s.url) && !isLegacyWileyCfpUrl(s.url))
       .slice(0, 50)
       .map((s) => ({ id: str(s.id) || stableId([s.url, s.label]), label: clean(s.label) || '自定义征稿页', url: s.url.trim(), journalId: str(s.journalId || '') })),
     issues: Array.isArray(v.issues) ? v.issues.filter((i) => i && typeof i === 'object' && i.id) : [],
     ranks: Object.fromEntries(Object.entries(ranks).filter(([, r]) => r && typeof r === 'object').slice(0, 300)),
     translations: v.translations && typeof v.translations === 'object' ? v.translations : {},
-    sync: Object.fromEntries(Object.entries(sync).filter(([, s]) => s && typeof s === 'object')),
+    sync: Object.fromEntries(Object.entries(sync).filter(([key, s]) => s && typeof s === 'object'
+      && key !== 'publisher:Wiley Online Library' && !isLegacyWileyCfpUrl(s.url))),
     topicHistory: Object.fromEntries(Object.entries(history).filter(([, h]) => h && typeof h === 'object').slice(-120)),
     dismissedIds: [...new Set((Array.isArray(v.dismissedIds) ? v.dismissedIds : []).filter((x) => typeof x === 'string'))].slice(0, 2000),
     favoriteIds: [...new Set((Array.isArray(v.favoriteIds) ? v.favoriteIds : []).filter((x) => typeof x === 'string'))].slice(0, 2000),
@@ -170,7 +172,7 @@ function htmlToText(html) {
 function stripTags(html) {
   return decodeEntities(str(html).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
-const SI_KEY = /(special\s+issue|call\s+for\s+(?:papers|submissions|abstracts)|research\s+topic|guest\s+edit(?:or|ed)|cfp\b|专刊|征稿|特刊)/i;
+const SI_KEY = /(special[\s-]+issue|calls?[\s-]+for[\s-]+(?:papers|submissions|abstracts)|research\s+topic|guest\s+edit(?:or|ed)|cfp\b|专刊|征稿|特刊)/i;
 const NEGATIVE_KEY = /(privacy policy|cookie|terms of use|sign in|log in|subscribe to newsletter|all journals|browse by)/i;
 
 function hrefOf(fragment) {
@@ -668,19 +670,23 @@ export function buildSyncTasks(state, journalIds = null) {
     : s.selectedJournalIds;
   const tasks = [];
   const seen = new Set();
-  const push = (url, journalId, label) => {
+  const push = (url, journalId, label, discover = false) => {
     if (url === 'https://www.tandfonline.com/action/showSpecialIssues') url = CFP_SOURCES.find((s) => s.id === 'tandf').url;
     const safe = safeUrl(url, url);
     if (!safe || seen.has(safe)) return;
     seen.add(safe);
     const aggregate = CFP_SOURCES.find((s) => s.url === safe);
-    tasks.push({ url: safe, journalId: aggregate ? '' : journalId, label: aggregate?.label || label, aggregate: !!aggregate });
+    tasks.push({ url: safe, journalId: aggregate ? '' : journalId, label: aggregate?.label || label, aggregate: !!aggregate, discover });
   };
   for (const id of wanted) {
     const j = journalById(id);
     if (!j) continue;
     const url = s.cfpOverrides[id] || j.cfpUrl || defaultCfpUrl(j);
     if (url) push(url, id, j.shortTitle || j.title);
+    else if (j.journalUrl) push(j.journalUrl, id, j.shortTitle || j.title, true);
+    else if (j.publisher === 'Wiley') {
+      tasks.push({ url: '', journalId: id, label: j.shortTitle || j.title, discover: false });
+    }
   }
   // 出版社聚合页只抓订阅刊涉及的出版社，避免无谓请求
   const publishers = new Set(wanted.map((id) => journalById(id)?.publisher).filter(Boolean));
@@ -730,7 +736,11 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
           'Accept-Language': 'en-US,en;q=0.9',
         }, signal: controller.signal, redirect: 'follow',
       });
-      if (res?.ok === false) throw new Error(`HTTP ${res.status || '未知状态'}${[403, 429].includes(res.status) ? '：出版社拒绝或限制访问，可从浏览器粘贴导入' : ''}`);
+      if (res?.ok === false) {
+        const hint = res.status === 404 ? '：征稿页已移除或地址有误，请更新该刊征稿页'
+          : [403, 429].includes(res.status) ? '：出版社拒绝或限制访问，可从浏览器粘贴导入' : '';
+        throw new Error(`HTTP ${res.status || '未知状态'}${hint}`);
+      }
       const max = 4 * 1024 * 1024;
       let text = '';
       if (res?.body?.getReader) {
@@ -762,8 +772,23 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
   const workers = Array.from({ length: Math.min(Math.max(1, concurrency), queue.length) }, async () => {
     while (queue.length) {
       const task = queue.shift();
+      let sourceUrl = task.url;
       try {
-        const page = await fetchPage(task.url);
+        if (!sourceUrl) throw new Error('该刊没有已配置的征稿源，请在期刊管理中填写官网征稿页，或粘贴导入');
+        let page = await fetchPage(sourceUrl);
+        if (task.discover) {
+          const links = discoverJournalCfpPages(page.text, page.url);
+          if (!links.length) throw new Error('期刊主页未找到公开征稿入口，请指定官方征稿页或粘贴导入');
+          for (const [index, link] of links.entries()) {
+            sourceUrl = link;
+            try {
+              page = await fetchPage(link);
+              break;
+            } catch (e) {
+              if (index === links.length - 1) throw e;
+            }
+          }
+        }
         const text = page.text;
         const journal = task.journalId ? journalById(task.journalId) : null;
         let parsed = parseSpecialIssueDocument(text, { baseUrl: page.url, journal, now, rows: rowsPerSource });
@@ -809,7 +834,7 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
             if (remaining <= 0) throw new Error('本次抓取时间上限已到，跳过 AI 增强');
             const extra = await aiExtract(htmlToText(text).slice(0, 24000), { journal, sourceUrl: page.url, now, timeoutMs: Math.min(remaining, 30000) });
             if (Array.isArray(extra) && extra.length) {
-              parsed = mergeIssues(parsed, extra.map((x) => normalizeAiIssue(x, { journal, now, sourceUrl: task.url })).filter(Boolean));
+              parsed = mergeIssues(parsed, extra.map((x) => normalizeAiIssue(x, { journal, now, sourceUrl: page.url })).filter(Boolean));
             }
           } catch (e) {
             // AI 抽取只是增强，失败不能让整次抓取失败
@@ -824,16 +849,16 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
           lastAttemptAt: now.toISOString(), lastSuccessAt: now.toISOString(), count: parsed.length,
           activeCount: parsed.filter((i) => deadlineMeta(i, now).days !== null && deadlineMeta(i, now).days >= 0).length,
           pendingCount: parsed.filter((i) => deadlineMeta(i, now).days === null).length,
-          warnings, error: '', url: task.url,
+          warnings, error: '', url: sourceUrl,
         };
-        synced.push({ label: task.label, url: task.url, count: parsed.length, warnings });
+        synced.push({ label: task.label, url: sourceUrl, count: parsed.length, warnings });
       } catch (e) {
         const message = str(e?.message || '未知抓取错误').slice(0, 200);
         state.sync[task.journalId || 'publisher:' + task.label] = {
           ...(state.sync[task.journalId || 'publisher:' + task.label] || {}),
-          lastAttemptAt: now.toISOString(), error: message, url: task.url,
+          lastAttemptAt: now.toISOString(), error: message, url: sourceUrl,
         };
-        failed.push({ label: task.label, url: task.url, error: message });
+        failed.push({ label: task.label, url: sourceUrl, error: message });
       }
     }
   });

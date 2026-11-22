@@ -100,12 +100,39 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
 
 export function publisherPageError(html) {
   const s = String(html || '');
+  if (/<(?:title|h1|h2)\b[^>]*>\s*(?:(?:error\s+)?404(?:\s*[-:]?\s*page not found)?|page not found)\s*(?:<\/|[|])/i.test(s)) {
+    return 'HTTP 404：征稿页已移除或地址有误，请更新该刊征稿页';
+  }
   if (/<title[^>]*>[^<]*(?:just a moment|access denied|attention required|robot check|security check)/i.test(s)
     || /cf-chl-widget|id=["']challenge-form|enable javascript and cookies to continue|captcha-container/i.test(s)
     || /verify (?:that )?you are human/i.test(text(parseDocument(s)))) {
     return '出版社人机验证或访问限制；请在浏览器打开原文后使用「从网页粘贴」导入，或更换官方征稿源';
   }
   return '';
+}
+
+/** Journal homepages may link their CFP pages in the main navigation. */
+export function discoverJournalCfpPages(html, baseUrl) {
+  const journal = new URL(baseUrl);
+  const journalPath = /\/(?:page\/)?journal\/([a-z0-9]+)/i.exec(journal.pathname)?.[1]?.toLowerCase();
+  if (!journalPath) return [];
+  const pages = new Set();
+  const doc = parseDocument(String(html || ''));
+  const visit = (node) => {
+    if (node.name === 'a' && node.attribs?.href && /calls?\s+for\s+papers|open\s+(?:calls|special issues)/i.test(clean(text(node)))) {
+      const href = urlOf(node.attribs.href, baseUrl);
+      if (href && mayFetchDetail(href, baseUrl)) {
+        const target = new URL(href);
+        const targetJournal = /\/(?:page\/)?journal\/([a-z0-9]+)/i.exec(target.pathname)?.[1]?.toLowerCase();
+        if (targetJournal === journalPath && /calls?[-_]?(?:for[-_]?)?papers|open[-_](?:calls|special[-_]issues)/i.test(target.pathname)) {
+          pages.add(href);
+        }
+      }
+    }
+    for (const child of node.children || []) visit(child);
+  };
+  visit(doc);
+  return [...pages].slice(0, 3);
 }
 
 export function mayFetchDetail(url, sourceUrl) {

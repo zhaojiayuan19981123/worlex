@@ -8,7 +8,7 @@ import {
   createSpecialIssueState, normalizeDeadline, deadlineMeta, normalizeAiIssue,
   parseSpecialIssueDocument, addCustomIssue, importPastedIssues, profileFromGraph,
   recommendIssues, listIssues, computeHotTopics, purgeExpiredIssues, syncSpecialIssues,
-  detectTopics,
+  buildSyncTasks, detectTopics,
 } from '../src/specialIssues.js';
 
 const now = new Date('2026-11-22T12:00:00');
@@ -143,6 +143,50 @@ test('sync follows a same-origin detail to recover a missing deadline', async ()
   assert.ok(result.fetched[0].detailFetchedAt);
 });
 
+const legacyWiley = 'https://onlinelibrary.wiley.com/call-for-papers';
+const wileyHome = 'https://onlinelibrary.wiley.com/journal/15221970';
+const wileyCalls = 'https://onlinelibrary.wiley.com/page/journal/15221970/homepage/call-for-papers';
+
+test('Wiley: legacy shared URL migrates and a valid per-journal override takes priority', () => {
+  const state = { selectedJournalIds: ['ijtr'], cfpOverrides: { ijtr: `${legacyWiley}/?old=1` },
+    customSources: [{ url: legacyWiley }],
+    sync: { 'publisher:Wiley Online Library': { url: legacyWiley } } };
+  assert.deepEqual(createSpecialIssueState(state).sync, {});
+  assert.deepEqual(buildSyncTasks(state).map(({ url, discover }) => ({ url, discover })), [{ url: wileyHome, discover: true }]);
+  state.cfpOverrides.ijtr = wileyCalls;
+  assert.deepEqual(buildSyncTasks(state).map(({ url, discover }) => ({ url, discover })), [{ url: wileyCalls, discover: false }]);
+});
+
+test('Wiley: only follows an official same-journal CFP link and retains the manuscript deadline', async () => {
+  const seen = [];
+  const result = await syncSpecialIssues({ selectedJournalIds: ['ijtr'] }, { now, maxDetailPages: 0,
+    fetchImpl: async (url) => {
+      seen.push(url);
+      if (url === wileyHome) return response(`
+        <nav><a href="${legacyWiley}">Call for Papers</a>
+        <a href="/page/journal/10990836/homepage/call-for-papers">Calls for Papers</a>
+        <a href="${new URL(wileyCalls).pathname}">Calls for Papers</a></nav>`, url);
+      assert.equal(url, wileyCalls);
+      return response('<main><h1>Calls for Papers</h1><article><h2><a href="/doi/example">Tourism Futures</a></h2><p>Manuscript deadline: 30 April 2027</p></article></main>', url);
+    },
+  });
+  assert.deepEqual(seen, [wileyHome, wileyCalls]);
+  assert.equal(result.failed.length, 0);
+  assert.equal(result.fetched[0].journalId, 'ijtr');
+  assert.equal(result.fetched[0].deadline, '2027-04-30');
+  assert.equal(result.state.sync.ijtr.url, wileyCalls);
+});
+
+test('Wiley: missing sources, 404 pages and access restrictions are distinguishable', async () => {
+  assert.match(publisherPageError('<h1>Error 404</h1><h2>Page not found</h2>'), /404/);
+  const result = await syncSpecialIssues({ selectedJournalIds: ['ijtr', 'ds'] }, {
+    now, fetchImpl: async (url) => { assert.equal(url, wileyHome); return { ok: false, status: 403 }; },
+  });
+  assert.equal(result.state.lastSyncAt, '');
+  assert.match(result.state.sync.ijtr.error, /403/);
+  assert.match(result.state.sync.ds.error, /没有已配置/);
+});
+
 test('single Chinese graph keyword or entity recommends English tourism; word boundaries prevent AI false positives', () => {
   for (const graph of [{ nodes: [{ keywords: ['旅游'] }] }, { entities: [{ label: '旅游' }] }]) {
     const rec = recommendIssues([call()], profileFromGraph(graph), { now });
@@ -208,6 +252,25 @@ test('HTTP translation deduplicates requests, caches by content and preserves co
   assert.deepEqual((await h.request()).translations, {});
   await h.request('/a/translate', 'POST', {});
   assert.equal(calls, 4);
+});
+
+test('HTTP SI translation uses the current default engine and invalidates old translations and search matches', async (t) => {
+  const settings = { translateProvider: 'builtin' };
+  const providers = [];
+  const h = await harness(t, { initial: { selectedJournalIds: ['tm'], issues: [call()] }, settings,
+    translateImpl: async (_text, _settings, { provider }) => {
+      providers.push(provider);
+      return provider === 'builtin' ? '内置引擎译文' : '当前引擎译文';
+    },
+  });
+  assert.equal((await h.request('/a/translate', 'POST', { provider: 'deepl' })).translation.title, '内置引擎译文');
+  assert.equal((await h.request(`?query=${encodeURIComponent('内置引擎译文')}`)).issues.length, 1);
+  settings.translateProvider = 'deepl';
+  assert.deepEqual((await h.request()).translations, {});
+  assert.equal((await h.request(`?query=${encodeURIComponent('内置引擎译文')}`)).issues.length, 0);
+  assert.equal((await h.request('/a/translate', 'POST', {})).translation.title, '当前引擎译文');
+  assert.equal((await h.request('/a/translate', 'POST', {})).cached, true);
+  assert.deepEqual(providers, ['builtin', 'builtin', 'deepl', 'deepl']);
 });
 
 test('HTTP translation cannot restore a deleted SI; error is actionable without a model', async (t) => {

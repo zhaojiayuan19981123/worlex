@@ -190,11 +190,27 @@ const RAW = [
 
 const slug = (s) => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
+// Online ISSNs for journal homepages. CFP links are discovered from the page itself.
+const WILEY_ONLINE_ISSN = {
+  jar: '1475679X', car: '19113846', ijoa: '10991123', jof: '15406261',
+  fm: '1755053X', jmcb: '15384616', efm: '1468036X', jscm: '1745493X',
+  nrl: '15206750', isj: '13652575', jcp: '15327663', pam: '15206793',
+  smj: '10970266', jms: '14676486', job: '10991379', bjmt: '14678551',
+  gsj: '20425805', sej: '1932443X', ijtr: '15221970', ecma: '14680262',
+  bse: '10990836', csrem: '15353966', par: '15406210',
+};
+
+export function isLegacyWileyCfpUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'onlinelibrary.wiley.com' && /^\/calls?-for-papers\/?$/i.test(parsed.pathname);
+  } catch { return false; }
+}
+
 /** 出版社级公开征稿聚合页：作为默认抓取起点，可在界面里替换。 */
 export const CFP_SOURCES = [
   { id: 'emerald', label: 'Emerald', url: 'https://www.emeraldgrouppublishing.com/calls-for-papers', publisher: 'Emerald' },
   { id: 'sage', label: 'SAGE Journals', url: 'https://journals.sagepub.com/call-for-papers', publisher: 'Sage' },
-  { id: 'wiley', label: 'Wiley Online Library', url: 'https://onlinelibrary.wiley.com/call-for-papers', publisher: 'Wiley' },
   { id: 'tandf', label: 'Taylor & Francis', url: 'https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=50&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy', publisher: 'T&F' },
   { id: 'springer', label: 'Springer', url: 'https://www.springer.com/gp/authors-editors/journal-author/call-for-papers', publisher: 'Springer' },
   { id: 'frontiers', label: 'Frontiers Research Topics', url: 'https://www.frontiersin.org/research-topics', publisher: 'Frontiers' },
@@ -211,8 +227,12 @@ export function defaultCfpUrl(journal) {
 }
 
 export const ABS_JOURNALS = RAW.map(([id, title, shortTitle, category, publisher]) => ({
-  id, title, shortTitle, category, publisher, cfpUrl: '',
-})).map((j) => ({ ...j, cfpUrl: defaultCfpUrl(j) }));
+  id, title, shortTitle, category, publisher,
+})).map((j) => ({
+  ...j,
+  cfpUrl: defaultCfpUrl(j),
+  ...(WILEY_ONLINE_ISSN[j.id] && { journalUrl: `https://onlinelibrary.wiley.com/journal/${WILEY_ONLINE_ISSN[j.id]}` }),
+}));
 
 export const ABS_CATEGORIES = [...new Set(ABS_JOURNALS.map((j) => j.category))];
 

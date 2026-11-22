@@ -76,13 +76,17 @@ async function translateViaLLM(text, settings, target, profileId, opts = {}) {
   } catch (e) { if (e?.name === 'AbortError') throw new Error('AI 翻译请求超时（90 秒）。请检查本地模型服务是否正在运行、模型是否已加载，或降低并发'); throw e; } finally { clearTimeout(timer); }
 }
 
+export function defaultTranslationProvider(settings) {
+  return settings?.translateProvider || 'siliconflow';
+}
+
 /** 划词翻译主入口。opts.provider / opts.profileId 可临时覆盖全局设置的翻译源 */
 export async function translate(text, settings, opts = {}) {
   const s = settings || getSettings();
   const t = (text || '').trim();
   const target = opts.target === 'en' ? 'en' : 'zh';
   if (!t) return '';
-  const provider = opts.provider || s.translateProvider || 'siliconflow';
+  const provider = opts.provider || defaultTranslationProvider(s);
   // 历史字段 siliconflow 实际表示“使用当前激活的 AI 模型”，不再只读旧的 baseURL/apiKey/model，
   // 从而避免切换多模型后翻译仍悄悄走旧配置。
   // 内置翻译模型：固定的免费小模型 + 学术翻译提示词，比「当前激活的大模型」更快更省，

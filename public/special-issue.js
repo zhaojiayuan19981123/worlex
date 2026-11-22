@@ -364,7 +364,21 @@
   function renderDiagnostics(d) {
     const rows = Object.entries(d.sync || {});
     if (!rows.length) return emptyState('refresh', '尚无抓取记录', '订阅期刊或添加官方征稿页后点击立即抓取。');
-    return `<div class="si-diagnostics">${rows.map(([key, s]) => `<section class="si-diagnostic"><b>${esc((d.catalog || []).find((j) => j.id === key)?.title || key.replace(/^publisher:/, ''))}</b><p class="si-journal-line">尝试 ${esc(fmtTime(s.lastAttemptAt))} · 上次成功 ${esc(fmtTime(s.lastSuccessAt))}</p><p>${esc(s.error || `已识别 ${Number(s.count || 0)} 条，未截止 ${Number(s.activeCount || 0)} 条，待核实 ${Number(s.pendingCount || 0)} 条`)}</p>${(s.warnings || []).map((w) => `<p class="si-journal-line">${esc(w)}</p>`).join('')}${safeUrl(s.url) ? `<a class="as-link" href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer">打开官方来源</a>` : ''}</section>`).join('')}</div>`;
+    return `<div class="si-diagnostics">${rows.map(([key, s]) => {
+      const journal = (d.catalog || []).find((j) => j.id === key);
+      const url = safeUrl(s.url);
+      return `<section class="si-diagnostic">
+        <b>${esc(journal?.title || key.replace(/^publisher:/, ''))}</b>
+        <p class="si-journal-line">尝试 ${esc(fmtTime(s.lastAttemptAt))} · 上次成功 ${esc(fmtTime(s.lastSuccessAt))}</p>
+        <p>${esc(s.error || `已识别 ${Number(s.count || 0)} 条，未截止 ${Number(s.activeCount || 0)} 条，待核实 ${Number(s.pendingCount || 0)} 条`)}</p>
+        ${(s.warnings || []).map((w) => `<p class="si-journal-line">${esc(w)}</p>`).join('')}
+        <div class="si-actions">
+          ${url ? `<a class="tb-btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ico('external')}打开官方来源</a>` : ''}
+          ${s.error && journal ? `<button class="tb-btn" data-si-act="configure-source" data-journal="${esc(key)}">设置征稿页</button>` : ''}
+          ${s.error && key !== 'ai' ? `<button class="tb-btn" data-si-act="paste-source" data-journal="${esc(journal?.id || '')}">粘贴导入</button>` : ''}
+        </div>
+      </section>`;
+    }).join('')}</div>`;
   }
 
   function renderManage(d) {
@@ -705,6 +719,31 @@
       load(); return;
     }
     if (act === 'add') { S.addMode = 'manual'; S.pasteItems = []; S.pasteChecked = new Set(); openAddModal(); return; }
+    if (act === 'configure-source') {
+      const id = node.dataset.journal;
+      S.tab = 'manage';
+      render();
+      const select = S.root.querySelector('#siOverrideJournal');
+      if (!select) return;
+      select.closest('details').open = true;
+      const idx = S.overrideDraft.findIndex((x) => x.id === id);
+      if (idx >= 0) {
+        S.root.querySelector(`[data-si-override-url="${idx}"]`)?.focus();
+      } else {
+        select.value = id;
+        S.root.querySelector('#siOverrideUrl')?.focus();
+      }
+      return;
+    }
+    if (act === 'paste-source') {
+      S.addMode = 'paste';
+      S.pasteItems = [];
+      S.pasteChecked = new Set();
+      openAddModal();
+      S.root.querySelector('#siPasteJournal').value = node.dataset.journal;
+      S.root.querySelector('#siPasteText')?.focus();
+      return;
+    }
     if (act === 'close-modal') { closeModal(); return; }
     if (act === 'add-mode') {
       S.addMode = node.dataset.mode === 'paste' ? 'paste' : 'manual';
@@ -764,9 +803,7 @@
 
   async function translateIssue(id, button) {
     if (S.translating.has(id)) return;
-    const tr = S.data?.translations?.[id];
-    if (S.translated.has(id)) { S.translated.delete(id); render(); return; }
-    if (tr?.title || tr?.description) { S.translated.add(id); render(); return; }
+    if (S.translated.has(id) && S.data?.translations?.[id]) { S.translated.delete(id); render(); return; }
     S.translating.add(id);
     const root = S.root;
     button.disabled = true;

@@ -9,7 +9,8 @@
 
 import { createHash } from 'node:crypto';
 import { queryPublicationRank, formatRank } from './easyscholar.js';
-import { translate } from './translate.js';
+import { defaultTranslationProvider, translate } from './translate.js';
+import { resolveActive } from './modelCatalog.js';
 import { createSpecialIssueScheduler } from './specialIssueScheduler.js';
 import {
   ABS_JOURNALS, ABS_CATEGORIES, CFP_SOURCES, SI_PRESETS, journalById,
@@ -26,6 +27,13 @@ const str = (v) => String(v == null ? '' : v);
 function compact(text, max = 260) {
   const s = str(text).replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
+function translationEngine(settings) {
+  const provider = defaultTranslationProvider(settings);
+  const model = provider === 'siliconflow' ? resolveActive(settings) : null;
+  const identity = [provider, model?.id, model?.provider, model?.baseURL, model?.model, model?.apiFormat];
+  return { provider, key: createHash('sha256').update(JSON.stringify(identity)).digest('hex') };
 }
 
 export function registerSpecialIssueRoutes(app, deps = {}) {
@@ -55,6 +63,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   let syncPromise = null;
   const translating = new Map();
   const fingerprint = (issue) => createHash('sha256').update(JSON.stringify([issue.title, issue.description || ''])).digest('hex');
+  const matchesTranslation = (cached, hash, engineKey) => cached?.contentHash === hash && cached.engineKey === engineKey;
   const scopedIssues = (state) => state.preferences.scope === 'all' ? state.issues
     : state.issues.filter((i) => !i.journalId || state.selectedJournalIds.includes(i.journalId));
   const scopeKey = (state) => state.preferences.scope === 'all' ? 'all' : [...state.selectedJournalIds].sort().join(',');
@@ -148,7 +157,11 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const profile = profileFromGraph(graph);
     const useProfile = state.preferences.recommendEnabled ? profile : { terms: [], empty: true };
     const scopeIds = state.preferences.scope === 'all' ? null : state.selectedJournalIds;
-    const issues = listIssues(state, {
+    const engine = translationEngine(store.getSettings());
+    const translations = Object.fromEntries(state.issues
+      .filter((i) => matchesTranslation(state.translations[i.id], fingerprint(i), engine.key))
+      .map((i) => [i.id, state.translations[i.id]]));
+    const issues = listIssues({ ...state, translations }, {
       now, profile: useProfile, sort: options.sort || 'deadline',
       query: options.query || '', topic: options.topic || '',
       journalIds: scopeIds, recommendOnly: options.recommendOnly === true,
@@ -171,8 +184,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       cfpOverrides: state.cfpOverrides,
       customSources: state.customSources,
       ranks: state.ranks,
-      translations: Object.fromEntries(state.issues.filter((i) => state.translations[i.id]?.contentHash === fingerprint(i))
-        .map((i) => [i.id, state.translations[i.id]])),
+      translations,
       sync: state.sync,
       preferences: state.preferences,
       issues,
@@ -361,14 +373,15 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const issue = state.issues.find((i) => i.id === req.params.id);
     if (!issue) return res.status(404).json({ error: '该征稿信息不存在或已从本地缓存清理' });
     const hash = fingerprint(issue);
+    const settings = store.getSettings();
+    const engine = translationEngine(settings);
     const cached = state.translations[issue.id];
-    if (cached?.contentHash === hash) return res.json({ translation: cached, cached: true });
+    if (matchesTranslation(cached, hash, engine.key)) return res.json({ translation: cached, cached: true });
     try {
-      const key = issue.id + ':' + hash;
+      const key = `${issue.id}:${hash}:${engine.key}`;
       if (!translating.has(key)) {
         const task = (async () => {
-          const settings = store.getSettings();
-          const opts = { target: 'zh', fetchImpl };
+          const opts = { target: 'zh', provider: engine.provider, fetchImpl };
           const title = await translateImpl(issue.title, settings, opts);
           const chunks = (issue.description || '').match(/[\s\S]{1,4000}/g) || [];
           const descriptions = [];
@@ -378,11 +391,15 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
             descriptions.push(translated);
           }
           if (!title?.trim()) throw new Error('翻译引擎没有返回标题');
-          const translation = { title, description: descriptions.join('\n'), contentHash: hash, translatedAt: new Date().toISOString() };
+          const translation = {
+            title, description: descriptions.join('\n'), contentHash: hash,
+            engineKey: engine.key, translatedAt: new Date().toISOString(),
+          };
           const latest = readState();
           const current = latest.issues.find((i) => i.id === issue.id);
           if (!current) throw new Error('该征稿已删除或到期，未保存译文');
           if (fingerprint(current) !== hash) throw new Error('征稿内容已更新，请重新翻译');
+          if (translationEngine(store.getSettings()).key !== engine.key) throw new Error('默认翻译引擎已更改，请重新翻译');
           writeState({ ...latest, translations: { ...latest.translations, [issue.id]: translation } });
           return translation;
         })();
