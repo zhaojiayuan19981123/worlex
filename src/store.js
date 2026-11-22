@@ -25,6 +25,7 @@ let MARKDOWN_NOTES_FILE = path.join(DATA_DIR, 'markdown-notes.json');
 let CALENDAR_FILE = path.join(DATA_DIR, 'calendar.json');
 let TOP_JOURNALS_FILE = path.join(DATA_DIR, 'top-journals.json');
 let TOP_JOURNAL_ANALYSES_FILE = path.join(DATA_DIR, 'top-journal-analyses.json');
+let SPECIAL_ISSUES_FILE = path.join(DATA_DIR, 'special-issues.json');
 let PAPER_NOTES_FILE = path.join(DATA_DIR, 'paper-notes.json');
 let PAPER_CHATS_FILE = path.join(DATA_DIR, 'paper-chats.json');
 
@@ -49,6 +50,7 @@ export function configure({ dataDir }) {
     CALENDAR_FILE = path.join(DATA_DIR, 'calendar.json');
     TOP_JOURNALS_FILE = path.join(DATA_DIR, 'top-journals.json');
     TOP_JOURNAL_ANALYSES_FILE = path.join(DATA_DIR, 'top-journal-analyses.json');
+    SPECIAL_ISSUES_FILE = path.join(DATA_DIR, 'special-issues.json');
     PAPER_NOTES_FILE = path.join(DATA_DIR, 'paper-notes.json');
     PAPER_CHATS_FILE = path.join(DATA_DIR, 'paper-chats.json');
   }
@@ -138,6 +140,7 @@ const ALL_DATA_FILES = [
   'pdf-translations.json', // 全文翻译作业历史
   'top-journals.json', // UTD
   'top-journal-analyses.json', // 顶刊 AI 分析记录 顶刊追踪：订阅、元数据、打卡与投递记录
+  'special-issues.json', // SI 征稿：订阅、抓取结果、等级缓存、译文与主题热点历史
   'paper-notes.json',   // 阅读器笔记模式的笔记（按文献 id，含 Markdown 与思维导图两种视图）
   'paper-chats.json',   // 阅读器 AI 对话记录（按文献 id 持久化，退出不丢）
   'theses.json',        // 学位论文阅读：论文记录（含 AI 字段、分类、阅读进度）
@@ -152,7 +155,7 @@ export function dataFileNames() {
   const known = new Set(ALL_DATA_FILES);
   for (const f of [DATA_FILE, SETTINGS_FILE, COLLECTIONS_FILE, PROFILE_FILE, PROJECTS_FILE,
     TASKS_FILE, NOTES_FILE, CHAT_FILE, PAPERS_FILE, MAIL_FILE, IDEAS_FILE, REVIEWS_FILE, MARKDOWN_NOTES_FILE,
-    CALENDAR_FILE, TOP_JOURNALS_FILE, TOP_JOURNAL_ANALYSES_FILE, CONVERSATIONS_FILE]) {
+    CALENDAR_FILE, TOP_JOURNALS_FILE, TOP_JOURNAL_ANALYSES_FILE, SPECIAL_ISSUES_FILE, CONVERSATIONS_FILE]) {
     if (f) known.add(path.basename(f));
   }
   return [...known];
@@ -633,6 +636,33 @@ export function saveTopJournals(value) {
   saveFile(TOP_JOURNALS_FILE, value && typeof value === 'object' ? value : getTopJournals());
   return value;
 }
+
+// ---------- SI 征稿追踪 ----------
+// 与顶刊追踪并列的独立数据文件：订阅的 ABS 期刊、每日抓取到的 Special Issue、
+// easyScholar 等级缓存、译文、以及用于热点趋势的每日主题快照。
+// 字段规范化由 src/specialIssues.js 的 createSpecialIssueState() 负责，这里只管落盘。
+export function getSpecialIssues() {
+  return loadFile(SPECIAL_ISSUES_FILE, {
+    version: 1,
+    selectedJournalIds: [],
+    cfpOverrides: {},
+    customSources: [],
+    issues: [],
+    ranks: {},
+    translations: {},
+    sync: {},
+    topicHistory: {},
+    dismissedIds: [],
+    preferences: { recommendEnabled: true, autoSync: true, syncHour: 8, aiExtract: false, includeExpired: false, scope: 'subscribed' },
+    lastSyncAt: '',
+  });
+}
+
+export function saveSpecialIssues(value) {
+  saveFile(SPECIAL_ISSUES_FILE, value && typeof value === 'object' ? value : getSpecialIssues());
+  return value;
+}
+
 // ---------- 顶刊 AI 分析记录 ----------
 export function listTopJournalAnalyses() { return loadFile(TOP_JOURNAL_ANALYSES_FILE, []); }
 export function getTopJournalAnalysis(id) { return listTopJournalAnalyses().find((item) => item.id === id) || null; }

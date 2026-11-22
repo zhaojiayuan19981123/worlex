@@ -1,3 +1,119 @@
+## v2.2.0：新增 SI 征稿追踪（每日抓取 / 截止日期 / 期刊等级 / 一键翻译 / 知识图谱推荐 / 领域热点 / 收藏 / 自行添加 / 到期清理）（2026-11-22）
+
+### 一、这次加了什么
+
+侧栏「文献」组多一个 **SI 征稿**。它和顶刊追踪并列，是一套独立数据 + 独立路由 + 独立视图的模块：
+
+| 能力 | 说明 |
+| --- | --- |
+| 每日定时抓取 | 默认每天 08:00 抓已订阅期刊的征稿页；错过一天启动后 45 秒补跑 |
+| 字段抽取 | 期刊名称、SI 标题、主题简介、deadline、原文链接，外加出版社 / 学科 / 主题标签 |
+| 截止日期 | 卡片上直接显示「N 天后截止」，30 天内红色、90 天内橙色、已截止灰化 |
+| 期刊等级 | 复用全站 easyScholar 通道（ABS / UTD24 / 中科院 / SSCI / FMS…），带 7 天缓存 |
+| 期刊订阅 | 内置 166 本 ABS 期刊、14 个学科、11 个研究方向预设；可搜索、分组勾选、全选此类 |
+| 一键翻译 | 复用 `/api/translate` 同一套引擎，译文按 SI 缓存 |
+| 知识图谱推荐 | 从图谱的 topics / keywords / subject 实体提炼研究画像，与 SI 主题算相关度并主动推送 |
+| 领域热点 | 按覆盖 SI 数、涉及期刊数、近 7 日趋势、临近截止数聚合，点主题联动筛选 SI |
+| 收藏 | 卡片右上角星标收藏，「只看收藏」开关把列表收窄到自己的清单 |
+| 自行添加 | 「添加 SI」弹窗填标题 / 期刊 / 简介 / 截止日期 / 链接，保存即自动订阅该刊并收藏；自己加的可删除 |
+| 搜索 | 标题、期刊、出版社、主题、关键词、截止日期文本统一检索，可与主题 / 收藏 / 推荐筛选叠加 |
+| 到期清理 | 只展示未截止的 SI；过期项从磁盘移除，并同步清掉译文 / 收藏 / 推荐黑名单 |
+
+用户研究旅游时，图谱里的「旅游与酒店 / tourism / tourist / 游客」会把 Tourism Management、Annals of Tourism Research 等刊的旅游类 SI 顶到前面；无关的会计审计 SI 排在后面。
+
+### 二、新增 / 修改的模块清单
+
+**新增（6 个文件）**
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/specialIssueCatalog.js` | ABS 期刊目录（166 本）、出版社征稿聚合页、方向预设、39 组中英领域主题词表 |
+| `src/specialIssues.js` | 纯逻辑：HTML/RSS 解析、deadline 归一、状态机、抓取、去重、相关性、热点聚合、收藏 / 自行添加 / 到期清理 |
+| `src/specialIssueScheduler.js` | 每日定时任务（链式 setTimeout + 启动补跑 + busy 防重 + unref）+ 每小时到期清理 |
+| `src/specialIssueRoutes.js` | Express 路由注册，装配 easyScholar / 翻译 / 图谱 / AI 抽取 + 收藏 / 添加 / 删除 / 清理接口 |
+| `public/special-issue.js` | 独立视图模块 `window.SpecialIssueView`（自建 DOM、mount/close），含添加弹窗与收藏交互 |
+| `public/special-issue.css` | `si-*` 组件样式，颜色全部走项目 token，三套主题自动适配 |
+| `test/special-issues.test.mjs` | 16 条单测（纯逻辑 + HTTP 全链路 + 源码挂载点 + 收藏 / 添加 / 到期 / 搜索） |
+
+**修改（4 个文件，都是最小挂载）**
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/store.js` | 加 `SPECIAL_ISSUES_FILE`（含 `configure`）、`ALL_DATA_FILES` / `dataFileNames()`、`getSpecialIssues()/saveSpecialIssues()` |
+| `server.js` | import + `registerSpecialIssueRoutes(app, deps)` + `createApp` 返回 `specialIssues` + `startServer` 里 `scheduler.start()` |
+| `public/index.html` | CSS link、script、导航项 `data-view="specialissue"`、容器 `#viewSpecialIssue` |
+| `public/app.js` | `VIEW_META` 加一项、`switchView` 的 map / close / mount 各一行 |
+
+### 三、数据结构
+
+`data/special-issues.json`（已纳入 `ALL_DATA_FILES`，自动进入备份 / 导出 / 数据目录迁移）：
+
+```js
+{
+  version: 1,
+  selectedJournalIds: string[],        // 订阅（按目录白名单校验）
+  cfpOverrides: { [journalId]: url },  // 单刊自定义征稿页
+  customSources: [{ id, label, url, journalId }],
+  issues: [{                           // SpecialIssue
+    id, journalId, journal, journalShort, publisher, category,
+    title, description,                // SI 标题 / 主题简介
+    deadline, deadlineText,            // YYYY-MM-DD + 原文写法
+    url, sourceUrl,                   // 原文链接 / 抓取页
+    topics: string[], keywords: string[],
+    discoveredAt, updatedAt, source: 'html' | 'rss' | 'ai' | 'custom',
+    custom?: true                        // 用户自行添加的条目，可删除
+  }],
+  ranks: { [journalId]: { summary, items, queriedAt, journal } }, // easyScholar 缓存
+  translations: { [issueId]: { title, description, translatedAt } },
+  sync: { [taskKey]: { lastSuccessAt, lastAttemptAt, count, error, url } },
+  topicHistory: { 'YYYY-MM-DD': { [topic]: count } },  // 热点 7 日趋势
+  dismissedIds: string[],
+  favoriteIds: string[],                 // 收藏的 SI id（到期清理时同步移除）
+  preferences: { recommendEnabled, autoSync, syncHour, aiExtract, includeExpired, scope },
+  lastSyncAt: ''
+}
+```
+
+相关度不落盘：知识图谱会随文献变化，每次读列表时按当前图谱重算。
+
+### 四、页面交互
+
+三个页签：**征稿 / 领域热点 / 期刊管理**。
+
+- 征稿：搜索（标题 / 期刊 / 主题 / 关键词 / 截止文本）、排序（截止 / 相关度 / 最新）、「我的研究推荐」与「只看收藏」开关、主题标签筛选、为你推荐条（可关闭）、顶部「添加 SI」弹窗、SI 卡片（期刊简称 + 等级徽标 + 截止倒计时 + 星标收藏 + 标题 + 中译标题 + 简介 + 中译简介 + 主题标签 + 命中词 + 一键翻译 / 展开 / 原文；自行添加的另有删除按钮）。列表只显示未截止条目。
+- 领域热点：条形榜显示主题、覆盖 SI 数、涉及期刊数、在征数与近 7 日趋势；点击任一主题切回征稿页并筛选。
+- 期刊管理：按期刊名 / 简称 / 出版社搜索 + 学科筛选 + 分组勾选（即时保存）+ 方向预设 / 全选 / 清空 / 全选此类；折叠区里配自动抓取时间、AI 辅助抽取、统计范围、自定义征稿页与单刊征稿页覆盖。
+
+界面沿用项目既有 `.tb-btn` / `.rank-chip` 与 `:root` token；SVG 图标取自既有精灵，无 emoji、无新增字体或色板，遵守 `focus-visible` / `prefers-reduced-motion` / 无 `transition: all`。
+
+### 五、定时任务
+
+- `createSpecialIssueScheduler()` 在 `startServer()` 的 listen 回调里 `start()`；`createApp()` 被单测直接调用时**不启动**，避免测试期偷偷出网。
+- 排程用链式 `setTimeout` 到下一个本地 `syncHour:00`，跑完再排下一次；所有定时器 `.unref()`。
+- 启动补跑：无 `lastSyncAt` 或超过 24 小时，等 45 秒后补一次；`running` 忙标志防并发。
+- 每次跑完写一份当日 `topicHistory` 主题快照，热点趋势才有依据。
+- 偏好 / 订阅变更会 `scheduler.refresh()` 重新排期；关闭自动抓取则清空下一次触发时间。
+- 到期清理：`purgeExpiredIssues()` 在启动时立即跑一次、之后每小时一次（`setInterval` 同样 `.unref()`）；另外 `readState()` 每次读取都会清一次并落盘，`runSync()` 抓完也清一次。多条路径兜底，保证「到了截止日期自动清除」不依赖是否开启每日抓取。
+
+### 六、真实抓取的边界（如实说明）
+
+出版社征稿页结构千差万别且会改版，所以内核是**通用解析器 + 可配置的源**，而不是给 166 本刊各写一套选择器：
+
+- 每刊有默认征稿页（Elsevier/Emerald 走期刊级 `call-for-papers` 子页，其余走出版社聚合页），可在「期刊管理 → 征稿页与定时任务」里替换或新增任意 http(s) 征稿页。
+- 解析器同时支持 HTML 块、锚点、RSS/Atom；deadline 支持 ISO、英文月名前后序、斜杠、中文年月日，且优先取「deadline / 截止」标签后的日期。
+- 可选「AI 辅助抽取」：把页面文本交给已配置的模型再结构化一次，只做增强，失败不影响整次抓取。
+- 单个源失败只记 `sync[task].error`，不阻断其它源；抓不到数据时界面是明确的空状态，**不生成任何示例或占位征稿**。
+- 期刊等级取自 easyScholar 实时结果，目录里不写死任何 ABS 等级。
+
+### 七、测试证据
+
+- `test/special-issues.test.mjs`：16/16 通过（目录唯一性、脏状态兜底、5 种日期格式、HTML/RSS 解析、旅游相关性排序、热点趋势、注入式抓取与失败隔离、定时任务不自动出网、收藏切换与叠加筛选、自行添加与去重、到期清除及关联数据回收、多字段搜索、HTTP 订阅→抓取→列表/热点/推荐→收藏→添加→清理全链路、源码挂载点）。
+- 浏览器端到端：真实 Chromium 验证 34 项（含收藏切换、只看收藏、添加弹窗、新增后搜索、写入过期项后 API 读取即清除且磁盘同步移除），无控制台错误。
+- 全量 `node --test` 在 Node 20 与 Node 22 各跑一次，均 `# fail 0`。
+- 新增数据文件已纳入备份清单，`npm ci --dry-run` 校验 lock 只动 2 行。
+
+---
+
 ## v2.1.10：阅读器内可就地改翻译引擎 + 排序改「按阅读热力」（2026-11-17）
 
 > 用户反馈：`对于划词翻译以及整篇翻译是要显示当前翻译引擎，同时也要能够支持修改引擎啊！！`

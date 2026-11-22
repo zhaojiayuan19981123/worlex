@@ -1,0 +1,151 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand (worlex, locked) · scope: component
+ * axes: paper warm white / ink deep navy / one orange signal / radius 8 / system sans / compact density
+ * kept: every project token, no literal colour or font past the token block · contrast: pass */
+/* ---------- SI 征稿（v2.2.0） ----------
+   全部颜色走 style.css 的 :root / [data-theme] token，浅色·深色·护眼三套自动适配。
+   只定义 si-* 组件类；按钮、徽标沿用全站 .tb-btn / .rank-chip。 */
+
+.si-root { max-width: 1480px; min-width: 0; }
+.si-root *, .si-root *::before, .si-root *::after { box-sizing: border-box; }
+
+.si-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 0 12px; flex-wrap: wrap; }
+.si-head h2 { margin: 0 0 4px; font-size: 26px; letter-spacing: .2px; color: var(--text); overflow-wrap: break-word; min-width: 0; }
+.si-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.si-meta-line { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 12px; min-width: 0; flex-wrap: wrap; }
+.si-meta-line .ico { flex: none; }
+
+.si-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.si-stat { min-height: 74px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.si-stat b { display: block; font-size: 24px; line-height: 1.2; color: var(--text); font-variant-numeric: tabular-nums; }
+.si-stat span { display: block; margin-top: 3px; font-size: 12px; color: var(--text-3); }
+.si-stat.is-accent b { color: var(--primary); }
+
+.si-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; min-width: 0; }
+.si-search-wrap { position: relative; flex: 1 1 220px; min-width: 0; max-width: 340px; }
+.si-search-wrap .ico { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
+.si-input, .si-select { font: inherit; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--btn-border); border-radius: var(--radius-sm); padding: 7px 10px; min-width: 0; }
+.si-search-wrap .si-input { width: 100%; padding-left: 32px; }
+.si-select { max-width: 190px; }
+.si-switch { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--btn-border); border-radius: 20px; color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; background: var(--surface); }
+.si-switch input { accent-color: var(--primary); }
+.si-switch.is-on { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.si-switch .ico { color: currentColor; }
+
+.si-tabs { display: flex; gap: 3px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+.si-tabs button { border: 0; background: transparent; color: var(--muted); padding: 10px 14px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent; }
+.si-tabs button.active { color: var(--primary); border-color: var(--primary); }
+.si-tabs button:hover { color: var(--text); }
+
+.si-recommend { margin-bottom: 14px; padding: 13px 15px; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--radius); background: var(--primary-soft); min-width: 0; }
+.si-rec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; font-size: 13px; font-weight: 700; color: var(--text); }
+.si-rec-head .ico { color: var(--primary); }
+.si-rec-head .si-rec-hint { font-weight: 400; font-size: 12px; color: var(--text-3); }
+.si-rec-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; }
+.si-rec-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface); }
+.si-rec-item a { color: var(--text); text-decoration: none; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.si-rec-item a:hover { color: var(--primary); }
+.si-rec-score { flex: none; font-size: 11px; font-weight: 800; color: var(--primary); font-variant-numeric: tabular-nums; }
+.si-rec-close { flex: none; border: 0; background: transparent; color: var(--text-3); cursor: pointer; padding: 2px; line-height: 1; }
+.si-rec-close:hover { color: var(--red); }
+
+.si-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.si-card { display: flex; flex-direction: column; gap: 9px; padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.si-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; min-width: 0; }
+.si-pill { display: inline-flex; align-items: center; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 20px; padding: 3px 9px; background: var(--primary-soft); color: var(--primary); font-size: 11px; font-weight: 800; }
+.si-rank-wrap { display: inline-flex; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.si-deadline { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; border-radius: 20px; padding: 3px 9px; font-size: 11px; font-weight: 800; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--gray-soft); color: var(--text-3); }
+.si-deadline.is-urgent { background: var(--red-soft); color: var(--red); }
+.si-deadline.is-soon { background: var(--orange-soft); color: var(--orange); }
+.si-deadline.is-normal { background: var(--green-soft); color: var(--green); }
+.si-card h3 { margin: 1px 0 0; font-size: 16px; line-height: 1.42; color: var(--text); font-weight: 700; overflow-wrap: break-word; min-width: 0; }
+.si-title-zh { font-size: 13px; color: var(--text-2); line-height: 1.5; overflow-wrap: break-word; min-width: 0; }
+.si-journal-line { font-size: 12px; color: var(--text-3); overflow-wrap: break-word; min-width: 0; }
+.si-desc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; }
+.si-desc.is-open { display: block; }
+.si-desc-zh { padding: 9px 10px; border-left: 3px solid var(--primary); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--green-soft); font-size: 12px; line-height: 1.6; color: var(--text-2); max-height: 180px; overflow-y: auto; }
+.si-topic-row { display: flex; gap: 5px; flex-wrap: wrap; min-width: 0; }
+.si-topic { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 2px 7px; font-size: 11px; color: var(--text-3); background: var(--panel-soft); cursor: pointer; }
+.si-topic:hover { border-color: var(--primary); color: var(--primary); }
+.si-matched { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--primary); }
+.si-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; border-top: 1px solid var(--border-soft); }
+
+.si-empty { min-height: 200px; padding: 34px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.si-empty .ico { color: var(--text-3); }
+.si-empty p { margin: 0; font-size: 13px; }
+
+/* 领域热点 */
+.si-hot-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.si-hot-head b { font-size: 15px; color: var(--text); }
+.si-hot-head span { font-size: 12px; color: var(--text-3); }
+.si-hot-list { display: grid; gap: 8px; }
+.si-hot-row { display: grid; grid-template-columns: minmax(110px, 1.1fr) minmax(0, 3fr) auto; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; min-width: 0; }
+.si-hot-row:hover { border-color: var(--primary); }
+.si-hot-name { font-size: 13px; font-weight: 700; color: var(--text); overflow-wrap: break-word; min-width: 0; }
+.si-hot-name small { display: block; font-weight: 400; font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.si-hot-bar { height: 8px; border-radius: 20px; background: var(--gray-soft); overflow: hidden; min-width: 0; }
+.si-hot-bar i { display: block; height: 100%; border-radius: 20px; background: var(--primary); }
+.si-hot-num { text-align: right; font-size: 12px; color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.si-hot-num .si-trend { display: block; font-size: 11px; color: var(--green); }
+.si-hot-num .si-trend.is-flat { color: var(--text-3); }
+
+/* 期刊管理 */
+.si-manage { display: grid; gap: 14px; }
+.si-manage-card { padding: 15px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.si-manage-card h3 { margin: 0 0 4px; font-size: 15px; color: var(--text); }
+.si-manage-card p { margin: 0 0 10px; font-size: 12px; color: var(--text-3); }
+.si-preset-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.si-preset-row > span { font-size: 12px; color: var(--text-3); margin-right: 2px; }
+.si-preset { border: 1px solid var(--border); border-radius: 20px; background: var(--surface); padding: 4px 10px; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.si-preset:hover { border-color: var(--primary); color: var(--primary); }
+.si-preset.secondary { border-style: dashed; }
+.si-filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.si-filter-row .si-search-wrap { max-width: 300px; }
+.si-journal-group { margin-top: 12px; min-width: 0; }
+.si-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border-soft); margin-bottom: 8px; }
+.si-group-head b { font-size: 13px; color: var(--text); }
+.as-link { border: 0; background: transparent; color: var(--primary); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 4px; }
+.as-link:hover { text-decoration: underline; }
+.si-journal-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 7px 12px; min-width: 0; }
+.si-journal-options label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; padding: 8px 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); cursor: pointer; }
+.si-journal-options label:hover { border-color: var(--primary); }
+.si-journal-options input { accent-color: var(--primary); }
+.si-journal-options b { display: block; font-size: 12px; color: var(--text); overflow-wrap: break-word; min-width: 0; }
+.si-journal-options small { display: block; font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.si-options-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.si-source-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; margin-bottom: 7px; min-width: 0; }
+.si-source-row .si-input { width: 100%; }
+.si-source-row button { border: 1px solid var(--border); background: var(--surface); color: var(--text-3); border-radius: var(--radius-sm); cursor: pointer; padding: 6px 9px; font: inherit; font-size: 12px; }
+.si-source-row button:hover { color: var(--red); border-color: var(--red); }
+.si-rank-legend { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+/* 收藏与自行添加 */
+.si-fav { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-3); }
+.si-fav:hover, .si-fav.is-on { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
+.si-card.is-favorite { border-color: var(--primary); }
+.si-modal-mask { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; background: var(--overlay); }
+.si-modal { width: min(460px, 100%); max-height: 90vh; overflow-y: auto; padding: 18px 20px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-lg); }
+.si-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.si-modal-head b { font-size: 16px; color: var(--text); }
+.si-modal form { display: grid; gap: 10px; }
+.si-modal label { display: grid; gap: 5px; font-size: 12px; color: var(--text-2); }
+.si-modal label i { color: var(--red); font-style: normal; }
+.si-modal .si-input, .si-modal .si-select { width: 100%; max-width: none; }
+.si-modal textarea.si-input { resize: vertical; min-height: 72px; }
+.si-modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
+.si-root :is(button, a, input, select, label[tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.si-root button, .si-root .si-topic, .si-root .si-hot-row, .si-root .si-journal-options label { cursor: pointer; }
+.si-root :is(button, a, .si-hot-row, .si-preset) { transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.si-root :is(button, a):hover { opacity: .88; }
+
+@media (prefers-reduced-motion: reduce) {
+  .si-root *, .si-root *::before, .si-root *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+@media (max-width: 900px) {
+  .si-head { flex-direction: column; }
+  .si-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .si-list { grid-template-columns: minmax(0, 1fr); }
+  .si-journal-options { grid-template-columns: minmax(0, 1fr); }
+  .si-hot-row { grid-template-columns: minmax(90px, 1fr) minmax(0, 1.6fr) auto; gap: 8px; }
+  .si-source-row { grid-template-columns: minmax(0, 1fr); }
+}

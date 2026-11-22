@@ -54,6 +54,8 @@ import * as outboundProxy from './src/outboundProxy.js';
 import { proxiedFetch, probeProxy } from './src/proxiedFetch.js';
 import * as localGateway from './src/localGateway.js';
 import { UTD_JOURNALS, JOURNAL_PRESETS, createTopJournalState, syncJournals, checkInAndCreateDelivery, deliveryArticles, recentArticles, historyArticles, deliveredArticleIds, setArticleFavorite, removeFavorites, removeHistoryArticles, calendarSummary, markArticleOpened } from './src/topJournals.js';
+// v2.2.0 SI 征稿追踪：ABS 期刊每日抓取、easyScholar 等级、一键翻译、知识图谱推荐与领域热点
+import { registerSpecialIssueRoutes } from './src/specialIssueRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -5475,6 +5477,21 @@ export function createApp({
     readLLMResponse,
   });
 
+  // ---------- SI 征稿追踪（v2.2.0） ----------
+  // 与顶刊追踪并列的独立模块：自己的数据文件、路由和每日定时抓取。
+  // 抓取走 modelFetch（自动直连/代理切换），等级/翻译/AI 抽取复用全站已有的通道；
+  // 知识图谱数据通过闭包注入，避免把 kbGraphCache 暴露成模块级全局。
+  // scheduler 只在 startServer() 里 start()，createApp() 被单测直接调用时不会偷偷出网。
+  const specialIssueService = registerSpecialIssueRoutes(app, {
+    store,
+    getGraph: () => kbGraphCache,
+    fetchImpl: modelFetch,
+    resolveRequestModel,
+    fetchModelCompletion,
+    readLLMResponse,
+    logger: (msg) => console.log(msg),
+  });
+
   // 静态：上传目录（动态）+ 前端页面
   app.use('/uploads', (req, res, next) => express.static(currentUploadDir)(req, res, next));
 
@@ -5490,7 +5507,7 @@ export function createApp({
     next();
   });
 
-  return { app, getUploadDir: () => currentUploadDir, pdfTranslate: pdfTranslateService };
+  return { app, getUploadDir: () => currentUploadDir, pdfTranslate: pdfTranslateService, specialIssues: specialIssueService };
 }
 
 // ---------- 启动 ----------
@@ -5505,7 +5522,7 @@ export async function startServer(options = {}) {
     startGateway = false,
   } = options;
   if (dataDir) store.configure({ dataDir });
-  const { app } = createApp({
+  const { app, specialIssues } = createApp({
     uploadDir, defaultDataDir, defaultUploadDir, onDataDirChange, openPath, openWith, revealFile,
     installDir, saveTextFile, exportPdf, updateService,
   });
@@ -5541,10 +5558,13 @@ export async function startServer(options = {}) {
     const server = app.listen(port, '127.0.0.1', () => {
       // 空闲时再做启动快照，别和首屏请求抢主线程与磁盘
       setTimeout(startupBackup, 2500).unref?.();
+      // 每日定时抓取 SI：只在真正启动服务时开启，单测走 createApp() 不受影响
+      try { specialIssues?.scheduler?.start(); } catch (e) { console.error('[SI] 定时任务启动失败（忽略）：', e.message); }
       resolve({
         server, port: server.address().port, app,
         gateway: startGateway ? localGatewayServer : null,
         stopGateway: () => localGatewayServer.stop().catch(() => {}),
+        stopSpecialIssueScheduler: () => specialIssues?.scheduler?.stop?.(),
       });
     });
   });
