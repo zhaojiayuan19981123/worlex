@@ -130,9 +130,12 @@ test('知识图谱推荐：研究旅游时旅游 SI 明显优先于无关 SI', (
 
 test('领域热点：按覆盖数 / 期刊数 / 临近截止聚合，7 日趋势可读', () => {
   const mk = (id, topics, journalId, deadline) => ({ id, topics, journalId, deadline, discoveredAt: new Date().toISOString() });
+  // 只给「旅游与酒店」加一条临近截止，避免与「人工智能」同分后依赖中文 localeCompare 的环境差异
+  const soon = new Date(); soon.setDate(soon.getDate() + 20);
+  const soonYmd = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, '0')}-${String(soon.getDate()).padStart(2, '0')}`;
   const issues = [
     mk('1', ['旅游与酒店', '人工智能'], 'tm', `${YEAR}-06-30`),
-    mk('2', ['旅游与酒店'], 'atr', `${YEAR}-07-30`),
+    mk('2', ['旅游与酒店'], 'atr', soonYmd),
     mk('3', ['人工智能'], 'jtr', `${YEAR}-08-30`),
     mk('4', [], 'tm', ''),
   ];
@@ -141,7 +144,7 @@ test('领域热点：按覆盖数 / 期刊数 / 临近截止聚合，7 日趋势
   assert.equal(hot[0].count, 2);
   assert.equal(hot[0].journalCount, 2);
   assert.equal(hot[0].upcomingCount, 2);
-  assert.equal(hot[0].nearestDeadline, `${YEAR}-06-30`);
+  assert.equal(hot[0].nearestDeadline, soonYmd);
   const snap = topicSnapshot(issues);
   assert.equal(snap.counts['旅游与酒店'], 2);
   const pastKey = new Date(Date.now() - 7 * 86400000);
