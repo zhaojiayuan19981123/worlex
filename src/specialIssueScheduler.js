@@ -65,8 +65,10 @@ export function createSpecialIssueScheduler(deps = {}) {
       if (!s || !Array.isArray(s.issues) || !s.issues.length) return;
       const t = now();
       const key = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
-      const snap = snapshot(s.issues, t);
-      const next = { ...s, topicHistory: { ...(s.topicHistory || {}), [key]: snap.counts || {} } };
+      const all = s.preferences?.scope === 'all';
+      const ids = s.selectedJournalIds || [];
+      const snap = snapshot(all ? s.issues : s.issues.filter((i) => !i.journalId || ids.includes(i.journalId)), t);
+      const next = { ...s, topicHistory: { ...(s.topicHistory || {}), [key]: { counts: snap.counts || {}, scope: all ? 'all' : [...ids].sort().join(',') } } };
       saveState(next);
       logger(`[SI] 主题快照已记录（${reason}）`);
     } catch (e) {
@@ -95,7 +97,8 @@ export function createSpecialIssueScheduler(deps = {}) {
     try {
       const result = await runNow(reason);
       lastRunAt = now().toISOString();
-      writeSnapshot(reason);
+      if (result?.ok === false) lastError = result.error || '本次未获取到有效 SI，请查看抓取诊断';
+      else writeSnapshot(reason);
       return result || { ok: true };
     } catch (e) {
       lastError = String(e?.message || e).slice(0, 300);
@@ -115,8 +118,8 @@ export function createSpecialIssueScheduler(deps = {}) {
     nextRunAt = target.toISOString();
     const delay = Math.max(1000, target.getTime() - now().getTime());
     dailyTimer = setTimeout(async () => {
-      await trigger('daily');
-      schedule();
+      if (started && getState()?.preferences?.autoSync !== false) await trigger('daily');
+      if (started) schedule();
     }, delay);
     if (typeof dailyTimer.unref === 'function') dailyTimer.unref();
   }
@@ -132,7 +135,12 @@ export function createSpecialIssueScheduler(deps = {}) {
     if (s.preferences?.autoSync === false || !(s.selectedJournalIds || []).length) return status();
     const stale = !s.lastSyncAt || (now().getTime() - Date.parse(s.lastSyncAt) > DAY);
     if (stale) {
-      catchupTimer = setTimeout(() => { trigger('catchup').catch(() => {}); }, 45000);
+      catchupTimer = setTimeout(() => {
+        catchupTimer = null;
+        const latest = getState() || {};
+        if (started && latest.preferences?.autoSync !== false && latest.selectedJournalIds?.length
+          && (!latest.lastSyncAt || now().getTime() - Date.parse(latest.lastSyncAt) > DAY)) trigger('catchup').catch(() => {});
+      }, 45000);
       if (typeof catchupTimer.unref === 'function') catchupTimer.unref();
     }
     return status();
@@ -140,6 +148,10 @@ export function createSpecialIssueScheduler(deps = {}) {
 
   function refresh() {
     if (!started) return status();
+    if (getState()?.preferences?.autoSync === false && catchupTimer) {
+      clearTimeout(catchupTimer);
+      catchupTimer = null;
+    }
     schedule();
     return status();
   }

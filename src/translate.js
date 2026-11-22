@@ -56,7 +56,7 @@ async function translateViaLLM(text, settings, target, profileId, opts = {}) {
     let last = '';
     for (let i = 0; i < formats.length; i += 1) {
       const format = formats[i]; const endpoint = baseURL(profile) + (format === 'responses' ? '/responses' : '/chat/completions');
-      const send = (payload) => fetch(endpoint, { method: 'POST', headers, signal: controller.signal, body: JSON.stringify(payload) });
+      const send = (payload) => (opts.fetchImpl || fetch)(endpoint, { method: 'POST', headers, signal: controller.signal, body: JSON.stringify(payload) });
       // 思考参数被上游拒（400/422）时会自动摘掉重发一次，避免「翻译整个不可用」
       let { res, thinkingRejected } = await postWithThinkingFallback(send, bodyFor(profile, messages, format));
       if (!res.ok && profile.systemPromptMode === 'auto') {

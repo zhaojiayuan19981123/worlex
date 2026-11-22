@@ -192,11 +192,10 @@ const slug = (s) => String(s || '').toLowerCase().replace(/&/g, 'and').replace(/
 
 /** 出版社级公开征稿聚合页：作为默认抓取起点，可在界面里替换。 */
 export const CFP_SOURCES = [
-  { id: 'elsevier', label: 'Elsevier / ScienceDirect', url: 'https://www.sciencedirect.com/browse/journals-and-books', publisher: 'Elsevier' },
   { id: 'emerald', label: 'Emerald', url: 'https://www.emeraldgrouppublishing.com/calls-for-papers', publisher: 'Emerald' },
   { id: 'sage', label: 'SAGE Journals', url: 'https://journals.sagepub.com/call-for-papers', publisher: 'Sage' },
   { id: 'wiley', label: 'Wiley Online Library', url: 'https://onlinelibrary.wiley.com/call-for-papers', publisher: 'Wiley' },
-  { id: 'tandf', label: 'Taylor & Francis', url: 'https://www.tandfonline.com/action/showSpecialIssues', publisher: 'T&F' },
+  { id: 'tandf', label: 'Taylor & Francis', url: 'https://callforpapers.taylorandfrancis.com/wp-json/wp/v2/special_issues?per_page=50&_fields=id,link,title,special_issues._special_issues_journal_title,special_issues._special_issues_title,special_issues._special_issues_deadline,special_issues._special_issues_copy', publisher: 'T&F' },
   { id: 'springer', label: 'Springer', url: 'https://www.springer.com/gp/authors-editors/journal-author/call-for-papers', publisher: 'Springer' },
   { id: 'frontiers', label: 'Frontiers Research Topics', url: 'https://www.frontiersin.org/research-topics', publisher: 'Frontiers' },
   { id: 'informs', label: 'INFORMS', url: 'https://pubsonline.informs.org/page/calls-for-papers', publisher: 'INFORMS' },
@@ -234,7 +233,7 @@ export const SI_PRESETS = {
 // ---------------- 领域主题词表（热点 / 相关性共用） ----------------
 // terms 同时收中英文说法：用户知识图谱里可能是中文主题，SI 原文多为英文。
 export const TOPIC_LEXICON = [
-  { id: 'ai', label: '人工智能', terms: ['artificial intelligence', 'machine learning', 'deep learning', 'generative ai', 'large language model', 'llm', 'chatgpt', '算法', '人工智能', '机器学习', '大模型', '生成式'] },
+  { id: 'ai', label: '人工智能', terms: ['artificial intelligence', 'ai', 'machine learning', 'deep learning', 'generative ai', 'large language model', 'llm', 'chatgpt', '算法', '人工智能', '机器学习', '大模型', '生成式'] },
   { id: 'digital', label: '数字化', terms: ['digital transformation', 'digitalization', 'digitization', 'digital economy', 'digital platform', '数字化转型', '数字化', '数字经济'] },
   { id: 'platform', label: '平台与生态', terms: ['platform', 'ecosystem', 'two-sided market', 'sharing economy', 'gig economy', '平台', '生态', '共享经济', '零工经济'] },
   { id: 'bigdata', label: '大数据与分析', terms: ['big data', 'analytics', 'data science', 'predictive analytics', 'text mining', '大数据', '数据分析', '文本挖掘'] },

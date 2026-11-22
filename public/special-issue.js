@@ -14,8 +14,10 @@
   const S = {
     mounted: false, container: null, root: null, data: null,
     tab: 'issues', query: '', sort: 'deadline', topic: '', favoriteOnly: false,
-    journalQuery: '', category: '', busy: false, loading: false,
+    journalQuery: '', category: '', busy: new Set(), loading: false, loadSeq: 0,
     expanded: new Set(), dismissed: new Set(), sourceDraft: [], overrideDraft: [],
+    translated: new Set(), translating: new Set(), subscriptionIds: null, savingSubscriptions: false,
+    sourcesDirty: false, expiryTimer: null,
     addMode: 'manual', pasteItems: [], pasteChecked: new Set(),
     timer: null,
   };
@@ -82,6 +84,8 @@
         <button class="active" data-si-tab="issues">征稿</button>
         <button data-si-tab="hot">领域热点</button>
         <button data-si-tab="manage">期刊管理</button>
+        <button data-si-tab="pending">待核实</button>
+        <button data-si-tab="diagnostics">抓取诊断</button>
       </nav>
       <div id="siRecommendBox"></div>
       <div id="siBody" class="si-content"></div>
@@ -97,6 +101,9 @@
     root.addEventListener('click', onClick);
     root.addEventListener('change', onChange);
     root.addEventListener('input', onInput);
+    root.addEventListener('keydown', (e) => {
+      if (e.target.matches('[data-si-hot]') && ['Enter', ' '].includes(e.key)) { e.preventDefault(); e.target.click(); }
+    });
     root.addEventListener('submit', (e) => {
       e.preventDefault();
       if (e.target?.id === 'siAddForm') handleAction('save-custom');
@@ -105,7 +112,7 @@
 
   // ---------------- 数据 ----------------
   async function load() {
-    if (S.loading) return;
+    const seq = ++S.loadSeq;
     S.loading = true;
     try {
       const params = new URLSearchParams();
@@ -113,22 +120,28 @@
       if (S.topic) params.set('topic', S.topic);
       if (S.sort) params.set('sort', S.sort);
       if (S.favoriteOnly) params.set('favoriteOnly', '1');
-      S.data = await api('/api/special-issues' + (params.toString() ? '?' + params : ''));
-      S.sourceDraft = (S.data.customSources || []).map((x) => ({ ...x }));
-      S.overrideDraft = Object.entries(S.data.cfpOverrides || {}).map(([id, url]) => ({ id, url }));
+      const data = await api('/api/special-issues' + (params.toString() ? '?' + params : ''));
+      if (seq !== S.loadSeq || !S.root) return;
+      S.data = data;
+      if (!S.sourcesDirty) {
+        S.sourceDraft = (S.data.customSources || []).map((x) => ({ ...x }));
+        S.overrideDraft = Object.entries(S.data.cfpOverrides || {}).map(([id, url]) => ({ id, url }));
+      }
       render();
     } catch (e) {
+      if (seq !== S.loadSeq) return;
       toast(e.message || '征稿数据加载失败', 'error');
       const body = S.root?.querySelector('#siBody');
       if (body) body.innerHTML = emptyState('alert', '加载失败', e.message || '请稍后重试');
     } finally {
-      S.loading = false;
+      if (seq === S.loadSeq) S.loading = false;
     }
   }
 
   async function post(path, body, act) {
-    if (S.busy) return null;
-    S.busy = true;
+    const key = act || path;
+    if (S.busy.has(key)) return null;
+    S.busy.add(key);
     const btn = act ? S.root.querySelector(`[data-si-act="${act}"]`) : null;
     const original = btn?.innerHTML;
     if (btn) { btn.disabled = true; btn.innerHTML = `${ico('loader', 'ico-sm')}处理中`; }
@@ -139,14 +152,50 @@
       toast(e.message || '操作失败', 'error');
       return null;
     } finally {
-      S.busy = false;
-      if (btn && original != null) { btn.disabled = false; btn.innerHTML = original; }
+      S.busy.delete(key);
+      if (btn?.isConnected && original != null) { btn.disabled = false; btn.innerHTML = original; }
+      if (S.data) render();
     }
   }
 
-  async function put(path, body) {
-    try { S.data = await api(path, { method: 'PUT', body }); render(); }
-    catch (e) { toast(e.message || '保存失败', 'error'); }
+  async function put(path, body, success = '') {
+    const sourceDraft = path.endsWith('/sources') ? JSON.stringify([S.sourceDraft, S.overrideDraft]) : null;
+    try {
+      await api(path, { method: 'PUT', body });
+      if (sourceDraft === JSON.stringify([S.sourceDraft, S.overrideDraft])) S.sourcesDirty = false;
+      await load();
+      if (success) toast(success, 'success');
+      return true;
+    } catch (e) { toast(e.message || '保存失败', 'error'); return false; }
+  }
+
+  function sourceSettings() {
+    return {
+      customSources: S.sourceDraft.filter((x) => /^https?:\/\//i.test(x.url))
+        .map((x) => ({ id: x.id || undefined, label: x.label || '自定义征稿页', url: x.url })),
+      cfpOverrides: Object.fromEntries(S.overrideDraft.filter((x) => x.id && /^https?:\/\//i.test(x.url)).map((x) => [x.id, x.url])),
+    };
+  }
+
+  async function saveSubscriptions(ids) {
+    S.subscriptionIds = [...new Set(ids)];
+    if (S.savingSubscriptions) return;
+    S.savingSubscriptions = true;
+    try {
+      while (S.subscriptionIds) {
+        const current = S.subscriptionIds;
+        await api('/api/special-issues/subscriptions', { method: 'PUT', body: { selectedJournalIds: current } });
+        if (S.subscriptionIds === current) S.subscriptionIds = null;
+      }
+      await load();
+    } catch (e) {
+      S.subscriptionIds = null;
+      toast(e.message || '订阅保存失败', 'error');
+      await load();
+    } finally {
+      S.savingSubscriptions = false;
+      if (S.subscriptionIds) saveSubscriptions(S.subscriptionIds);
+    }
   }
 
   // ---------------- 渲染 ----------------
@@ -174,9 +223,18 @@
     if (recBox) recBox.innerHTML = renderRecommend(d);
     const body = S.root.querySelector('#siBody');
     if (!body) return;
+    const sourceSettingsOpen = !!body.querySelector('details.si-manage-card[open]');
     if (S.tab === 'issues') body.innerHTML = renderIssues(d);
     else if (S.tab === 'hot') body.innerHTML = renderHot(d);
+    else if (S.tab === 'pending') body.innerHTML = renderPending(d);
+    else if (S.tab === 'diagnostics') body.innerHTML = renderDiagnostics(d);
     else body.innerHTML = renderManage(d);
+    if (sourceSettingsOpen) body.querySelector('details.si-manage-card')?.setAttribute('open', '');
+    S.root.querySelectorAll('[data-si-act="sync"], [data-si-act="ranks"]').forEach((btn) => {
+      const busy = S.busy.has(btn.dataset.siAct);
+      btn.disabled = busy;
+      if (busy) btn.innerHTML = `${ico('loader', 'ico-sm')}处理中`;
+    });
     updateBadge(d);
   }
 
@@ -219,7 +277,7 @@
   function issueCard(i, d) {
     const j = (d.catalog || []).find((x) => x.id === i.journalId);
     const rank = d.ranks?.[i.journalId];
-    const tr = d.translations?.[i.id];
+    const tr = S.translated.has(i.id) ? d.translations?.[i.id] : null;
     const dl = i.deadline || {};
     const url = safeUrl(i.url);
     const opened = S.expanded.has(i.id);
@@ -236,13 +294,13 @@
       <h3>${esc(i.title || '未命名专刊')}</h3>
       ${tr?.title ? `<div class="si-title-zh">${esc(tr.title)}</div>` : ''}
       <div class="si-journal-line">${esc(i.journal || j?.title || '未识别期刊')}${i.category ? ` · ${esc(i.category)}` : ''}</div>
-      <p class="si-desc${opened ? ' is-open' : ''}">${esc(i.description || '征稿页未提供主题简介，可打开原文查看。')}</p>
+      <p class="si-desc${opened ? ' is-open' : ''}" id="si-desc-${esc(i.id)}">${esc(i.description || '征稿页未提供主题简介，可打开原文查看。')}</p>
       ${tr?.description ? `<div class="si-desc-zh">${esc(tr.description)}</div>` : ''}
       ${(i.topics || []).length ? `<div class="si-topic-row">${i.topics.slice(0, 5).map((t) => `<button class="si-topic" data-si-topic="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
       ${rel.score > 0 ? `<div class="si-matched">${ico('target', 'ico-sm')}与你的研究相关 ${Number(rel.score)} · ${esc((rel.matched || []).slice(0, 3).map((m) => m.term).join('、'))}</div>` : ''}
       <div class="si-actions">
-        <button class="tb-btn" data-si-translate="${esc(i.id)}">${ico('languages')}${tr?.title || tr?.description ? '查看译文' : '一键翻译'}</button>
-        <button class="tb-btn" data-si-expand="${esc(i.id)}">${opened ? '收起' : '展开'}</button>
+        <button class="tb-btn" data-si-translate="${esc(i.id)}" ${S.translating.has(i.id) ? 'disabled' : ''}>${ico('languages')}${S.translating.has(i.id) ? '翻译中' : tr ? '隐藏译文' : d.translations?.[i.id] ? '显示译文' : '一键翻译'}</button>
+        <button class="tb-btn" data-si-expand="${esc(i.id)}" aria-expanded="${opened}" aria-controls="si-desc-${esc(i.id)}">${opened ? '收起' : '展开'}</button>
         ${url ? `<a class="tb-btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${ico('external')}原文</a>` : ''}
         ${i.custom ? `<button class="tb-btn" data-si-del="${esc(i.id)}">${ico('trash')}删除</button>` : ''}
         ${dl.date ? `<span class="si-journal-line">截稿 ${esc(dl.date)}</span>` : ''}
@@ -284,7 +342,7 @@
   function renderHot(d) {
     const topics = d.hotTopics || [];
     if (!topics.length) return emptyState('trending', '暂无领域热点', '抓取到 SI 征稿后，按主题覆盖数、涉及期刊与临近截止自动汇总。');
-    const head = `<div class="si-hot-head"><b>当前领域热点</b><span>基于 ${Number(d.summary?.total || 0)} 条已抓取征稿 · 点击主题查看相关 SI</span></div>`;
+    const head = `<div class="si-hot-head"><b>当前领域热点</b><span>基于所选范围内未截止 SI 的主题统计，代表征稿关注度</span></div>`;
     const rows = topics.map((t) => {
       const trend = t.trend === null ? '近 7 日' : t.trend > 0 ? `↑ ${t.trend}` : t.trend < 0 ? `↓ ${Math.abs(t.trend)}` : '持平';
       return `<div class="si-hot-row" data-si-hot="${esc(t.topic)}" tabindex="0" role="button">
@@ -296,8 +354,21 @@
     return `${head}<div class="si-hot-list">${rows}</div>`;
   }
 
+  function renderPending(d) {
+    const q = S.query.trim().toLowerCase();
+    const items = (d.pendingIssues || []).filter((i) => !q || `${i.title} ${i.description} ${i.journal}`.toLowerCase().includes(q));
+    if (!items.length) return emptyState('clock', '没有待核实的征稿', '截止日期明确且未过期的条目显示在「征稿」中。');
+    return `<p class="si-journal-line">以下条目未识别到有效截止日期，请核对原文后补全；不计入在征、推荐和热点。</p><div class="si-list">${items.map((i) => `<div class="si-pending-item">${issueCard(i, d)}<div class="si-verify-row"><input class="si-input" type="date" aria-label="核实截止日期" data-si-deadline="${esc(i.id)}"><button class="tb-btn" data-si-verify="${esc(i.id)}">确认截止日期</button></div></div>`).join('')}</div>`;
+  }
+
+  function renderDiagnostics(d) {
+    const rows = Object.entries(d.sync || {});
+    if (!rows.length) return emptyState('refresh', '尚无抓取记录', '订阅期刊或添加官方征稿页后点击立即抓取。');
+    return `<div class="si-diagnostics">${rows.map(([key, s]) => `<section class="si-diagnostic"><b>${esc((d.catalog || []).find((j) => j.id === key)?.title || key.replace(/^publisher:/, ''))}</b><p class="si-journal-line">尝试 ${esc(fmtTime(s.lastAttemptAt))} · 上次成功 ${esc(fmtTime(s.lastSuccessAt))}</p><p>${esc(s.error || `已识别 ${Number(s.count || 0)} 条，未截止 ${Number(s.activeCount || 0)} 条，待核实 ${Number(s.pendingCount || 0)} 条`)}</p>${(s.warnings || []).map((w) => `<p class="si-journal-line">${esc(w)}</p>`).join('')}${safeUrl(s.url) ? `<a class="as-link" href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer">打开官方来源</a>` : ''}</section>`).join('')}</div>`;
+  }
+
   function renderManage(d) {
-    const selected = new Set(d.selectedJournalIds || []);
+    const selected = new Set(S.subscriptionIds || d.selectedJournalIds || []);
     const catalog = d.catalog || [];
     const presets = Object.entries(d.presets || {});
     const q = S.journalQuery.trim().toLowerCase();
@@ -329,7 +400,7 @@
       </div>
       <details class="si-manage-card">
         <summary style="cursor:pointer;font-size:14px;font-weight:700;color:var(--text)">征稿页与定时任务</summary>
-        <p style="margin-top:10px">出版社改版后，可把下面任意一行换成实际的征稿页地址；抓取器对页面结构是通用的。</p>
+        <p style="margin-top:10px">自动抓取在程序运行期间执行，启动后补跑；不支持关闭程序后抓取。出版社验证或动态页面可在浏览器打开后粘贴导入。</p>
         <div class="si-options-actions">
           <label class="si-switch${p.autoSync ? ' is-on' : ''}"><input type="checkbox" id="siAutoSync" ${p.autoSync ? 'checked' : ''}>每日自动抓取</label>
           <select class="si-select" id="siHour" aria-label="每日抓取时间">${Array.from({ length: 24 }, (_, h) => `<option value="${h}"${Number(sc.hour ?? 8) === h ? ' selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select>
@@ -393,10 +464,9 @@
     btn.disabled = true; btn.innerHTML = `${ico('loader', 'ico-sm')}导入中`;
     try {
       const r = await api('/api/special-issues/import', { method: 'POST', body: { items } });
-      S.data = r;
       closeModal();
-      render();
-      toast(`已导入 ${r.added?.length || 0} 条${r.skipped?.length ? `，跳过 ${r.skipped.length} 条重复` : ''}`, 'success');
+      await load();
+      toast(`已导入 ${r.added?.length || 0} 条${r.skipped?.length ? `，跳过 ${r.skipped.length} 条（重复、已截止或字段无效）` : ''}`, 'success');
     } catch (e) {
       toast(e.message || '导入失败', 'error');
       btn.disabled = false; btn.innerHTML = original;
@@ -411,8 +481,8 @@
     const manual = `<form id="siAddForm">
       <label>专刊标题 <i>*</i><input class="si-input" id="siAddTitle" required maxlength="240" placeholder="Special Issue: ..."></label>
       <label>期刊<select class="si-select" id="siAddJournal">${journalOptions}</select></label>
-      <label>主题简介<textarea class="si-input" id="siAddDesc" rows="3" maxlength="900" placeholder="征稿主题、投稿要求…"></textarea></label>
-      <label>截止日期<input class="si-input" id="siAddDeadline" placeholder="2027-06-30 或 30 June 2027"></label>
+      <label>主题简介<textarea class="si-input" id="siAddDesc" rows="3" maxlength="12000" placeholder="征稿主题、投稿要求…"></textarea></label>
+      <label>截止日期 <i>*</i><input class="si-input" id="siAddDeadline" type="date" required></label>
       <label>原文链接<input class="si-input" id="siAddUrl" type="url" placeholder="https://…"></label>
       <div class="si-modal-foot"><button type="button" class="tb-btn" data-si-act="close-modal">取消</button><button type="submit" class="tb-btn accent">添加</button></div>
     </form>`;
@@ -487,11 +557,11 @@
     const favBtn = t.closest('[data-si-fav]');
     if (favBtn) {
       const id = favBtn.dataset.siFav;
-      post(`/api/special-issues/${encodeURIComponent(id)}/favorite`, {}).then((r) => {
+      const favorite = !(S.data?.favoriteIds || []).includes(id);
+      post(`/api/special-issues/${encodeURIComponent(id)}/favorite`, { favorite }).then(async (r) => {
         if (!r) return;
-        S.data = r;
         toast(r.favoriteIds?.includes(id) ? '已收藏' : '已取消收藏', 'success');
-        render();
+        await load();
       });
       return;
     }
@@ -499,26 +569,33 @@
     if (delBtn) {
       const id = delBtn.dataset.siDel;
       if (!window.confirm('删除这条自己添加的 SI？')) return;
-      api(`/api/special-issues/${encodeURIComponent(id)}`, { method: 'DELETE' }).then((r) => {
-        S.data = r; toast('已删除', 'success'); render();
+      api(`/api/special-issues/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(async () => {
+        toast('已删除', 'success'); await load();
       }).catch((err) => toast(err.message || '删除失败', 'error'));
       return;
     }
     const tab = t.closest('[data-si-tab]');
     if (tab) { S.tab = tab.dataset.siTab; render(); return; }
+    const verify = t.closest('[data-si-verify]');
+    if (verify) {
+      const id = verify.dataset.siVerify;
+      const deadline = S.root.querySelector(`[data-si-deadline="${CSS.escape(id)}"]`)?.value;
+      put(`/api/special-issues/${encodeURIComponent(id)}/deadline`, { deadline }, '已核实截止日期');
+      return;
+    }
     const act = t.closest('[data-si-act]');
     if (act) { handleAction(act.dataset.siAct, act); return; }
     const preset = t.closest('[data-si-preset]');
     if (preset) {
       const ids = S.data?.presets?.[preset.dataset.siPreset]?.journalIds || [];
-      put('/api/special-issues/subscriptions', { selectedJournalIds: ids });
+      saveSubscriptions(ids);
       return;
     }
     const cat = t.closest('[data-si-category]');
     if (cat) {
-      const ids = new Set(S.data?.selectedJournalIds || []);
+      const ids = new Set(S.subscriptionIds || S.data?.selectedJournalIds || []);
       (S.data?.catalog || []).filter((j) => j.category === cat.dataset.siCategory).forEach((j) => ids.add(j.id));
-      put('/api/special-issues/subscriptions', { selectedJournalIds: [...ids] });
+      saveSubscriptions([...ids]);
       return;
     }
     const topicBtn = t.closest('[data-si-topic]');
@@ -527,14 +604,20 @@
     if (hot) { S.topic = hot.dataset.siHot; S.tab = 'issues'; load(); return; }
     const jump = t.closest('[data-si-jump]');
     if (jump) {
-      const card = S.root.querySelector(`[data-si-card="${CSS.escape(jump.dataset.siJump)}"]`);
-      if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      e.preventDefault();
+      S.tab = 'issues'; S.query = ''; S.topic = ''; S.favoriteOnly = false;
+      S.root.querySelector('#siQuery').value = '';
+      S.expanded.add(jump.dataset.siJump);
+      load().then(() => S.root?.querySelector(`[data-si-card="${CSS.escape(jump.dataset.siJump)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
       return;
     }
     const dismiss = t.closest('[data-si-dismiss]');
     if (dismiss) {
       S.dismissed.add(dismiss.dataset.siDismiss);
-      post(`/api/special-issues/${encodeURIComponent(dismiss.dataset.siDismiss)}/dismiss`, {}).then(() => render());
+      post(`/api/special-issues/${encodeURIComponent(dismiss.dataset.siDismiss)}/dismiss`, {}).then((r) => {
+        if (!r) S.dismissed.delete(dismiss.dataset.siDismiss);
+        load();
+      });
       return;
     }
     const translate = t.closest('[data-si-translate]');
@@ -565,9 +648,9 @@
     if (t.id === 'siCategory') { S.category = t.value; render(); return; }
     if (t.id === 'siAutoSync' || t.id === 'siAiExtract') { t.closest('.si-switch')?.classList.toggle('is-on', t.checked); return; }
     if (t.matches('[data-si-journal]')) {
-      const ids = new Set(S.data?.selectedJournalIds || []);
+      const ids = new Set(S.subscriptionIds || S.data?.selectedJournalIds || []);
       if (t.checked) ids.add(t.dataset.siJournal); else ids.delete(t.dataset.siJournal);
-      put('/api/special-issues/subscriptions', { selectedJournalIds: [...ids] });
+      saveSubscriptions([...ids]);
     }
   }
 
@@ -590,33 +673,32 @@
       }, 200);
       return;
     }
-    if (t.matches('[data-si-src-label]')) S.sourceDraft[Number(t.dataset.siSrcLabel)].label = t.value;
-    if (t.matches('[data-si-src-url]')) S.sourceDraft[Number(t.dataset.siSrcUrl)].url = t.value;
-    if (t.matches('[data-si-override-url]')) S.overrideDraft[Number(t.dataset.siOverrideUrl)].url = t.value;
+    if (t.matches('[data-si-src-label]')) { S.sourcesDirty = true; S.sourceDraft[Number(t.dataset.siSrcLabel)].label = t.value; }
+    if (t.matches('[data-si-src-url]')) { S.sourcesDirty = true; S.sourceDraft[Number(t.dataset.siSrcUrl)].url = t.value; }
+    if (t.matches('[data-si-override-url]')) { S.sourcesDirty = true; S.overrideDraft[Number(t.dataset.siOverrideUrl)].url = t.value; }
   }
 
   function handleAction(act, node) {
     const d = S.data || {};
     if (act === 'sync') {
-      post('/api/special-issues/sync', {}, 'sync').then((r) => {
+      post('/api/special-issues/sync', {}, 'sync').then(async (r) => {
         if (!r) return;
-        S.data = r;
-        toast(`抓取完成：新增 ${Number(r.added || 0)} 条，成功 ${Number(r.synced?.length || 0)} 个源${r.failed?.length ? `，失败 ${r.failed.length} 个` : ''}`, 'success');
-        render();
+        if (!r.ok || r.failed?.length) S.tab = 'diagnostics';
+        toast(r.ok ? `抓取完成：新增 ${Number(r.added || 0)} 条，成功 ${Number(r.synced?.length || 0)} 个源，失败 ${Number(r.failed?.length || 0)} 个` : r.error || '抓取未成功，请查看诊断', r.ok ? 'success' : 'error');
+        await load();
       });
       return;
     }
     if (act === 'ranks') {
-      post('/api/special-issues/ranks/refresh', {}, 'ranks').then((r) => {
+      post('/api/special-issues/ranks/refresh', {}, 'ranks').then(async (r) => {
         if (!r) return;
-        S.data = r;
-        toast(r.refreshed ? `已更新 ${r.refreshed} 本期刊等级` : '等级已是最新', 'success');
-        render();
+        toast(r.errors?.length ? `更新 ${Number(r.refreshed || 0)} 本，${r.errors.length} 本查询失败：${r.errors[0].error}` : r.refreshed ? `已更新 ${r.refreshed} 本期刊等级` : '暂无需要更新的期刊等级', r.errors?.length ? 'error' : 'success');
+        await load();
       });
       return;
     }
-    if (act === 'select-all') { put('/api/special-issues/subscriptions', { selectedJournalIds: (d.catalog || []).map((j) => j.id) }); return; }
-    if (act === 'clear-all') { put('/api/special-issues/subscriptions', { selectedJournalIds: [] }); return; }
+    if (act === 'select-all') { saveSubscriptions((d.catalog || []).map((j) => j.id)); return; }
+    if (act === 'clear-all') { saveSubscriptions([]); return; }
     if (act === 'clear-topic' || act === 'clear-filters') {
       S.topic = ''; S.query = ''; S.favoriteOnly = false;
       const q = S.root.querySelector('#siQuery'); if (q) q.value = '';
@@ -639,12 +721,11 @@
         description: S.root.querySelector('#siAddDesc')?.value || '',
         deadline: S.root.querySelector('#siAddDeadline')?.value || '',
         url: S.root.querySelector('#siAddUrl')?.value || '',
-      }).then((r) => {
+      }).then(async (r) => {
         if (!r) return;
-        S.data = r;
         closeModal();
         toast('已添加并收藏', 'success');
-        render();
+        await load();
       });
       return;
     }
@@ -656,19 +737,13 @@
       put('/api/special-issues/preferences', {
         autoSync: !!auto?.checked, syncHour: Number(hour?.value ?? 8),
         aiExtract: !!ai?.checked, scope: scope?.value || 'subscribed',
-      });
-      toast('定时任务设置已保存', 'success');
+      }, '定时任务设置已保存');
       return;
     }
-    if (act === 'add-source') { S.sourceDraft.push({ id: '', label: '', url: '' }); render(); return; }
-    if (act === 'del-source') { S.sourceDraft.splice(Number(node.dataset.idx), 1); render(); return; }
+    if (act === 'add-source') { S.sourcesDirty = true; S.sourceDraft.push({ id: '', label: '', url: '' }); render(); return; }
+    if (act === 'del-source') { S.sourcesDirty = true; S.sourceDraft.splice(Number(node.dataset.idx), 1); render(); return; }
     if (act === 'save-sources') {
-      const valid = S.sourceDraft.filter((x) => /^https?:\/\//i.test(x.url));
-      put('/api/special-issues/sources', {
-        customSources: valid.map((x) => ({ id: x.id || undefined, label: x.label || '自定义征稿页', url: x.url })),
-        cfpOverrides: Object.fromEntries(S.overrideDraft.filter((x) => x.id && /^https?:\/\//i.test(x.url)).map((x) => [x.id, x.url])),
-      });
-      toast('征稿页已保存', 'success');
+      put('/api/special-issues/sources', sourceSettings(), '征稿页已保存');
       return;
     }
     if (act === 'add-override') {
@@ -676,40 +751,39 @@
       const url = (S.root.querySelector('#siOverrideUrl')?.value || '').trim();
       if (!id || !/^https?:\/\//i.test(url)) { toast('请选择期刊并填写 http(s) 征稿页地址', 'error'); return; }
       S.overrideDraft = S.overrideDraft.filter((x) => x.id !== id).concat([{ id, url }]);
-      put('/api/special-issues/sources', {
-        customSources: (d.customSources || []).map((x) => ({ id: x.id, label: x.label, url: x.url })),
-        cfpOverrides: Object.fromEntries(S.overrideDraft.filter((x) => /^https?:\/\//i.test(x.url)).map((x) => [x.id, x.url])),
-      });
-      toast('已覆盖该刊征稿页', 'success');
+      S.sourcesDirty = true;
+      put('/api/special-issues/sources', sourceSettings(), '已覆盖该刊征稿页');
       return;
     }
     if (act === 'del-override') {
       S.overrideDraft.splice(Number(node.dataset.idx), 1);
-      put('/api/special-issues/sources', {
-        customSources: (d.customSources || []).map((x) => ({ id: x.id, label: x.label, url: x.url })),
-        cfpOverrides: Object.fromEntries(S.overrideDraft.filter((x) => /^https?:\/\//i.test(x.url)).map((x) => [x.id, x.url])),
-      });
+      S.sourcesDirty = true;
+      put('/api/special-issues/sources', sourceSettings());
     }
   }
 
   async function translateIssue(id, button) {
-    if (S.busy) return;
+    if (S.translating.has(id)) return;
     const tr = S.data?.translations?.[id];
-    if (tr?.title || tr?.description) { toast('已显示缓存译文', 'success'); return; }
-    S.busy = true;
-    const original = button.innerHTML;
+    if (S.translated.has(id)) { S.translated.delete(id); render(); return; }
+    if (tr?.title || tr?.description) { S.translated.add(id); render(); return; }
+    S.translating.add(id);
+    const root = S.root;
     button.disabled = true;
     button.innerHTML = `${ico('loader', 'ico-sm')}翻译中`;
     try {
       const r = await api(`/api/special-issues/${encodeURIComponent(id)}/translate`, { method: 'POST', body: {} });
+      if (!S.data || S.root !== root) return;
       S.data.translations = { ...(S.data.translations || {}), [id]: r.translation };
+      S.translated.add(id);
       toast(r.cached ? '已显示缓存译文' : '已翻译', 'success');
       render();
-    } catch (e) { toast(e.message || '翻译失败', 'error'); }
+    } catch (e) { if (S.root === root) toast(e.message || '翻译失败', 'error'); }
     finally {
-      S.busy = false;
-      const next = S.root.querySelector(`[data-si-translate="${CSS.escape(id)}"]`);
-      if (next) { next.disabled = false; next.innerHTML = original; }
+      if (S.root === root) {
+        S.translating.delete(id);
+        render();
+      }
     }
   }
 
@@ -722,17 +796,22 @@
     buildDom(host);
     bind();
     S.mounted = true;
+    S.expiryTimer = setInterval(() => { if (!document.hidden && !S.loading && !S.sourcesDirty && !S.root?.querySelector('.si-modal-mask')) load(); }, 60000);
     return load();
   }
 
   function close() {
     if (S.timer) clearTimeout(S.timer);
     S.timer = null;
+    clearInterval(S.expiryTimer); S.expiryTimer = null;
+    S.loadSeq += 1;
+    S.loading = false;
     S.root?.remove();
     S.root = null;
     S.container = null;
     S.mounted = false;
     S.expanded.clear();
+    S.translating.clear();
   }
 
   const SpecialIssueView = { mount, refresh: load, close };

@@ -7,6 +7,7 @@
 //   AI 结构化抽取 → 注入 fetchModelCompletion / readLLMResponse（与 /api/top-journals/analyze 同款）
 // 抓取出口由 createApp 注入 fetchImpl（server.js 的 modelFetch，自动直连/代理切换）。
 
+import { createHash } from 'node:crypto';
 import { queryPublicationRank, formatRank } from './easyscholar.js';
 import { translate } from './translate.js';
 import { createSpecialIssueScheduler } from './specialIssueScheduler.js';
@@ -16,7 +17,7 @@ import {
   profileFromGraph, recommendIssues, computeHotTopics, topicSnapshot,
   specialIssueSummary, setSubscriptions, setPreferences, dismissRecommendation,
   normalizeAiIssue, toggleFavorite, addCustomIssue, purgeExpiredIssues,
-  parsePastedContent, importPastedIssues,
+  parsePastedContent, importPastedIssues, normalizeDeadline, deadlineMeta,
 } from './specialIssues.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -35,6 +36,8 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     resolveRequestModel = () => ({ error: '未配置 AI 模型' }),
     fetchModelCompletion = null,
     readLLMResponse = null,
+    translateImpl = translate,
+    queryRankImpl = queryPublicationRank,
     logger = () => {},
   } = deps;
 
@@ -49,6 +52,12 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     return s;
   };
   const writeState = (s) => store.saveSpecialIssues(createSpecialIssueState(s));
+  let syncPromise = null;
+  const translating = new Map();
+  const fingerprint = (issue) => createHash('sha256').update(JSON.stringify([issue.title, issue.description || ''])).digest('hex');
+  const scopedIssues = (state) => state.preferences.scope === 'all' ? state.issues
+    : state.issues.filter((i) => !i.journalId || state.selectedJournalIds.includes(i.journalId));
+  const scopeKey = (state) => state.preferences.scope === 'all' ? 'all' : [...state.selectedJournalIds].sort().join(',');
 
   // ---------- AI 辅助结构化抽取（可选，默认关闭） ----------
   // 正则抓不全的出版社页面，交给已配置的模型再抽一次 JSON；失败只记录、不影响整次抓取。
@@ -64,7 +73,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       ],
       temperature: 0.1,
       max_tokens: 2000,
-    }, { stream: false, timeoutMs: 60000 });
+    }, { stream: false, timeoutMs: ctx?.timeoutMs || 30000 });
     try {
       if (!request.up || !request.up.ok) throw new Error('模型未返回有效结果');
       const full = (await readLLMResponse(request.up)).full || '';
@@ -79,7 +88,13 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   }
 
   // ---------- 抓取（手动 / 定时共用） ----------
-  async function runSync(reason, opts = {}) {
+  function runSync(reason, opts = {}) {
+    if (syncPromise) return syncPromise;
+    syncPromise = performSync(reason, opts).finally(() => { syncPromise = null; });
+    return syncPromise;
+  }
+
+  async function performSync(reason, opts = {}) {
     const state = readState();
     const useAi = opts.aiExtract === true || (opts.aiExtract == null && state.preferences.aiExtract);
     const result = await syncSpecialIssues(state, {
@@ -90,11 +105,30 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       } : null,
       now: new Date(),
     });
-    const next = purgeExpiredIssues(createSpecialIssueState(result.state)).state;
-    const snap = topicSnapshot(next.issues);
-    next.topicHistory = { ...(next.topicHistory || {}), [snap.at]: snap.counts };
+    // Network awaits must never restore an old copy of subscriptions or favorites.
+    const latest = readState();
+    const originalIds = new Set(state.issues.map((i) => i.id));
+    const currentIds = new Set(latest.issues.map((i) => i.id));
+    const incoming = (result.fetched || []).filter((i) => !originalIds.has(i.id) || currentIds.has(i.id))
+      .map((i) => {
+        const current = latest.issues.find((x) => x.id === i.id);
+        return current?.deadlineVerifiedAt ? { ...i, deadline: current.deadline, deadlineVerifiedAt: current.deadlineVerifiedAt } : i;
+      });
+    const next = purgeExpiredIssues({ ...latest,
+      issues: mergeIssues(latest.issues, incoming),
+      sync: { ...latest.sync, ...result.state.sync },
+      lastAttemptAt: result.state.lastAttemptAt,
+      lastSyncAt: result.synced.length ? result.state.lastSyncAt : latest.lastSyncAt,
+    }).state;
+    const snap = topicSnapshot(scopedIssues(next));
+    next.topicHistory = { ...(next.topicHistory || {}), [snap.at]: { counts: snap.counts, scope: scopeKey(next) } };
     writeState(next);
-    return { ok: true, reason, added: result.added, total: result.total, synced: result.synced, failed: result.failed };
+    const ok = result.synced.length > 0;
+    const incomingIds = new Set(incoming.map((i) => i.id));
+    return { ok, reason, added: next.issues.filter((i) => incomingIds.has(i.id) && !originalIds.has(i.id)).length,
+      total: incoming.length, synced: result.synced, failed: result.failed,
+      error: ok ? '' : result.failed.length ? '所有征稿源均未获取到有效 SI，请查看抓取诊断' : '请先订阅期刊或添加官方征稿页',
+    };
   }
 
   const scheduler = createSpecialIssueScheduler({
@@ -121,10 +155,8 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       favoriteOnly: options.favoriteOnly === true,
       limit: 400,
     });
-    const hotIssues = scopeIds && scopeIds.length
-      ? state.issues.filter((i) => !i.journalId || scopeIds.includes(i.journalId))
-      : state.issues;
-    const hotTopics = computeHotTopics(hotIssues, { history: state.topicHistory, now, limit: 12 });
+    const hotIssues = scopedIssues(state);
+    const hotTopics = computeHotTopics(hotIssues, { history: state.topicHistory, scopeKey: scopeKey(state), now, limit: 12 });
     const recommendations = state.preferences.recommendEnabled && !profile.empty
       ? recommendIssues(hotIssues, profile, { now, limit: 6, dismissedIds: state.dismissedIds })
         .map((x) => ({ ...x.issue, relevance: x.relevance, deadline: x.deadline }))
@@ -139,10 +171,12 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       cfpOverrides: state.cfpOverrides,
       customSources: state.customSources,
       ranks: state.ranks,
-      translations: state.translations,
+      translations: Object.fromEntries(state.issues.filter((i) => state.translations[i.id]?.contentHash === fingerprint(i))
+        .map((i) => [i.id, state.translations[i.id]])),
       sync: state.sync,
       preferences: state.preferences,
       issues,
+      pendingIssues: hotIssues.filter((i) => deadlineMeta(i, now).days === null).slice(0, 400),
       hotTopics,
       recommendations,
       summary: specialIssueSummary(state, { now }),
@@ -152,7 +186,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
         keywords: profile.keywords.slice(0, 12).map((t) => t.term),
         entities: profile.entities.slice(0, 12).map((t) => t.term),
       },
-      scheduler: scheduler.status(),
+      scheduler: { ...scheduler.status(), running: !!syncPromise || scheduler.status().running },
     };
   }
 
@@ -206,6 +240,17 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     res.json({ ...payload(), added, skipped });
   });
 
+  app.put('/api/special-issues/:id/deadline', (req, res) => {
+    const state = readState();
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已到期' });
+    const dl = normalizeDeadline(str(req.body?.deadline));
+    if (!dl.date || deadlineMeta({ deadline: dl.date }).days < 0) return res.status(400).json({ error: '请填写有效且未过期的截止日期' });
+    Object.assign(issue, { deadline: dl.date, deadlineText: dl.text, deadlineVerifiedAt: new Date().toISOString() });
+    writeState(state);
+    res.json(payload());
+  });
+
   app.post('/api/special-issues/purge', (_req, res) => {
     const { state, removed } = purgeExpiredIssues(readState());
     if (removed.length) writeState(state);
@@ -233,21 +278,19 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     res.json(payload());
   });
 
-  app.get('/api/special-issues/status', (_req, res) => res.json(scheduler.status()));
+  app.get('/api/special-issues/status', (_req, res) => res.json({ ...scheduler.status(), running: !!syncPromise || scheduler.status().running }));
 
   app.get('/api/special-issues/hot-topics', (req, res) => {
     const state = readState();
-    const scopeIds = state.preferences.scope === 'all' ? null : state.selectedJournalIds;
-    const issues = scopeIds && scopeIds.length
-      ? state.issues.filter((i) => !i.journalId || scopeIds.includes(i.journalId))
-      : state.issues;
-    res.json({ topics: computeHotTopics(issues, { history: state.topicHistory, now: new Date(), limit: Number(req.query?.limit) || 12 }) });
+    const issues = scopedIssues(state);
+    res.json({ topics: computeHotTopics(issues, { history: state.topicHistory, scopeKey: scopeKey(state), now: new Date(), limit: Number(req.query?.limit) || 12 }) });
   });
 
   app.get('/api/special-issues/recommendations', (_req, res) => {
     const state = readState();
     const profile = profileFromGraph(getGraph());
-    const items = recommendIssues(state.issues, profile, { now: new Date(), limit: 12, dismissedIds: state.dismissedIds });
+    const items = state.preferences.recommendEnabled
+      ? recommendIssues(scopedIssues(state), profile, { now: new Date(), limit: 12, dismissedIds: state.dismissedIds }) : [];
     res.json({ items: items.map((x) => ({ ...x.issue, relevance: x.relevance, deadline: x.deadline })), empty: profile.empty });
   });
 
@@ -276,7 +319,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     try {
       const result = await runSync('manual', {
         journalIds: Array.isArray(req.body?.journalIds) ? req.body.journalIds : null,
-        aiExtract: req.body?.aiExtract === true,
+        aiExtract: typeof req.body?.aiExtract === 'boolean' ? req.body.aiExtract : undefined,
       });
       res.json({ ...payload(), ...result });
     } catch (e) {
@@ -298,7 +341,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const errors = [];
     for (const j of targets) {
       try {
-        const data = await queryPublicationRank(j.title, settings.easyScholarKey);
+        const data = await queryRankImpl(j.title, settings.easyScholarKey);
         if (data?.code !== 200) { errors.push({ journal: j.title, error: data?.msg || '未查询到' }); continue; }
         const f = formatRank(data.data);
         updated[j.id] = { summary: f.summary, items: f.items, queriedAt: new Date().toISOString(), journal: j.title };
@@ -306,7 +349,10 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
         errors.push({ journal: j.title, error: compact(e?.message || '查询失败', 120) });
       }
     }
-    if (Object.keys(updated).length) writeState({ ...state, ranks: { ...state.ranks, ...updated } });
+    if (Object.keys(updated).length) {
+      const latest = readState();
+      writeState({ ...latest, ranks: { ...latest.ranks, ...updated } });
+    }
     res.json({ ...payload(), refreshed: Object.keys(updated).length, errors });
   });
 
@@ -314,17 +360,37 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const state = readState();
     const issue = state.issues.find((i) => i.id === req.params.id);
     if (!issue) return res.status(404).json({ error: '该征稿信息不存在或已从本地缓存清理' });
+    const hash = fingerprint(issue);
     const cached = state.translations[issue.id];
-    if (cached?.title || cached?.description) return res.json({ translation: cached, cached: true });
+    if (cached?.contentHash === hash) return res.json({ translation: cached, cached: true });
     try {
-      const settings = store.getSettings();
-      const [title, description] = await Promise.all([
-        translate(issue.title, settings, { target: 'zh' }),
-        issue.description ? translate(issue.description.slice(0, 6000), settings, { target: 'zh' }) : Promise.resolve(''),
-      ]);
-      const translation = { title, description, translatedAt: new Date().toISOString() };
-      if (!title && !description) throw new Error('翻译引擎没有返回内容');
-      writeState({ ...state, translations: { ...state.translations, [issue.id]: translation } });
+      const key = issue.id + ':' + hash;
+      if (!translating.has(key)) {
+        const task = (async () => {
+          const settings = store.getSettings();
+          const opts = { target: 'zh', fetchImpl };
+          const title = await translateImpl(issue.title, settings, opts);
+          const chunks = (issue.description || '').match(/[\s\S]{1,4000}/g) || [];
+          const descriptions = [];
+          for (const chunk of chunks) {
+            const translated = await translateImpl(chunk, settings, opts);
+            if (!translated?.trim()) throw new Error('翻译引擎返回了空简介，请检查翻译服务配置');
+            descriptions.push(translated);
+          }
+          if (!title?.trim()) throw new Error('翻译引擎没有返回标题');
+          const translation = { title, description: descriptions.join('\n'), contentHash: hash, translatedAt: new Date().toISOString() };
+          const latest = readState();
+          const current = latest.issues.find((i) => i.id === issue.id);
+          if (!current) throw new Error('该征稿已删除或到期，未保存译文');
+          if (fingerprint(current) !== hash) throw new Error('征稿内容已更新，请重新翻译');
+          writeState({ ...latest, translations: { ...latest.translations, [issue.id]: translation } });
+          return translation;
+        })();
+        translating.set(key, task);
+      }
+      let translation;
+      try { translation = await translating.get(key); }
+      finally { translating.delete(key); }
       res.json({ translation, cached: false });
     } catch (e) {
       res.status(400).json({ error: '翻译失败：' + (e?.message || '未知错误') });

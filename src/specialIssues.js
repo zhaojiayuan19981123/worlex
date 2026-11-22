@@ -7,6 +7,7 @@
 // 抓取的是出版社/期刊「征稿页」的公开列表信息，不抓全文、不绕登录。
 
 import crypto from 'node:crypto';
+import { publisherCandidates, publisherPageError, mayFetchDetail } from './specialIssueParser.js';
 import {
   ABS_JOURNALS, ABS_CATEGORIES, CFP_SOURCES, SI_PRESETS, TOPIC_LEXICON,
   journalById, defaultCfpUrl,
@@ -31,6 +32,7 @@ function stableId(parts) {
 }
 
 function safeUrl(href, baseUrl) {
+  if (!str(href).trim()) return '';
   try {
     const u = new URL(str(href), str(baseUrl) || 'http://localhost/');
     if (!/^https?:$/.test(u.protocol)) return '';
@@ -75,6 +77,7 @@ export function createSpecialIssueState(value = {}) {
       scope: prefs.scope === 'all' ? 'all' : 'subscribed',
     },
     lastSyncAt: str(v.lastSyncAt),
+    lastAttemptAt: str(v.lastAttemptAt),
   };
 }
 
@@ -83,7 +86,7 @@ function pad(n) { return String(n).padStart(2, '0'); }
 function validYmd(y, m, d, now) {
   y = Number(y); m = Number(m); d = Number(d);
   if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return '';
-  if (y < now.getFullYear() - 1 || y > now.getFullYear() + 8) return '';
+  if (y < 2000 || y > now.getFullYear() + 8) return '';
   if (m < 1 || m > 12 || d < 1 || d > 31) return '';
   const probe = new Date(Date.UTC(y, m - 1, d));
   if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) return '';
@@ -96,11 +99,16 @@ function validYmd(y, m, d, now) {
  * @returns {{date:string, text:string}} date 为 YYYY-MM-DD，抽不到为空串
  */
 export function normalizeDeadline(text, now = new Date()) {
-  const s = clean(str(text).replace(/<[^>]*>/g, ' ')).slice(0, 4000);
+  const s = str(text).replace(/<[^>]*>/g, ' ').replace(/[ \t]+/g, ' ').trim().slice(0, 100000);
   if (!s) return { date: '', text: '' };
-  const label = /(?:submission\s+deadline|deadline\s+for\s+(?:submissions|papers|manuscripts|abstracts)|deadline|manuscripts?\s+due|due\s+date|submit\s+by|closing\s+date|call\s+closes|投稿截止(?:日期|时间)?|截稿(?:日期|时间)?|截止日期)[：:\s\-–]*([^\n;|<>]{4,64})/i;
-  const scoped = label.exec(s)?.[1] || '';
-  const hay = scoped || s;
+  const label = /(?:(?:extended|revised|final|full)\s+)*(?:(?:abstracts?|papers?|manuscripts?)\s+)?(?:submission\s+)?deadline(?:\s+for\s+(?:abstracts?|submissions?|papers?|manuscripts?))?|(?:final\s+)?(?:full\s+)?(?:papers?|manuscripts?)(?:\s+would\s+be|\s+are|\s+is)?\s+due(?:\s+by)?|due\s+date|submit\s+by|submissions?\s+close[sd]?|closing\s+date|call\s+closes|摘要截止(?:日期|时间)?|投稿截止(?:日期|时间)?|截稿(?:日期|时间)?|截止日期/ig;
+  const labels = [...s.matchAll(label)];
+  const scopes = labels.map((m, index) => ({
+    label: m[0], index,
+    value: s.slice(m.index + m[0].length, Math.min(labels[index + 1]?.index ?? s.length, m.index + m[0].length + 120)),
+  })).filter((m) => !/abstract|摘要/i.test(m.label))
+    .sort((a, b) => Number(/extended|revised|final/i.test(b.label)) - Number(/extended|revised|final/i.test(a.label))
+      || Number(/paper|manuscript|submission|投稿|截稿/i.test(b.label)) - Number(/paper|manuscript|submission|投稿|截稿/i.test(a.label)) || b.index - a.index);
 
   const patterns = [
     // 2026-12-31 / 2026.12.31 / 2026/12/31
@@ -111,15 +119,19 @@ export function normalizeDeadline(text, now = new Date()) {
     { re: /\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?,?\s+(20\d{2})\b/i, pick: (m) => [m[3], MONTHS[m[2].toLowerCase()] || 0, m[1]] },
     // December 31, 2026 / Dec 31 2026
     { re: /\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2})\b/i, pick: (m) => [m[3], MONTHS[m[1].toLowerCase()] || 0, m[2]] },
-    // 12/31/2026 或 31/12/2026：先按「第一个数 > 12 就是日」消歧，否则按美式月/日
-    { re: /\b(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(20\d{2})\b/, pick: (m) => Number(m[1]) > 12 ? [m[3], m[2], m[1]] : [m[3], m[1], m[2]] },
+    // Ambiguous numeric dates stay pending instead of risking premature removal.
+    { re: /\b(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(20\d{2})\b/, pick: (m) => Number(m[1]) > 12 ? [m[3], m[2], m[1]] : Number(m[2]) > 12 || m[1] === m[2] ? [m[3], m[1], m[2]] : [] },
   ];
+  for (const hay of scopes.length ? scopes.map((m) => m.value) : labels.length ? [] : [s]) {
   for (const { re, pick } of patterns) {
     const m = re.exec(hay);
     if (!m) continue;
+    // Unlabelled publication/opening dates are not submission deadlines.
+    if (!labels.length && clean(s).replace(/[.,。]$/, '') !== clean(m[0])) continue;
     const [y, mo, d] = pick(m);
     const date = validYmd(y, mo, d, now);
     if (date) return { date, text: clean(m[0]).slice(0, 48) };
+  }
   }
   return { date: '', text: '' };
 }
@@ -128,9 +140,11 @@ export function normalizeDeadline(text, now = new Date()) {
 export function deadlineMeta(issue, now = new Date()) {
   const date = str(issue?.deadline);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { date: '', days: null, label: '未公布', tone: 'muted' };
-  const target = Date.parse(date + 'T00:00:00');
+  const valid = normalizeDeadline(date, now).date;
+  if (!valid) return { date: '', days: null, label: '待核实', tone: 'muted' };
+  const target = Date.parse(date + 'T00:00:00Z');
   if (!Number.isFinite(target)) return { date, days: null, label: date, tone: 'muted' };
-  const days = Math.ceil((target - Date.parse(today(now) + 'T00:00:00')) / DAY);
+  const days = Math.round((target - Date.parse(today(now) + 'T00:00:00Z')) / DAY);
   if (days < 0) return { date, days, label: '已截止', tone: 'muted' };
   if (days === 0) return { date, days, label: '今天截止', tone: 'urgent' };
   if (days <= 30) return { date, days, label: `${days} 天后截止`, tone: 'urgent' };
@@ -232,7 +246,7 @@ export function detectTopics(text) {
   if (!s) return [];
   const hits = [];
   for (const t of TOPIC_LEXICON) {
-    if (t.terms.some((term) => s.includes(String(term).toLowerCase()))) hits.push(t.label);
+    if (t.terms.some((term) => termMatches(s, String(term).toLowerCase()))) hits.push(t.label);
   }
   return [...new Set(hits)];
 }
@@ -257,16 +271,33 @@ export function parseSpecialIssueDocument(text, opts = {}) {
   const { baseUrl = '', journal = null, now = new Date(), rows = 60, requireUrl = true } = opts;
   const raw = str(text);
   if (!raw.trim()) return [];
+  if (/^\s*\[/.test(raw) && isTandfApi(baseUrl)) {
+    const records = JSON.parse(raw);
+    if (records.some((record) => !record?.special_issues || typeof record.special_issues !== 'object')) throw new Error('官方征稿接口字段已改变');
+    return records.slice(0, 100).map((record) => {
+      const meta = record?.special_issues;
+      if (!meta || typeof meta !== 'object') return null;
+      const field = (key) => Array.isArray(meta[key]) ? meta[key][0] : meta[key];
+      const name = stripTags(field('_special_issues_journal_title'));
+      const matched = ABS_JOURNALS.find((j) => j.title.toLowerCase() === name.toLowerCase());
+      const issue = normalizeAiIssue({
+        title: stripTags(field('_special_issues_title') || record.title?.rendered),
+        description: htmlToText(field('_special_issues_copy')),
+        deadline: field('_special_issues_deadline'), url: record.link,
+      }, { journal: matched || { id: '', title: name }, now, sourceUrl: baseUrl, inferJournal: false });
+      return issue ? { ...issue, journalId: matched?.id || '', journal: name, source: 'publisher-api' } : null;
+    }).filter(Boolean);
+  }
   const isFeed = /<(?:rss|feed|rdf:RDF)\b/i.test(raw.slice(0, 2000));
   const candidates = isFeed
     ? rssItems(raw).map((x) => ({ title: x.title, text: x.text, href: x.href }))
-    : htmlCandidates(raw).map((frag) => ({ title: headingOf(frag), text: stripTags(frag), href: hrefOf(frag) }));
+    : publisherCandidates(raw, baseUrl, { detail: opts.detail === true });
 
   const seen = new Set();
   const out = [];
   for (const c of candidates) {
-    const body = clean(c.text).slice(0, 1200);
-    if (!body || body.length < 12 || !SI_KEY.test(body)) continue;
+    const body = clean(c.text).slice(0, 60000);
+    if (!body || body.length < 12 || !SI_KEY.test(body + ' ' + baseUrl)) continue;
     let title = clean(c.title || body).slice(0, 240);
     title = title.replace(/^(?:call\s+for\s+papers|special\s+issue|cfp)\s*[：:|\-–—]\s*/i, '').trim();
     if (!title || title.length < 8) continue;
@@ -275,7 +306,7 @@ export function parseSpecialIssueDocument(text, opts = {}) {
     const key = url + '|' + title.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const dl = normalizeDeadline(body, now);
+    const dl = normalizeDeadline(c.text, now);
     let description = body.replace(title, '').replace(/^[\s:：|·\-–—]+/, '').trim();
     if (description.length < 20) description = body;
     const journalId = journal?.id || matchJournal(body + ' ' + title);
@@ -288,7 +319,7 @@ export function parseSpecialIssueDocument(text, opts = {}) {
       publisher: j?.publisher || clean(journal?.publisher || ''),
       category: j?.category || '',
       title,
-      description: description.slice(0, 900),
+      description: description.slice(0, 12000),
       deadline: dl.date,
       deadlineText: dl.text,
       url,
@@ -370,10 +401,10 @@ function parsePlainTextContent(raw, { baseUrl = '', journal = null, now = new Da
     const linesIn = block.lines.map(clean).filter(Boolean);
     const title = block.title || linesIn.find((l) => l.length >= 12 && !/^https?:\/\//i.test(l))?.slice(0, 240) || '';
     if (title.length < 8) continue;
-    const body = [title, ...linesIn].join(' ').slice(0, 1200);
+    const body = [title, ...linesIn].join('\n').slice(0, 60000);
     if (!SI_KEY.test(body)) continue;
     const prose = linesIn.filter((l) => !/^https?:\/\//i.test(l)).join(' ').trim();
-    const description = (prose.length >= 20 ? prose : body).slice(0, 900);
+    const description = (prose.length >= 20 ? prose : body).slice(0, 12000);
     const dl = normalizeDeadline(body, now);
     const urls = (linesIn.join(' ').match(URL_IN_TEXT) || []).map((u) => safeUrl(u, baseUrl)).filter(Boolean);
     const url = urls[0] || safeUrl(baseUrl, baseUrl);
@@ -453,6 +484,7 @@ export function profileFromGraph(graph) {
   const keyFreq = new Map();
   for (const n of Array.isArray(g.nodes) ? g.nodes : []) {
     add(n?.topicLabel, 2, 'topic');
+    if (['entity', 'subject', 'method', 'keyword'].includes(n?.kind || n?.type)) add(n.label || n.name, 2, 'entity');
     for (const k of Array.isArray(n?.keywords) ? n.keywords : []) {
       const t = clean(k).toLowerCase();
       if (!t) continue;
@@ -460,6 +492,7 @@ export function profileFromGraph(graph) {
       add(k, 1, 'keyword');
     }
   }
+  for (const e of Array.isArray(g.entities) ? g.entities : []) add(typeof e === 'string' ? e : e?.label || e?.name, 2, 'entity');
   for (const [t, n] of keyFreq) if (n > 1) add(t, Math.log2(n) * 1.5, 'keyword');
   for (const e of Array.isArray(g.edges) ? g.edges : []) {
     if (!['subject', 'method', 'keyword'].includes(e?.kind)) continue;
@@ -478,6 +511,14 @@ export function profileFromGraph(graph) {
 
 const KIND_FACTOR = { topic: 3.2, entity: 2.6, keyword: 1.6, method: 1.1 };
 
+function termMatches(hay, term) {
+  if (/^[a-z0-9 .&-]+$/i.test(term)) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(hay);
+  }
+  return hay.includes(term);
+}
+
 /** 单条 SI 与用户画像的相关性。命中主题/实体权重最高，分数封顶 100。 */
 export function scoreRelevance(issue, profile, now = new Date()) {
   const p = profile && profile.terms ? profile : profileFromGraph(profile);
@@ -492,7 +533,8 @@ export function scoreRelevance(issue, profile, now = new Date()) {
     if (seen.has(key)) continue;
     seen.add(key);
     // 中文用包含匹配；英文短语也用包含（主题词表都是 4 字符以上的实词短语）
-    if (!hay.includes(key)) continue;
+    const bilingual = TOPIC_LEXICON.filter((entry) => entry.label.toLowerCase() === key || entry.terms.includes(key) || entry.label.includes(key));
+    if (!termMatches(hay, key) && !bilingual.some((t) => t.terms.some((w) => termMatches(hay, w.toLowerCase())))) continue;
     const gain = (t.weight || 1) * (KIND_FACTOR[t.kind] || 1.2);
     raw += gain;
     matched.push({ term: t.term, kind: t.kind, gain: Math.round(gain * 10) / 10 });
@@ -500,6 +542,9 @@ export function scoreRelevance(issue, profile, now = new Date()) {
   if (!matched.length) return { score: 0, matched: [], level: 'none' };
   // 饱和曲线：命中越多收益递减，避免一篇堆满关键词的征稿刷到满分
   let score = Math.round(100 * (1 - Math.exp(-raw / 18)));
+  // A small graph containing just one research term can still produce recommendations.
+  const totalWeight = p.terms.reduce((sum, t) => sum + (t.weight || 1) * (KIND_FACTOR[t.kind] || 1.2), 0);
+  score = Math.max(score, Math.round(35 * raw / Math.max(raw, totalWeight)));
   // 临近截止的更值得优先看到
   const dm = deadlineMeta(issue, now);
   if (dm.days != null && dm.days >= 0 && dm.days <= 60) score = Math.min(100, score + 4);
@@ -515,10 +560,7 @@ export function recommendIssues(issues, profile, opts = {}) {
   return (Array.isArray(issues) ? issues : [])
     .filter((i) => !dismissed.has(i.id))
     .map((i) => ({ issue: i, relevance: scoreRelevance(i, profile, now), deadline: deadlineMeta(i, now) }))
-    .filter((x) => (
-      (x.relevance.score >= minScore && x.deadline.days !== null && x.deadline.days >= 0)
-      || (x.relevance.score >= 75 && x.deadline.days === null)
-    ))
+    .filter((x) => x.relevance.score >= minScore && x.deadline.days !== null && x.deadline.days >= 0)
     .sort((a, b) => b.relevance.score - a.relevance.score
       || (a.deadline.days ?? 99999) - (b.deadline.days ?? 99999))
     .slice(0, Math.max(1, Math.min(30, limit)));
@@ -529,6 +571,8 @@ export function recommendIssues(issues, profile, opts = {}) {
 export function topicSnapshot(issues, now = new Date()) {
   const snap = {};
   for (const i of Array.isArray(issues) ? issues : []) {
+    const dm = deadlineMeta(i, now);
+    if (dm.days === null || dm.days < 0) continue;
     for (const t of new Set(i?.topics || [])) snap[t] = (snap[t] || 0) + 1;
   }
   return { at: today(now), counts: snap };
@@ -540,9 +584,10 @@ export function topicSnapshot(issues, now = new Date()) {
  */
 export function computeHotTopics(issues, opts = {}) {
   const { history = {}, now = new Date(), limit = 12, journalIds = null } = opts;
-  const list = (Array.isArray(issues) ? issues : []).filter((i) => !journalIds || !i?.journalId || journalIds.includes(i.journalId));
+  const list = (Array.isArray(issues) ? issues : []).filter((i) => (!journalIds || !i?.journalId || journalIds.includes(i.journalId))
+    && deadlineMeta(i, now).days !== null && deadlineMeta(i, now).days >= 0);
   const buckets = new Map();
-  const cutoff = Date.now() - 7 * DAY;
+  const cutoff = now.getTime() - 7 * DAY;
   for (const i of list) {
     const dl = deadlineMeta(i, now);
     for (const topic of new Set(i?.topics || [])) {
@@ -561,7 +606,8 @@ export function computeHotTopics(issues, opts = {}) {
   }
   // 7 天前快照：趋势 = 当前覆盖数 − 历史覆盖数
   const pastKey = today(new Date(now.getTime() - 7 * DAY));
-  const past = history?.[pastKey] || null;
+  const candidate = history?.[pastKey] || null;
+  const past = opts.scopeKey !== undefined && candidate?.scope !== opts.scopeKey ? null : candidate;
   const topics = [...buckets.values()].map((b) => {
     const journalCount = b.journals.size;
     const score = b.count * 2 + journalCount * 1.5 + b.recentCount * 1.2 + b.expiringSoon * 0.6;
@@ -582,16 +628,17 @@ export function listIssues(state, opts = {}) {
   const s = createSpecialIssueState(state);
   const { query = '', journalIds = null, topic = '', sort = 'deadline', now = new Date(), profile = null, recommendOnly = false, favoriteOnly = false, limit = 400 } = opts;
   const q = clean(query).toLowerCase();
-  const selected = journalIds && journalIds.length ? new Set(journalIds) : new Set(s.selectedJournalIds);
+  const selected = journalIds === null ? null : new Set(journalIds);
   const favorites = new Set(s.favoriteIds);
   let items = s.issues.filter((i) => {
     // 只展示未截止的 SI；过期项由 purgeExpiredIssues 从磁盘清除，这里是双保险
     const dm = deadlineMeta(i, now);
-    if (dm.days !== null && dm.days < 0) return false;
+    if (dm.days === null || dm.days < 0) return false;
     if (favoriteOnly && !favorites.has(i.id)) return false;
-    if (selected.size && i.journalId && !selected.has(i.journalId)) return false;
+    if (selected && i.journalId && !selected.has(i.journalId)) return false;
     if (topic && !(i.topics || []).includes(topic)) return false;
-    if (q && !clean([i.title, i.description, i.journal, i.publisher, i.deadlineText, (i.topics || []).join(' '), (i.keywords || []).join(' ')].join(' ')).toLowerCase().includes(q)) return false;
+    const tr = s.translations[i.id] || {};
+    if (q && !clean([i.title, i.description, tr.title, tr.description, i.journal, i.publisher, i.deadline, i.deadlineText, (i.topics || []).join(' '), (i.keywords || []).join(' ')].join(' ')).toLowerCase().includes(q)) return false;
     return true;
   });
   items = items.map((i) => ({ ...i, deadline: deadlineMeta(i, now), relevance: profile ? scoreRelevance(i, profile, now) : { score: 0, matched: [] } }));
@@ -605,19 +652,29 @@ export function listIssues(state, opts = {}) {
 }
 
 // ---------------- 抓取 ----------------
+function isTandfApi(url) {
+  try {
+    const u = new URL(url);
+    return u.origin === 'https://callforpapers.taylorandfrancis.com'
+      && /^\/wp-json\/wp\/v2\/special_issues\/?$/.test(u.pathname);
+  } catch { return false; }
+}
+
 /** 构造本次要抓的征稿页任务：订阅期刊的期刊级页面 + 出版社聚合页 + 用户自定义源。 */
 export function buildSyncTasks(state, journalIds = null) {
   const s = createSpecialIssueState(state);
-  const wanted = journalIds && journalIds.length
+  const wanted = Array.isArray(journalIds)
     ? [...new Set(journalIds.filter((id) => ABS_JOURNALS.some((j) => j.id === id)))]
     : s.selectedJournalIds;
   const tasks = [];
   const seen = new Set();
   const push = (url, journalId, label) => {
+    if (url === 'https://www.tandfonline.com/action/showSpecialIssues') url = CFP_SOURCES.find((s) => s.id === 'tandf').url;
     const safe = safeUrl(url, url);
     if (!safe || seen.has(safe)) return;
     seen.add(safe);
-    tasks.push({ url: safe, journalId, label });
+    const aggregate = CFP_SOURCES.find((s) => s.url === safe);
+    tasks.push({ url: safe, journalId: aggregate ? '' : journalId, label: aggregate?.label || label, aggregate: !!aggregate });
   };
   for (const id of wanted) {
     const j = journalById(id);
@@ -646,41 +703,111 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
     concurrency = 3,
     timeoutMs = 15000,
     rowsPerSource = 60,
+    maxDetailPages = 12,
+    budgetMs = 90000,
   } = opts;
   if (typeof fetchImpl !== 'function') throw new Error('当前运行环境不支持网络请求，无法抓取征稿信息');
   const state = createSpecialIssueState(stateInput);
   const tasks = buildSyncTasks(state, journalIds);
-  if (!tasks.length) return { state, added: 0, total: 0, synced: [], failed: [] };
+  if (!tasks.length) return { state, fetched: [], added: 0, total: 0, synced: [], failed: [] };
 
   const before = new Set(state.issues.map((i) => i.id));
   const fetched = [];
   const synced = [];
   const failed = [];
+  const started = Date.now();
+  let detailCount = 0;
+  async function fetchPage(url) {
+    const remaining = budgetMs - (Date.now() - started);
+    if (remaining <= 0) throw new Error('本次抓取已达到时间上限，请缩小订阅范围后重试');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(Math.max(100, timeoutMs), remaining));
+    try {
+      const res = await fetchImpl(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; WorlexSI/2.2; academic CFP watcher)',
+          Accept: 'application/json,text/html,application/xhtml+xml,application/rss+xml,application/atom+xml,application/xml;q=0.9',
+          'Accept-Language': 'en-US,en;q=0.9',
+        }, signal: controller.signal, redirect: 'follow',
+      });
+      if (res?.ok === false) throw new Error(`HTTP ${res.status || '未知状态'}${[403, 429].includes(res.status) ? '：出版社拒绝或限制访问，可从浏览器粘贴导入' : ''}`);
+      const max = 4 * 1024 * 1024;
+      let text = '';
+      if (res?.body?.getReader) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let size = 0;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            size += chunk.value.byteLength;
+            if (size > max) throw new Error('征稿页面超过 4 MB，请配置更具体的列表页');
+            text += decoder.decode(chunk.value, { stream: true });
+          }
+          text += decoder.decode();
+        } finally { await reader.cancel().catch(() => {}); }
+      } else text = typeof res?.text === 'function' ? await res.text() : str(res?.body || '');
+      if (!text.trim()) throw new Error('页面为空');
+      if (text.length > max) throw new Error('征稿页面过大');
+      const error = publisherPageError(text);
+      if (error) throw new Error(error);
+      return { text, url: res?.url || url, totalPages: Number(res?.headers?.get?.('X-WP-TotalPages')) || 0 };
+    } catch (e) {
+      if (e?.name === 'AbortError' || controller.signal.aborted) throw new Error('请求超时，请检查网络或配置单刊征稿页');
+      throw e;
+    } finally { clearTimeout(timer); }
+  }
   const queue = [...tasks];
   const workers = Array.from({ length: Math.min(Math.max(1, concurrency), queue.length) }, async () => {
     while (queue.length) {
       const task = queue.shift();
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), Math.max(2000, timeoutMs));
-      if (typeof timer.unref === 'function') timer.unref();
       try {
-        const res = await fetchImpl(task.url, {
-          headers: {
-            'User-Agent': 'worlex/2.2 (Special Issue watcher; +https://github.com/zhaojiayuan19981123)',
-            Accept: 'text/html,application/xhtml+xml,application/rss+xml,application/atom+xml,application/xml;q=0.9,*/*;q=0.8',
-          },
-          signal: controller.signal,
-          redirect: 'follow',
-        });
-        if (res?.ok === false) throw new Error(`HTTP ${res.status || '未知状态'}`);
-        const text = typeof res?.text === 'function' ? await res.text() : str(res?.body || '');
-        if (!text || !str(text).trim()) throw new Error('页面为空');
+        const page = await fetchPage(task.url);
+        const text = page.text;
         const journal = task.journalId ? journalById(task.journalId) : null;
-        let parsed = parseSpecialIssueDocument(text, { baseUrl: task.url, journal, now, rows: rowsPerSource });
-        // 可选：让已配置的模型把页面文本再结构化一次，补上正则没抓全的字段
-        if (aiExtract && text.length > 200) {
+        let parsed = parseSpecialIssueDocument(text, { baseUrl: page.url, journal, now, rows: rowsPerSource });
+        const warnings = [];
+        const wanted = new Set(journalIds || state.selectedJournalIds);
+        const structured = isTandfApi(page.url) && /^\s*\[/.test(text);
+        if (structured) {
+          const pageSize = Number(new URL(page.url).searchParams.get('per_page')) || 10;
+          let count = JSON.parse(text).length;
+          let pageNo = 1;
+          while (count >= pageSize && (!page.totalPages || pageNo < page.totalPages) && pageNo < 12) {
+            if (budgetMs - (Date.now() - started) < 1000) { warnings.push('达到抓取时间上限，结果为部分页面；请稍后重试'); break; }
+            try {
+              const url = new URL(page.url);
+              url.searchParams.set('page', String(++pageNo));
+              const more = await fetchPage(url.href);
+              const records = JSON.parse(more.text);
+              if (!Array.isArray(records)) throw new Error('官方接口返回格式已改变');
+              parsed = mergeIssues(parsed, parseSpecialIssueDocument(more.text, { baseUrl: more.url, now }));
+              count = records.length;
+            } catch (e) { warnings.push('后续分页未完成：' + str(e?.message || e)); break; }
+          }
+          if (pageNo >= 12 && count >= pageSize && (!page.totalPages || pageNo < page.totalPages)) warnings.push('达到 12 页安全上限，结果可能不完整');
+        }
+        // Only follow same-origin detail links; each source and run have fixed limits.
+        for (const item of (structured ? [] : parsed).filter((i) => !i.journalId || wanted.has(i.journalId)).slice(0, maxDetailPages)) {
+          if (!mayFetchDetail(item.url, page.url) || detailCount >= 60) continue;
+          detailCount += 1;
           try {
-            const extra = await aiExtract(str(text).slice(0, 30000), { journal, sourceUrl: task.url, now });
+            const detail = await fetchPage(item.url);
+            const details = parseSpecialIssueDocument(detail.text, { baseUrl: detail.url, journal: item.journalId ? journalById(item.journalId) : journal, now, detail: true });
+            const found = details.find((x) => x.url === detail.url) || details[0];
+            if (found) {
+              const id = item.id, discoveredAt = item.discoveredAt, sourceUrl = item.sourceUrl;
+              Object.assign(item, found, { id, discoveredAt, sourceUrl, detailFetchedAt: now.toISOString() });
+            } else warnings.push('详情页未识别到完整征稿：' + item.url);
+          } catch (e) { warnings.push(str(e?.message || e) + '：' + item.url); }
+        }
+        // 可选：让已配置的模型把页面文本再结构化一次，补上正则没抓全的字段
+        if (aiExtract && !structured && text.length > 200) {
+          try {
+            const remaining = budgetMs - (Date.now() - started);
+            if (remaining <= 0) throw new Error('本次抓取时间上限已到，跳过 AI 增强');
+            const extra = await aiExtract(htmlToText(text).slice(0, 24000), { journal, sourceUrl: page.url, now, timeoutMs: Math.min(remaining, 30000) });
             if (Array.isArray(extra) && extra.length) {
               parsed = mergeIssues(parsed, extra.map((x) => normalizeAiIssue(x, { journal, now, sourceUrl: task.url })).filter(Boolean));
             }
@@ -689,11 +816,17 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
             state.sync['ai'] = { lastAttemptAt: now.toISOString(), error: str(e?.message || 'AI 抽取失败').slice(0, 200) };
           }
         }
+        // Aggregates must never assign every result to the first selected journal.
+        if (task.aggregate) parsed = parsed.filter((i) => i.journalId && wanted.has(i.journalId));
+        if (!parsed.length && !structured) throw new Error('页面可访问，但未识别到所订阅期刊的 SI；可能无征稿、页面改版或依赖 JavaScript，请核实原文或粘贴导入');
         fetched.push(...parsed);
         state.sync[task.journalId || 'publisher:' + task.label] = {
-          lastSuccessAt: now.toISOString(), count: parsed.length, error: '', url: task.url,
+          lastAttemptAt: now.toISOString(), lastSuccessAt: now.toISOString(), count: parsed.length,
+          activeCount: parsed.filter((i) => deadlineMeta(i, now).days !== null && deadlineMeta(i, now).days >= 0).length,
+          pendingCount: parsed.filter((i) => deadlineMeta(i, now).days === null).length,
+          warnings, error: '', url: task.url,
         };
-        synced.push({ label: task.label, url: task.url, count: parsed.length });
+        synced.push({ label: task.label, url: task.url, count: parsed.length, warnings });
       } catch (e) {
         const message = str(e?.message || '未知抓取错误').slice(0, 200);
         state.sync[task.journalId || 'publisher:' + task.label] = {
@@ -701,16 +834,15 @@ export async function syncSpecialIssues(stateInput, opts = {}) {
           lastAttemptAt: now.toISOString(), error: message, url: task.url,
         };
         failed.push({ label: task.label, url: task.url, error: message });
-      } finally {
-        clearTimeout(timer);
       }
     }
   });
   await Promise.all(workers);
   state.issues = mergeIssues(state.issues, fetched);
-  state.lastSyncAt = now.toISOString();
+  state.lastAttemptAt = now.toISOString();
+  if (synced.length) state.lastSyncAt = now.toISOString();
   const added = state.issues.filter((i) => !before.has(i.id)).length;
-  return { state, added, total: fetched.length, synced, failed };
+  return { state, fetched, added, total: fetched.length, synced, failed };
 }
 
 /** 把模型返回的结构化条目收敛成内部字段（模型输出一律当不可信输入处理）。 */
@@ -721,9 +853,10 @@ export function normalizeAiIssue(raw, opts = {}) {
   if (title.length < 8) return null;
   const url = safeUrl(raw.url || raw.link || '', sourceUrl) || safeUrl(sourceUrl, sourceUrl);
   if (!url) return null;
-  const description = clean(raw.description || raw.summary || raw.theme || '').slice(0, 900);
-  const dl = normalizeDeadline(`${raw.deadline || ''} ${raw.deadlineText || ''}`, now);
-  const journalId = journal?.id || matchJournal(`${journal?.title || ''} ${title} ${description}`);
+  const description = clean(raw.description || raw.summary || raw.theme || '').slice(0, 12000);
+  const primary = normalizeDeadline(raw.deadline, now);
+  const dl = primary.date ? primary : normalizeDeadline(raw.deadlineText, now);
+  const journalId = journal?.id || (opts.inferJournal === false ? '' : matchJournal(`${journal?.title || ''} ${title} ${description}`));
   const j = journalId ? journalById(journalId) : null;
   const body = `${title} ${description}`;
   return {
@@ -786,7 +919,7 @@ export function toggleFavorite(stateInput, id, force = null) {
  */
 export function addCustomIssue(stateInput, raw, opts = {}) {
   const state = createSpecialIssueState(stateInput);
-  const { now = new Date() } = opts;
+  const { now = new Date(), allowPending = false } = opts;
   const r = raw && typeof raw === 'object' ? raw : {};
   const title = clean(r.title).slice(0, 240);
   if (title.length < 4) return { state, issue: null, error: '请填写专刊标题（至少 4 个字）' };
@@ -796,8 +929,11 @@ export function addCustomIssue(stateInput, raw, opts = {}) {
     ? rawJournalId
     : matchJournal(`${clean(r.journal)} ${title}`);
   const j = journalId ? journalById(journalId) : null;
-  const dl = normalizeDeadline(`${clean(r.deadline)} ${clean(r.deadlineText)}`, now);
-  const description = clean(r.description).slice(0, 900);
+  const primary = normalizeDeadline(r.deadline, now);
+  const dl = primary.date ? primary : normalizeDeadline(r.deadlineText, now);
+  if (!dl.date && !allowPending) return { state, issue: null, error: '请填写有效的投稿截止日期；日期不明的网页内容可先粘贴解析后核实' };
+  if (deadlineMeta({ deadline: dl.date }, now).days < 0) return { state, issue: null, error: '该 SI 已截止，不能添加到在征列表' };
+  const description = clean(r.description).slice(0, 12000);
   const body = `${title} ${description}`;
   const issue = {
     id: stableId(['custom', title, url || '']),
@@ -843,7 +979,7 @@ export function importPastedIssues(stateInput, items, opts = {}) {
     const res = addCustomIssue(state, {
       title: it.title, url: it.url, journalId: it.journalId, journal: it.journal,
       description: it.description, deadline: it.deadline || it.deadlineText,
-    }, { now });
+    }, { now, allowPending: true });
     if (res.error) { skipped.push({ title: str(it.title), reason: res.error }); continue; }
     state = res.state;
     if (before.has(res.issue.id)) { skipped.push({ title: res.issue.title, reason: '已存在' }); continue; }
@@ -882,11 +1018,12 @@ export function specialIssueSummary(state, opts = {}) {
     if (dm.days !== null && dm.days >= 0 && dm.days <= 30) expiringSoon += 1;
   }
   return {
-    total: issues.length, active, expiringSoon,
+    total: issues.length, active, pending: issues.length - active, expiringSoon,
     subscribed: s.selectedJournalIds.length,
     catalogSize: ABS_JOURNALS.length,
     ranked: Object.keys(s.ranks).length,
     lastSyncAt: s.lastSyncAt,
+    lastAttemptAt: s.lastAttemptAt,
     hotTopics: computeHotTopics(issues, { history: s.topicHistory, now, limit: 1 }).length,
   };
 }
