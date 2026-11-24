@@ -1,11 +1,11 @@
-// specialIssueRoutes.js —— SI 征稿模块的 HTTP 路由（独立模块，依赖注入）
+// specialIssueRoutes.js —— SI 征稿（v2）HTTP 路由
 //
-// 复用项目里现成的四套能力，不另起炉灶：
-//   easyScholar   → src/easyscholar.js  期刊等级（ABS / UTD24 / 中科院…）
-//   translate     → src/translate.js   划词/全文翻译的同一套引擎
-//   知识图谱      → createApp 注入的 getGraph()（kbGraphCache）
-//   AI 结构化抽取 → 注入 fetchModelCompletion / readLLMResponse（与 /api/top-journals/analyze 同款）
-// 抓取出口由 createApp 注入 fetchImpl（server.js 的 modelFetch，自动直连/代理切换）。
+// 职责边界：只做「读状态 → 调管线 → 写状态 → 返回 payload」，不放业务规则。
+// 复用的既有能力：
+//   easyScholar   → src/easyscholar.js   期刊等级
+//   translate     → src/translate.js     可选译文（抽取阶段已中文化，这里只做补充）
+//   AI 结构化抽取 → 注入 fetchModelCompletion / readLLMResponse / resolveRequestModel
+//   出网          → 注入 fetchImpl（server.js 的 modelFetch，自动直连/代理切换）
 
 import { createHash } from 'node:crypto';
 import { queryPublicationRank, formatRank } from './easyscholar.js';
@@ -13,19 +13,28 @@ import { defaultTranslationProvider, translate } from './translate.js';
 import { resolveActive } from './modelCatalog.js';
 import { createSpecialIssueScheduler } from './specialIssueScheduler.js';
 import {
-  ABS_JOURNALS, ABS_CATEGORIES, CFP_SOURCES, SI_PRESETS, journalById,
-  createSpecialIssueState, syncSpecialIssues, listIssues, mergeIssues,
-  profileFromGraph, recommendIssues, computeHotTopics, topicSnapshot,
-  specialIssueSummary, setSubscriptions, setPreferences, dismissRecommendation,
-  normalizeAiIssue, toggleFavorite, addCustomIssue, purgeExpiredIssues,
-  parsePastedContent, importPastedIssues, normalizeDeadline, deadlineMeta,
+  createSpecialIssueState, listIssues, specialIssueSummary, setPreferences,
+  toggleFavorite, removeIssue, purgeExpiredIssues, deadlineMeta, topicCounts,
+  RANK_FILTERS, SOURCE_TYPES, normalizeSource, articleIdOf, today,
 } from './specialIssues.js';
+import { collectArticles, processArticles, requeueArticles, enrichRanks, pendingRankCount, runSyncPipeline } from './siPipeline.js';
+import { buildExtractMessages, parseModelJson, normalizeExtractedIssues, ruleExtractIssues } from './siExtract.js';
+import { extractArticleUrls } from './siSources.js';
 
-const DAY = 24 * 60 * 60 * 1000;
 const str = (v) => String(v == null ? '' : v);
+const clean = (v) => str(v).replace(/\s+/g, ' ').trim();
+const DAY = 24 * 60 * 60 * 1000;
+
+const DEADLINE_WINDOWS = [
+  { id: 'all', label: '全部' },
+  { id: '30', label: '30 天内截止' },
+  { id: '90', label: '90 天内截止' },
+  { id: 'undated', label: '日期待核实' },
+  { id: 'expired', label: '已截止' },
+];
 
 function compact(text, max = 260) {
-  const s = str(text).replace(/\s+/g, ' ').trim();
+  const s = clean(text);
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
@@ -39,20 +48,18 @@ function translationEngine(settings) {
 export function registerSpecialIssueRoutes(app, deps = {}) {
   const {
     store,
-    getGraph = () => null,
     fetchImpl = globalThis.fetch,
     resolveRequestModel = () => ({ error: '未配置 AI 模型' }),
     fetchModelCompletion = null,
     readLLMResponse = null,
     translateImpl = translate,
     queryRankImpl = queryPublicationRank,
-    respectCrawlDelay = fetchImpl === globalThis.fetch,
     logger = () => {},
   } = deps;
 
-  // 读取即清理：任何一次访问都会把已截止的 SI 从磁盘移除，不必等下一次抓取。
   const readState = () => {
     const s = createSpecialIssueState(store.getSpecialIssues());
+    if (s.preferences.includeExpired) return s;
     const purged = purgeExpiredIssues(s);
     if (purged.removed.length) {
       try { store.saveSpecialIssues(purged.state); } catch { /* 下次访问再清 */ }
@@ -61,371 +68,485 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     return s;
   };
   const writeState = (s) => store.saveSpecialIssues(createSpecialIssueState(s));
-  let syncPromise = null;
-  const translating = new Map();
-  const fingerprint = (issue) => createHash('sha256').update(JSON.stringify([issue.title, issue.description || ''])).digest('hex');
-  const matchesTranslation = (cached, hash, engineKey) => cached?.contentHash === hash && cached.engineKey === engineKey;
-  const scopedIssues = (state) => state.preferences.scope === 'all' ? state.issues
-    : state.issues.filter((i) => !i.journalId || state.selectedJournalIds.includes(i.journalId));
-  const scopeKey = (state) => state.preferences.scope === 'all' ? 'all' : [...state.selectedJournalIds].sort().join(',');
 
-  // ---------- AI 辅助结构化抽取（可选，默认关闭） ----------
-  // 正则抓不全的出版社页面，交给已配置的模型再抽一次 JSON；失败只记录、不影响整次抓取。
-  async function aiExtract(text, ctx) {
-    if (typeof fetchModelCompletion !== 'function' || typeof readLLMResponse !== 'function') return null;
+  // ---------- 运行态（内存，不落盘） ----------
+  const runtime = {
+    running: false,
+    phase: 'idle',
+    message: '',
+    startedAt: '',
+    lastResult: null,
+  };
+  const setPhase = (phase, message) => {
+    runtime.phase = phase;
+    runtime.message = message || '';
+  };
+
+  // ---------- 抽取器：模型优先，失败退规则 ----------
+  function buildExtractor() {
     const am = resolveRequestModel('');
-    if (am?.error || !am?.profile) return null;
-    const request = await fetchModelCompletion(am.profile, {
-      model: am.profile.model,
-      messages: [
-        { role: 'system', content: '你是学术征稿信息抽取器。从用户给出的期刊征稿页文本中找出所有 Special Issue / Call for Papers 条目。只输出 JSON 数组，不要 Markdown 围栏、不要解释。每项字段：title（专刊标题）, description（主题简介，一两句）, deadline（YYYY-MM-DD 或空字符串）, url（该专征稿详情页绝对链接，没有就留空）。没有条目就输出 []。' },
-        { role: 'user', content: `期刊：${ctx?.journal?.title || '未知'}\n来源：${ctx?.sourceUrl || ''}\n页面文本：\n${str(text).slice(0, 14000)}` },
-      ],
-      temperature: 0.1,
-      max_tokens: 2000,
-    }, { stream: false, timeoutMs: ctx?.timeoutMs || 30000 });
-    try {
-      if (!request.up || !request.up.ok) throw new Error('模型未返回有效结果');
-      const full = (await readLLMResponse(request.up)).full || '';
-      const s = full.trim().replace(/^```[a-z]*\s*/i, '').replace(/```$/i, '');
-      const a = s.indexOf('['), b = s.lastIndexOf(']');
-      if (a < 0 || b <= a) return [];
-      const data = JSON.parse(s.slice(a, b + 1));
-      return (Array.isArray(data) ? data : []).slice(0, 60);
-    } finally {
-      try { request.cancel?.(); } catch { /* ignore */ }
-    }
+    const hasModel = !am?.error && am?.profile && typeof fetchModelCompletion === 'function' && typeof readLLMResponse === 'function';
+    return {
+      hasModel,
+      async extract(text, ctx) {
+        if (!hasModel) {
+          const res = ruleExtractIssues(text, ctx);
+          return { issues: res.issues, notCfp: res.notCfp === true || res.issues.length === 0, rejected: res.rejected, by: 'rule' };
+        }
+        const messages = buildExtractMessages(text, {
+          sourceName: ctx.sourceName || '公众号',
+          articleTitle: ctx.articleTitle || '',
+          articleDate: ctx.articlePublishedAt || '',
+        });
+        let request;
+        try {
+          request = await fetchModelCompletion(am.profile, {
+            model: am.profile.model,
+            messages,
+            temperature: 0.1,
+            max_tokens: 2600,
+          }, { stream: false, timeoutMs: 60000 });
+          if (!request?.up?.ok) throw new Error('模型没有返回有效响应');
+          const full = (await readLLMResponse(request.up)).full || '';
+          const json = parseModelJson(full);
+          if (!json) {
+            // 模型输出不是 JSON（常见于小模型/长文截断），退回规则抽取，至少能出卡
+            logger('[SI] 模型输出无法解析为 JSON，本条改用规则抽取');
+            const res = ruleExtractIssues(text, ctx);
+            return { issues: res.issues, notCfp: res.issues.length === 0, rejected: res.rejected, by: 'rule' };
+          }
+          const normalized = normalizeExtractedIssues(json, ctx);
+          return { ...normalized, by: 'ai' };
+        } catch (e) {
+          logger('[SI] 模型抽取失败，改用规则抽取：' + (e?.message || e));
+          const res = ruleExtractIssues(text, ctx);
+          return { issues: res.issues, notCfp: res.issues.length === 0, rejected: res.rejected, by: 'rule' };
+        } finally {
+          try { request?.cancel?.(); } catch { /* ignore */ }
+        }
+      },
+    };
   }
 
-  // ---------- 抓取（手动 / 定时共用） ----------
-  function runSync(reason, opts = {}) {
+  // ---------- 同步（手动 / 定时共用，单飞） ----------
+  let syncPromise = null;
+
+  function runSync(reason = 'manual', opts = {}) {
     if (syncPromise) return syncPromise;
-    syncPromise = performSync(reason, opts).finally(() => { syncPromise = null; });
+    syncPromise = (async () => {
+      runtime.running = true;
+      runtime.startedAt = new Date().toISOString();
+      runtime.lastResult = null;
+      const state = readState();
+      if (!state.sources.filter((s) => s.enabled).length) {
+        runtime.running = false;
+        setPhase('idle', '');
+        return { ok: false, error: '还没有配置文章源。先在「文章源」里添加订阅地址或粘贴文章链接。' };
+      }
+      const settings = store.getSettings();
+      const extractor = buildExtractor();
+      setPhase('collect', '正在拉取文章列表');
+      try {
+        const { summary } = await runPipeline(state, {
+          settings,
+          extractor,
+          reason,
+          sourceIds: opts.sourceIds || null,
+          backfillDays: opts.backfillDays || null,
+        });
+        runtime.lastResult = summary;
+        const failedArticles = summary.failed || 0;
+        return {
+          ok: summary.errors.length === 0 && (summary.added > 0 || summary.processed > 0 || summary.newIssues > 0),
+          summary,
+          extractedBy: extractor.hasModel ? 'ai' : 'rule',
+          error: summary.errors.length ? summary.errors[0].error : (failedArticles ? `${failedArticles} 篇文章处理失败，可在诊断里重试` : ''),
+        };
+      } finally {
+        runtime.running = false;
+        setPhase('idle', '');
+        syncPromise = null;
+      }
+    })();
     return syncPromise;
   }
 
-  async function performSync(reason, opts = {}) {
-    const state = readState();
-    const useAi = opts.aiExtract === true || (opts.aiExtract == null && state.preferences.aiExtract);
-    const result = await syncSpecialIssues(state, {
+  async function runPipeline(state, { settings, extractor, sourceIds, backfillDays }) {
+    const secretKey = clean(settings.easyScholarKey);
+    return runSyncPipeline(state, {
       fetchImpl,
-      respectCrawlDelay,
-      journalIds: opts.journalIds || null,
-      aiExtract: useAi ? async (text, ctx) => {
-        try { return await aiExtract(text, ctx); } catch (e) { logger('[SI] AI 抽取跳过：' + (e?.message || e)); return null; }
-      } : null,
-      now: new Date(),
+      extract: (text, ctx) => extractor.extract(text, ctx),
+      queryRank: queryRankImpl,
+      formatRank,
+      secretKey,
+      sourceIds,
+      backfillDays,
+      autoRank: state.preferences.autoRank !== false,
+      logger,
+      onPhase: setPhase,
+      extractLimit: 12,
+      rounds: 6,
+      rankLimit: 25,
+      concurrency: 2,
+    }).then(({ state: nextState, summary }) => {
+      const latest = readState();
+      // 同步期间用户可能改了偏好/收藏：以最新为底，只并入管线产出
+      const merged = {
+        ...latest,
+        articles: nextState.articles,
+        issues: nextState.issues,
+        ranks: { ...latest.ranks, ...nextState.ranks },
+        sync: nextState.sync,
+        lastAttemptAt: nextState.lastAttemptAt,
+        lastSyncAt: nextState.lastSyncAt || latest.lastSyncAt,
+        sources: latest.sources,
+      };
+      writeState(merged);
+      return { state: merged, summary };
     });
-    // Network awaits must never restore an old copy of subscriptions or favorites.
-    const latest = readState();
-    const originalIds = new Set(state.issues.map((i) => i.id));
-    const currentIds = new Set(latest.issues.map((i) => i.id));
-    const incoming = (result.fetched || []).filter((i) => !originalIds.has(i.id) || currentIds.has(i.id))
-      .map((i) => {
-        const current = latest.issues.find((x) => x.id === i.id);
-        return current?.deadlineVerifiedAt ? { ...i, deadline: current.deadline, deadlineVerifiedAt: current.deadlineVerifiedAt } : i;
-      });
-    const next = purgeExpiredIssues({ ...latest,
-      issues: mergeIssues(latest.issues, incoming),
-      sync: { ...latest.sync, ...result.state.sync },
-      lastAttemptAt: result.state.lastAttemptAt,
-      lastSyncAt: result.synced.length ? result.state.lastSyncAt : latest.lastSyncAt,
-    }).state;
-    const snap = topicSnapshot(scopedIssues(next));
-    next.topicHistory = { ...(next.topicHistory || {}), [snap.at]: { counts: snap.counts, scope: scopeKey(next) } };
-    writeState(next);
-    const ok = result.synced.length > 0;
-    const incomingIds = new Set(incoming.map((i) => i.id));
-    return { ok, reason, added: next.issues.filter((i) => incomingIds.has(i.id) && !originalIds.has(i.id)).length,
-      total: incoming.length, synced: result.synced, failed: result.failed,
-      error: ok ? '' : result.failed.length ? '所有征稿源均未获取到有效 SI，请查看抓取诊断' : '请先订阅期刊或添加官方征稿页',
-    };
   }
 
   const scheduler = createSpecialIssueScheduler({
     getState: readState,
     saveState: writeState,
     runNow: (reason) => runSync(reason),
-    snapshot: (issues, t) => topicSnapshot(issues, t),
-    purgeIssues: (s) => purgeExpiredIssues(s),
     logger,
   });
 
-  // ---------- 组装前端所需的完整 payload ----------
+  // ---------- payload ----------
   function payload(options = {}) {
     const state = readState();
     const now = new Date();
-    const graph = getGraph();
-    const profile = profileFromGraph(graph);
-    const useProfile = state.preferences.recommendEnabled ? profile : { terms: [], empty: true };
-    const scopeIds = state.preferences.scope === 'all' ? null : state.selectedJournalIds;
-    const engine = translationEngine(store.getSettings());
-    const translations = Object.fromEntries(state.issues
-      .filter((i) => matchesTranslation(state.translations[i.id], fingerprint(i), engine.key))
-      .map((i) => [i.id, state.translations[i.id]]));
-    const issues = listIssues({ ...state, translations }, {
-      now, profile: useProfile, sort: options.sort || 'deadline',
-      query: options.query || '', topic: options.topic || '',
-      journalIds: scopeIds, recommendOnly: options.recommendOnly === true,
+    const settings = store.getSettings();
+    const issues = listIssues(state, {
+      now,
+      query: options.query || '',
+      topics: options.topics || [],
+      deadlineWindow: options.deadlineWindow || 'all',
+      rankSystem: options.rankSystem || '',
+      rankLevels: options.rankLevels || [],
       favoriteOnly: options.favoriteOnly === true,
+      sourceId: options.sourceId || '',
+      sort: options.sort || '',
       limit: 400,
-    });
-    const hotIssues = scopedIssues(state);
-    const hotTopics = computeHotTopics(hotIssues, { history: state.topicHistory, scopeKey: scopeKey(state), now, limit: 12 });
-    const recommendations = state.preferences.recommendEnabled && !profile.empty
-      ? recommendIssues(hotIssues, profile, { now, limit: 6, dismissedIds: state.dismissedIds })
-        .map((x) => ({ ...x.issue, relevance: x.relevance, deadline: x.deadline }))
-      : [];
+    }).map((i) => ({ ...i, summaryZh: compact(i.summaryZh, 600) }));
+
+    const summary = specialIssueSummary(state, { now });
+    const recentArticles = [...state.articles]
+      .sort((a, b) => str(b.publishedAt).localeCompare(str(a.publishedAt)))
+      .slice(0, 40)
+      .map((a) => ({
+        id: a.id,
+        title: a.title,
+        url: a.url,
+        publishedAt: a.publishedAt,
+        status: a.status,
+        lastError: a.lastError,
+        attempts: a.attempts,
+        sourceName: a.sourceName,
+      }));
+
     return {
-      catalog: ABS_JOURNALS,
-      categories: ABS_CATEGORIES,
-      presets: SI_PRESETS,
-      sources: CFP_SOURCES,
-      selectedJournalIds: state.selectedJournalIds,
-      favoriteIds: state.favoriteIds,
-      cfpOverrides: state.cfpOverrides,
-      customSources: state.customSources,
-      ranks: state.ranks,
-      translations,
-      sync: state.sync,
-      preferences: state.preferences,
       issues,
-      pendingIssues: hotIssues.filter((i) => deadlineMeta(i, now).days === null).slice(0, 400),
-      hotTopics,
-      recommendations,
-      summary: specialIssueSummary(state, { now }),
-      profile: {
-        empty: profile.empty,
-        topics: profile.topics.slice(0, 12).map((t) => t.term),
-        keywords: profile.keywords.slice(0, 12).map((t) => t.term),
-        entities: profile.entities.slice(0, 12).map((t) => t.term),
+      favoriteIds: state.favoriteIds,
+      summary,
+      sources: state.sources,
+      sourceTypes: SOURCE_TYPES,
+      preferences: state.preferences,
+      filters: {
+        deadlineWindows: DEADLINE_WINDOWS,
+        rankFilters: RANK_FILTERS,
+        topics: topicCounts(state.issues),
       },
-      scheduler: { ...scheduler.status(), running: !!syncPromise || scheduler.status().running },
+      articleStats: {
+        total: state.articles.length,
+        pending: state.articles.filter((a) => a.status === 'pending').length,
+        extracted: state.articles.filter((a) => a.status === 'extracted').length,
+        skipped: state.articles.filter((a) => a.status === 'skipped').length,
+        failed: state.articles.filter((a) => a.status === 'failed').length,
+        recent: recentArticles,
+      },
+      capability: {
+        hasModel: buildExtractor().hasModel,
+        hasEasyScholarKey: !!clean(settings.easyScholarKey),
+      },
+      rankPending: pendingRankCount(state, { now }),
+      runtime: { ...runtime, running: runtime.running || !!syncPromise },
+      scheduler: { ...scheduler.status(), running: runtime.running || !!syncPromise },
     };
   }
 
-  // ---------- 路由 ----------
-  app.get('/api/special-issues', (req, res) => {
-    res.json(payload({
-      sort: str(req.query?.sort), query: str(req.query?.query),
-      topic: str(req.query?.topic), recommendOnly: req.query?.recommendOnly === '1',
-      favoriteOnly: req.query?.favoriteOnly === '1',
-    }));
+  const queryOpts = (req) => ({
+    query: str(req.query?.query),
+    topics: str(req.query?.topics).split(',').map((t) => t.trim()).filter(Boolean),
+    deadlineWindow: str(req.query?.deadlineWindow) || 'all',
+    rankSystem: str(req.query?.rankSystem),
+    rankLevels: str(req.query?.rankLevels).split(',').map((t) => t.trim()).filter(Boolean),
+    favoriteOnly: req.query?.favoriteOnly === '1',
+    sourceId: str(req.query?.sourceId),
+    sort: str(req.query?.sort),
   });
 
-  // ---------- 收藏 / 自行添加 / 删除 / 到期清理 ----------
-  app.post('/api/special-issues/custom', (req, res) => {
-    const { state, issue, error } = addCustomIssue(readState(), req.body || {});
-    if (error) return res.status(400).json({ error });
-    writeState(state);
-    res.json({ ...payload(), issue });
-  });
+  // ---------- 主查询 ----------
+  app.get('/api/special-issues', (req, res) => res.json(payload(queryOpts(req))));
+  app.get('/api/special-issues/status', (_req, res) => res.json({
+    ...scheduler.status(),
+    runtime: { ...runtime, running: runtime.running || !!syncPromise },
+  }));
 
-  // ---------- 浏览器辅助导入：解析粘贴的网页内容（不出网），再批量确认导入 ----------
-  app.post('/api/special-issues/parse-paste', async (req, res) => {
-    const body = req.body || {};
-    const text = str(body.text).slice(0, 400000);
-    if (!text.trim()) return res.status(400).json({ error: '请先从浏览器复制征稿页面内容并粘贴进来' });
-    const journalId = ABS_JOURNALS.some((j) => j.id === str(body.journalId)) ? str(body.journalId) : '';
-    const journal = journalId ? journalById(journalId) : null;
-    const baseUrl = /^https?:\/\//i.test(str(body.url).trim()) ? str(body.url).trim() : '';
-    const now = new Date();
-    let items = parsePastedContent(text, { baseUrl, journal, now });
-    // 纯文本 / 非常规页面正则抓不全时，用已配置的模型补一次结构化（可选，失败不影响结果）
-    if (body.aiExtract === true && typeof fetchModelCompletion === 'function') {
-      try {
-        const extra = await aiExtract(text, { journal, sourceUrl: baseUrl, now });
-        if (Array.isArray(extra) && extra.length) {
-          items = mergeIssues(items, extra.map((x) => {
-            const n = normalizeAiIssue(x, { journal, now, sourceUrl: baseUrl });
-            return n ? { ...n, source: 'pasted' } : null;
-          }).filter(Boolean));
-        }
-      } catch (e) { logger('[SI] 粘贴解析 AI 增强跳过：' + (e?.message || e)); }
+  // ---------- 文章源 CRUD ----------
+  app.post('/api/special-issues/sources', (req, res) => {
+    const source = normalizeSource(req.body || {});
+    if (!source) return res.status(400).json({ error: '文章源配置不完整：请检查类型与地址/路径' });
+    const state = readState();
+    if (state.sources.some((s) => s.id === source.id)) {
+      return res.status(409).json({ error: '这个文章源已经存在了' });
     }
-    res.json({ items, count: items.length });
-  });
-
-  app.post('/api/special-issues/import', (req, res) => {
-    const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 100) : [];
-    if (!items.length) return res.status(400).json({ error: '请先勾选要导入的征稿条目' });
-    const { state, added, skipped } = importPastedIssues(readState(), items, { now: new Date() });
+    if (state.sources.length >= 20) return res.status(400).json({ error: '文章源最多 20 个' });
+    state.sources = [...state.sources, source];
     writeState(state);
-    res.json({ ...payload(), added, skipped });
+    scheduler.refresh();
+    res.json({ ...payload(), added: source });
   });
 
-  app.put('/api/special-issues/:id/deadline', (req, res) => {
+  app.put('/api/special-issues/sources/:id', (req, res) => {
     const state = readState();
-    const issue = state.issues.find((i) => i.id === req.params.id);
-    if (!issue) return res.status(404).json({ error: '该征稿不存在或已到期' });
-    const dl = normalizeDeadline(str(req.body?.deadline));
-    if (!dl.date || deadlineMeta({ deadline: dl.date }).days < 0) return res.status(400).json({ error: '请填写有效且未过期的截止日期' });
-    Object.assign(issue, { deadline: dl.date, deadlineText: dl.text, deadlineVerifiedAt: new Date().toISOString() });
+    const idx = state.sources.findIndex((s) => s.id === req.params.id);
+    if (idx < 0) return res.status(404).json({ error: '文章源不存在' });
+    const patch = req.body || {};
+    if (typeof patch.enabled === 'boolean') state.sources[idx].enabled = patch.enabled;
+    if (patch.name !== undefined) state.sources[idx].name = clean(patch.name).slice(0, 60) || state.sources[idx].name;
+    if (patch.backfillDays !== undefined) {
+      const n = Math.round(Number(patch.backfillDays));
+      if (Number.isFinite(n)) state.sources[idx].backfillDays = Math.max(1, Math.min(365, n));
+    }
     writeState(state);
-    res.json(payload());
-  });
-
-  app.post('/api/special-issues/purge', (_req, res) => {
-    const { state, removed } = purgeExpiredIssues(readState());
-    if (removed.length) writeState(state);
-    res.json({ ...payload(), removed });
-  });
-
-  app.post('/api/special-issues/:id/favorite', (req, res) => {
-    const id = req.params.id;
-    const state = readState();
-    if (!state.issues.some((i) => i.id === id)) return res.status(404).json({ error: '该征稿信息不存在或已到期清除' });
-    const favorite = typeof req.body?.favorite === 'boolean' ? req.body.favorite : null;
-    writeState(toggleFavorite(state, id, favorite));
-    res.json(payload());
-  });
-
-  app.delete('/api/special-issues/:id', (req, res) => {
-    const state = readState();
-    const id = req.params.id;
-    if (!state.issues.some((i) => i.id === id)) return res.status(404).json({ error: '该征稿信息不存在或已到期清除' });
-    state.issues = state.issues.filter((i) => i.id !== id);
-    state.favoriteIds = state.favoriteIds.filter((x) => x !== id);
-    state.dismissedIds = state.dismissedIds.filter((x) => x !== id);
-    state.translations = Object.fromEntries(Object.entries(state.translations).filter(([k]) => k !== id));
-    writeState(state);
-    res.json(payload());
-  });
-
-  app.get('/api/special-issues/status', (_req, res) => res.json({ ...scheduler.status(), running: !!syncPromise || scheduler.status().running }));
-
-  app.get('/api/special-issues/hot-topics', (req, res) => {
-    const state = readState();
-    const issues = scopedIssues(state);
-    res.json({ topics: computeHotTopics(issues, { history: state.topicHistory, scopeKey: scopeKey(state), now: new Date(), limit: Number(req.query?.limit) || 12 }) });
-  });
-
-  app.get('/api/special-issues/recommendations', (_req, res) => {
-    const state = readState();
-    const profile = profileFromGraph(getGraph());
-    const items = state.preferences.recommendEnabled
-      ? recommendIssues(scopedIssues(state), profile, { now: new Date(), limit: 12, dismissedIds: state.dismissedIds }) : [];
-    res.json({ items: items.map((x) => ({ ...x.issue, relevance: x.relevance, deadline: x.deadline })), empty: profile.empty });
-  });
-
-  app.put('/api/special-issues/subscriptions', (req, res) => {
-    const ids = Array.isArray(req.body?.selectedJournalIds) ? req.body.selectedJournalIds : [];
-    writeState(setSubscriptions(readState(), ids));
     scheduler.refresh();
     res.json(payload());
   });
 
+  app.delete('/api/special-issues/sources/:id', (req, res) => {
+    const state = readState();
+    const source = state.sources.find((s) => s.id === req.params.id);
+    if (!source) return res.status(404).json({ error: '文章源不存在' });
+    const dropArticles = req.query?.purgeArticles === '1';
+    state.sources = state.sources.filter((s) => s.id !== req.params.id);
+    if (dropArticles) {
+      const ids = new Set(state.articles.filter((a) => a.sourceId === source.id).map((a) => a.id));
+      state.articles = state.articles.filter((a) => !ids.has(a.id));
+      state.issues = state.issues.filter((i) => !ids.has(i.articleId));
+    }
+    writeState(state);
+    scheduler.refresh();
+    res.json(payload());
+  });
+
+  /** 试拉一个源（不落盘），用于配置时确认地址是否有效。 */
+  app.post('/api/special-issues/sources/test', async (req, res) => {
+    const source = normalizeSource(req.body || {});
+    if (!source) return res.status(400).json({ error: '文章源配置不完整' });
+    try {
+      const { results } = await collectArticles(
+        { ...createSpecialIssueState({ sources: [{ ...source, id: 'probe' }], articles: [] }) },
+        { fetchImpl, sourceIds: ['probe'], now: new Date() },
+      );
+      const r = results[0] || {};
+      if (!r.ok) return res.status(400).json({ error: r.error || '测试失败' });
+      res.json({ ok: true, count: r.count, added: r.added, warning: r.warning || '', sample: [] });
+    } catch (e) {
+      res.status(400).json({ error: clean(e?.message || e) || '测试失败' });
+    }
+  });
+
+  // ---------- 同步 ----------
+  // 首次回溯 3 个月会有几十篇文章、每篇一次模型调用，可能跑几分钟。
+  // 因此接口只负责「启动任务」并立即返回，前端轮询 /status 看进度，避免请求超时。
+  app.post('/api/special-issues/sync', (req, res) => {
+    if (syncPromise || runtime.running) {
+      return res.json({ started: false, running: true, ...payload(queryOpts(req)) });
+    }
+    const opts = {
+      sourceIds: Array.isArray(req.body?.sourceIds) ? req.body.sourceIds : null,
+      backfillDays: Number(req.body?.backfillDays) > 0 ? Number(req.body.backfillDays) : null,
+    };
+    runtime.running = true;
+    runSync('manual', opts).catch((e) => {
+      logger('[SI] 手动同步异常：' + (e?.message || e));
+      runtime.running = false;
+      runtime.phase = 'idle';
+      runtime.message = '';
+    });
+    res.json({ started: true, running: true, ...payload(queryOpts(req)) });
+  });
+
+  /** 只跑某一阶段，便于界面分开操作（例如只补等级、只重试失败）。 */
+  app.post('/api/special-issues/step', async (req, res) => {
+    const step = clean(req.body?.step);
+    const state = readState();
+    try {
+      if (step === 'extract') {
+        const extractor = buildExtractor();
+        const ids = Array.isArray(req.body?.articleIds) ? req.body.articleIds : null;
+        if (ids) requeueArticles(state, ids);
+        const { stats } = await processArticles(state, {
+          fetchImpl, extract: (t, c) => extractor.extract(t, c), now: new Date(),
+          limit: Math.max(1, Math.min(50, Number(req.body?.limit) || 20)),
+          retryFailed: req.body?.retryFailed === true,
+        });
+        writeState(state);
+        return res.json({ ...payload(), step: 'extract', stats });
+      }
+      if (step === 'rank') {
+        const settings = store.getSettings();
+        if (!clean(settings.easyScholarKey)) return res.status(400).json({ error: '未配置 EasyScholar SecretKey，请在「AI 设置」里填写' });
+        const { updated, attempted, remaining, errors } = await enrichRanks(state, {
+          queryRank: queryRankImpl,
+          formatRank,
+          secretKey: settings.easyScholarKey,
+          now: new Date(),
+          limit: Math.max(1, Math.min(40, Number(req.body?.limit) || 25)),
+          force: req.body?.force === true,
+        });
+        writeState(state);
+        return res.json({ ...payload(), step: 'rank', rankResult: { updated, attempted, remaining, errors } });
+      }
+      if (step === 'collect') {
+        const { results } = await collectArticles(state, { fetchImpl, now: new Date() });
+        writeState(state);
+        return res.json({ ...payload(), step: 'collect', results });
+      }
+      return res.status(400).json({ error: '未知的步骤：' + step });
+    } catch (e) {
+      res.status(502).json({ error: clean(e?.message || e) || '执行失败' });
+    }
+  });
+
+  // ---------- 偏好 / 收藏 / 修正 ----------
   app.put('/api/special-issues/preferences', (req, res) => {
     writeState(setPreferences(readState(), req.body || {}));
     scheduler.refresh();
     res.json(payload());
   });
 
-  app.put('/api/special-issues/sources', (req, res) => {
+  app.post('/api/special-issues/:id/favorite', (req, res) => {
     const state = readState();
-    const overrides = req.body?.cfpOverrides && typeof req.body.cfpOverrides === 'object' ? req.body.cfpOverrides : state.cfpOverrides;
-    const custom = Array.isArray(req.body?.customSources) ? req.body.customSources : state.customSources;
-    writeState({ ...state, cfpOverrides: overrides, customSources: custom });
+    if (!state.issues.some((i) => i.id === req.params.id)) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    writeState(toggleFavorite(state, req.params.id, typeof req.body?.favorite === 'boolean' ? req.body.favorite : null));
     res.json(payload());
   });
 
-  app.post('/api/special-issues/sync', async (req, res) => {
-    try {
-      const result = await runSync('manual', {
-        journalIds: Array.isArray(req.body?.journalIds) ? req.body.journalIds : null,
-        aiExtract: typeof req.body?.aiExtract === 'boolean' ? req.body.aiExtract : undefined,
-      });
-      res.json({ ...payload(), ...result });
-    } catch (e) {
-      res.status(502).json({ error: '征稿信息抓取失败：' + (e?.message || '未知错误') });
+  app.patch('/api/special-issues/:id', (req, res) => {
+    const state = readState();
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    const body = req.body || {};
+    if (body.journal !== undefined) issue.journal = clean(body.journal).slice(0, 160) || issue.journal;
+    if (body.journalShort !== undefined) issue.journalShort = clean(body.journalShort).slice(0, 40);
+    if (body.titleZh !== undefined) issue.titleZh = clean(body.titleZh).slice(0, 300) || issue.titleZh;
+    if (body.deadline !== undefined) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean(body.deadline));
+      if (!m) return res.status(400).json({ error: '截止日期格式应为 YYYY-MM-DD' });
+      issue.deadline = m[0];
     }
+    if (body.submitUrl !== undefined) issue.submitUrl = /^https?:\/\//i.test(clean(body.submitUrl)) ? clean(body.submitUrl) : '';
+    if (body.siUrl !== undefined) issue.siUrl = /^https?:\/\//i.test(clean(body.siUrl)) ? clean(body.siUrl) : '';
+    issue.updatedAt = new Date().toISOString();
+    issue.editedByUser = true;
+    writeState(state);
+    res.json(payload());
   });
 
-  app.post('/api/special-issues/ranks/refresh', async (req, res) => {
-    const settings = store.getSettings();
-    if (!settings.easyScholarKey) return res.status(400).json({ error: '未配置 easyScholar SecretKey，请在「AI 设置」中填写' });
+  app.delete('/api/special-issues/:id', (req, res) => {
     const state = readState();
-    const wanted = Array.isArray(req.body?.journalIds)
-      ? req.body.journalIds
-      : req.body?.scope === 'catalog' ? ABS_JOURNALS.map((journal) => journal.id)
-      : [...new Set([...state.selectedJournalIds, ...state.issues.map((i) => i.journalId).filter(Boolean)])];
-    const journals = [...new Set(wanted)].map((id) => journalById(id)).filter(Boolean);
-    const due = journals.filter((j) => {
-      const queriedAt = Date.parse(state.ranks[j.id]?.queriedAt || '');
-      return !Number.isFinite(queriedAt) || queriedAt > Date.now() || Date.now() - queriedAt > 7 * DAY;
-    });
-    const requestedLimit = Math.floor(Number(req.body?.limit));
-    const targets = due.slice(0, requestedLimit > 0 ? Math.min(40, requestedLimit) : 20);
-    const updated = {};
-    const errors = [];
-    for (const j of targets) {
-      try {
-        const data = await queryRankImpl(j.title, settings.easyScholarKey);
-        if (data?.code !== 200) { errors.push({ journal: j.title, error: data?.msg || '未查询到' }); continue; }
-        const f = formatRank(data.data);
-        updated[j.id] = { summary: f.summary, items: f.items, queriedAt: new Date().toISOString(), journal: j.title, source: 'easyScholar' };
-      } catch (e) {
-        errors.push({ journal: j.title, error: compact(e?.message || '查询失败', 120) });
+    if (!state.issues.some((i) => i.id === req.params.id)) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    writeState(removeIssue(state, req.params.id));
+    res.json(payload());
+  });
+
+  /** 手动补一条：给一个链接直接走「抓正文 → 抽取」，不依赖已配置的源。 */
+  app.post('/api/special-issues/manual', async (req, res) => {
+    const raw = str(req.body?.url || req.body?.text);
+    const urls = extractArticleUrls(raw);
+    const single = /^https?:\/\//i.test(clean(req.body?.url)) ? clean(req.body.url) : '';
+    const targets = urls.length ? urls : (single ? [single] : []);
+    if (!targets.length) return res.status(400).json({ error: '请粘贴公众号文章链接（https://mp.weixin.qq.com/s/...）' });
+    const state = readState();
+    const now = new Date();
+    const extractor = buildExtractor();
+    for (const url of targets.slice(0, 5)) {
+      const id = articleIdOf(url);
+      if (!state.articles.some((a) => a.id === id)) {
+        state.articles.push({
+          id, url, localPath: '', title: '', publishedAt: '', digest: '',
+          contentKind: 'url', sourceId: '', sourceName: '手动添加',
+          status: 'pending', attempts: 0, lastError: '', fetchedAt: now.toISOString(),
+          extractedAt: '', contentChars: 0,
+        });
       }
     }
-    if (Object.keys(updated).length) {
-      const latest = readState();
-      writeState({ ...latest, ranks: { ...latest.ranks, ...updated } });
-    }
-    res.json({ ...payload(), refreshed: Object.keys(updated).length, errors,
-      attempted: targets.length, cached: journals.length - due.length,
-      remainingJournalIds: due.slice(targets.length).map((journal) => journal.id) });
+    writeState(state);
+    const { stats } = await processArticles(state, {
+      fetchImpl, extract: (t, c) => extractor.extract(t, c), now, limit: targets.length, concurrency: 1,
+    });
+    writeState(state);
+    res.json({ ...payload(), stats, extractedBy: extractor.hasModel ? 'ai' : 'rule' });
   });
 
+  // ---------- 等级 ----------
+  app.post('/api/special-issues/ranks/refresh', async (req, res) => {
+    const settings = store.getSettings();
+    if (!clean(settings.easyScholarKey)) return res.status(400).json({ error: '未配置 easyScholar SecretKey，请在「AI 设置」中填写' });
+    const state = readState();
+    try {
+      const result = await enrichRanks(state, {
+        queryRank: queryRankImpl,
+        formatRank,
+        secretKey: settings.easyScholarKey,
+        now: new Date(),
+        limit: Math.max(1, Math.min(40, Number(req.body?.limit) || 25)),
+        force: req.body?.force === true,
+      });
+      writeState(state);
+      res.json({ ...payload(), rankResult: result });
+    } catch (e) {
+      res.status(400).json({ error: '查询期刊等级失败：' + (e?.message || e) });
+    }
+  });
+
+  // ---------- 补充翻译（抽取已中文化，这里只处理残留英文） ----------
   app.post('/api/special-issues/:id/translate', async (req, res) => {
     const state = readState();
     const issue = state.issues.find((i) => i.id === req.params.id);
-    if (!issue) return res.status(404).json({ error: '该征稿信息不存在或已从本地缓存清理' });
-    const hash = fingerprint(issue);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
     const settings = store.getSettings();
     const engine = translationEngine(settings);
-    const cached = state.translations[issue.id];
-    if (matchesTranslation(cached, hash, engine.key)) return res.json({ translation: cached, cached: true });
     try {
-      const key = `${issue.id}:${hash}:${engine.key}`;
-      if (!translating.has(key)) {
-        const task = (async () => {
-          const opts = { target: 'zh', provider: engine.provider, fetchImpl };
-          const title = await translateImpl(issue.title, settings, opts);
-          const chunks = (issue.description || '').match(/[\s\S]{1,4000}/g) || [];
-          const descriptions = [];
-          for (const chunk of chunks) {
-            const translated = await translateImpl(chunk, settings, opts);
-            if (!translated?.trim()) throw new Error('翻译引擎返回了空简介，请检查翻译服务配置');
-            descriptions.push(translated);
-          }
-          if (!title?.trim()) throw new Error('翻译引擎没有返回标题');
-          const translation = {
-            title, description: descriptions.join('\n'), contentHash: hash,
-            engineKey: engine.key, translatedAt: new Date().toISOString(),
-          };
-          const latest = readState();
-          const current = latest.issues.find((i) => i.id === issue.id);
-          if (!current) throw new Error('该征稿已删除或到期，未保存译文');
-          if (fingerprint(current) !== hash) throw new Error('征稿内容已更新，请重新翻译');
-          if (translationEngine(store.getSettings()).key !== engine.key) throw new Error('默认翻译引擎已更改，请重新翻译');
-          writeState({ ...latest, translations: { ...latest.translations, [issue.id]: translation } });
-          return translation;
-        })();
-        translating.set(key, task);
-      }
-      let translation;
-      try { translation = await translating.get(key); }
-      finally { translating.delete(key); }
-      res.json({ translation, cached: false });
+      const opts = { target: 'zh', provider: engine.provider, fetchImpl };
+      const title = issue.titleZh || issue.titleEn;
+      const needTitle = /[A-Za-z]{12,}/.test(title) && !/[\u4e00-\u9fa5]/.test(title);
+      const translatedTitle = needTitle ? await translateImpl(issue.titleEn || title, settings, opts) : '';
+      const summary = issue.summaryZh;
+      const needSummary = !summary || (/[A-Za-z]{40,}/.test(summary) && !/[\u4e00-\u9fa5]{6,}/.test(summary));
+      const translatedSummary = needSummary
+        ? await translateImpl((issue.summaryZh || issue.titleEn || '').slice(0, 4000), settings, opts)
+        : '';
+      const latest = readState();
+      const current = latest.issues.find((i) => i.id === issue.id);
+      if (!current) return res.status(404).json({ error: '该征稿已删除或到期，未保存译文' });
+      if (translatedTitle) current.titleZh = translatedTitle.slice(0, 300);
+      if (translatedSummary) current.summaryZh = translatedSummary.slice(0, 1200);
+      current.translatedAt = new Date().toISOString();
+      writeState(latest);
+      res.json({ ...payload(), translated: true });
     } catch (e) {
       res.status(400).json({ error: '翻译失败：' + (e?.message || '未知错误') });
     }
   });
 
-  app.post('/api/special-issues/:id/dismiss', (req, res) => {
-    writeState(dismissRecommendation(readState(), req.params.id));
-    res.json(payload());
+  app.post('/api/special-issues/purge', (_req, res) => {
+    const { state, removed } = purgeExpiredIssues(readState());
+    if (removed.length) writeState(state);
+    res.json({ ...payload(), removed });
   });
 
   return { scheduler, runSync, payload };

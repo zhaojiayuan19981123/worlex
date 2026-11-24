@@ -638,23 +638,26 @@ export function saveTopJournals(value) {
 }
 
 // ---------- SI 征稿追踪 ----------
-// 与顶刊追踪并列的独立数据文件：订阅的 ABS 期刊、每日抓取到的 Special Issue、
-// easyScholar 等级缓存、译文、以及用于热点趋势的每日主题快照。
-// 字段规范化由 src/specialIssues.js 的 createSpecialIssueState() 负责，这里只管落盘。
+// v2：数据由「公众号文章」驱动——sources 是文章源配置，articles 是抓到的文章队列，
+// issues 是从文章里抽取出的专刊卡片。字段规范化由 src/specialIssues.js 的
+// createSpecialIssueState() 负责，这里只提供首次运行的默认值并落盘。
 export function getSpecialIssues() {
   return loadFile(SPECIAL_ISSUES_FILE, {
-    version: 1,
-    selectedJournalIds: [],
-    cfpOverrides: {},
-    customSources: [],
+    version: 2,
+    sources: [],
+    articles: [],
     issues: [],
     ranks: {},
     translations: {},
     sync: {},
-    topicHistory: {},
     dismissedIds: [],
-    preferences: { recommendEnabled: true, autoSync: true, syncHour: 8, aiExtract: false, includeExpired: false, scope: 'subscribed' },
+    favoriteIds: [],
+    preferences: {
+      autoSync: true, syncHour: 9, backfillDays: 90, includeExpired: false,
+      showRuleExtracted: true, autoRank: true, autoTranslate: false, sort: 'deadline',
+    },
     lastSyncAt: '',
+    lastAttemptAt: '',
   });
 }
 

@@ -1,3 +1,45 @@
+## v2.3.0：SI 征稿重做——改为公众号文章驱动（2026-11-24）
+
+### 背景
+旧方案逐刊访问出版社官网抓征稿页，两条路都已封死：出版社站点普遍有 Cloudflare / Akamai 站点级反爬（服务端直连超时、挂代理 403）；微信 2026-07-30 下线公众号后台 `searchbiz` / `appmsgpublish` 接口族，能批量列出历史文章的工具（wechat-article-exporter、we-mp-rss、wewe-rss）全部停更。保留的可用通道只有一条：**单篇公众号正文仍可免登录抓取**（须带 `chksm` 等完整参数 + 桌面 UA）。
+
+### 新的处理流程
+`文章源 → 采集 → 抓正文 → 大模型抽取译中 → EasyScholar 查等级 → 卡片 + 筛选`。首次按 90 天回溯，之后每日 09:00 增量。
+
+| 项 | 说明 |
+| --- | --- |
+| 文章源 | 抽象成四种可替换源：RSS 订阅地址、本地导出目录（wechatDownload 等）、粘贴文章链接、自定义 JSON 接口；单个源失败只影响自己并记 `lastError` |
+| 正文抓取 | `#js_content` 提取，`<a>` 转「文字 (URL)」保留投稿与专刊链接；识别「未知错误 / 已删除 / 环境异常 / 需验证」给出可读原因 |
+| 抽取 | 大模型输出结构化 JSON → 逐字段校验（去书名号与收录尾巴、拒绝 `javascript:` 与微信站内链接、丢弃过期 deadline）；模型失败或无模型时自动回落正则抽取，卡片标「规则抽取」 |
+| 去重 | 文章按 canonical 链接去重（短链/长链同一篇）；卡片按「期刊名 + 截止日 + 主题」去重，同一专刊被多篇推文报道只出一张卡 |
+| 等级 | 同名期刊只查一次、缓存 7 天、550ms 间隔；卡片按等级体系着色，支持按体系 + 等级筛选与排序 |
+| 界面 | 卡片列表 + 关键词/截止窗口/等级/主题/收藏/排序筛选；侧滑面板分「文章源 / 诊断 / 偏好」三页 |
+
+### 改动文件
+| 文件 | 变更 |
+| --- | --- |
+| `src/siSources.js` | 新增，四类文章源适配、链接规范化、RSS/Atom 解析、目录遍历 |
+| `src/wechatArticle.js` | 新增，单篇正文抓取与归一化、本地文件读取 |
+| `src/siExtract.js` | 新增，提示词、模型 JSON 容错、字段归一化、正则兜底 |
+| `src/specialIssues.js` | 重写，状态 v2 与纯逻辑（去重、筛选、排序、统计、过期清理） |
+| `src/siPipeline.js` | 新增，采集/抽取/等级富化/全流程编排 |
+| `src/specialIssueScheduler.js` | 重写，改为「有启用的文章源」为启动条件，每日增量 |
+| `src/specialIssueRoutes.js` | 重写，路由清单见文档；同步改为后台任务 + `/status` 轮询 |
+| `src/store.js` | `getSpecialIssues()` 默认值改为 v2 结构 |
+| `public/special-issue.js` / `.css` | 重写，卡片 + 筛选 + 侧滑面板 |
+| 删除 | `src/specialIssueCatalog.js`、`specialIssueParser.js`、`specialIssueSourcePolicy.js`、`specialIssueSourceAudit.json` 及三个旧测试文件、`docs/SI_REPAIR.md`、`docs/SI_LINK_VERIFICATION.md`（下文历史记录中的链接已失效） |
+
+### 验证
+- `node --test`：859 项，858 通过；唯一失败为 `pdf-crash-guard.test.mjs` 在并行负载下 60s 超时（单独运行 2/2 通过），与本轮改动无关。
+- `test/special-issues-v2.test.mjs`：28 项全通过。
+- 浏览器端到端（Playwright）：视图切换、卡片字段、主题/关键词/等级筛选、排序、展开、面板三页、收藏回显、立即同步的增量出卡，均通过且无 JS 运行时错误。
+- 真实环境：抓取真实公众号文章（标题、发布时间、7883 字正文、正文链接保留）成功；真实文章经模型通道抽出卡片；停掉模型后自动回落规则抽取并记日志。
+- **未验证**：真实 EasyScholar 返回值（需有效 SecretKey）、真实大模型的抽取质量（用本地假模型验证的是链路而非质量）。
+
+- 模块、数据字段、接口、定时规则与局限见 [docs/SI_WECHAT_PIPELINE.md](docs/SI_WECHAT_PIPELINE.md)。
+
+---
+
 ## v2.2.2：SI 抓取 / 展开 / 翻译 / 截止核实修复（2026-11-22）
 
 - 基于 `a597ed7991e28eb4bab557ca53c9b9bc4eebdb2e` 的 v2.2.1 源码修改，保留 v2.2.0 后加入的网页粘贴导入。
