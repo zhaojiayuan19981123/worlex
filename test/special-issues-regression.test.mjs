@@ -215,9 +215,18 @@ test('HTTP sync coalesces overlapping runs and preserves concurrent favorites, s
   const gate = new Promise((r) => { release = r; });
   const ready = new Promise((r) => { entered = r; });
   let calls = 0;
-  const h = await harness(t, { initial: { selectedJournalIds: ['jost'], issues: [call()] }, fetchImpl: async (url) => {
-    calls += 1; entered(); await gate; return response(JSON.stringify([record('Journal of Sustainable Tourism')]), url);
-  } });
+  const h = await harness(t, { initial: { selectedJournalIds: ['jost'], issues: [call()],
+    wechat: { config: { historyUrl: 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=TEST' } } },
+    resolveRequestModel: () => ({ profile: { model: 'fixture' } }),
+    fetchModelCompletion: async () => ({ up: { ok: true } }),
+    readLLMResponse: async () => ({ full: JSON.stringify([{ titleOriginal: 'Tourism and AI', title: '旅游与人工智能',
+      journal: 'Tourism Management', description: '旅游研究征稿', deadline: future, deadlineEvidence: '投稿截止：' + future }]) }),
+    wechatProviderFactory: () => ({
+      page: async () => { calls++; entered(); await gate; return { articles: [{ id: 'wx:1', title: 'Tourism and AI',
+        url: 'https://mp.weixin.qq.com/s?__biz=TEST&mid=1&idx=1&sn=test', publishedAt: new Date().toISOString() }], dates: [Date.now()], hasMore: false }; },
+      article: async () => ({ content: 'Tourism and AI\nTourism Management\n投稿截止：' + future, links: [] }),
+    }),
+  });
   const first = h.routes.runSync('manual');
   await ready;
   const second = h.routes.runSync('daily');

@@ -4,7 +4,7 @@ import { cfpPageEvidence } from './specialIssueSourcePolicy.js';
 
 const SIGNAL = /special[\s-]+issue|call[\s-]+for[\s-]+papers|research[\s-]+topic|guest[\s-]+edit|专刊|特刊|征稿|\bcfp\b/i;
 const GENERIC = /^(?:special issues?|calls? for papers|open calls?|research topics?|view all|read more|learn more|details|征稿|专刊)$/i;
-const SKIP = new Set(['script', 'style', 'noscript', 'svg', 'nav', 'header', 'footer', 'aside']);
+const SKIP = new Set(['script', 'style', 'noscript', 'svg', 'nav', 'footer', 'aside']);
 const BLOCK = new Set(['p', 'li', 'div', 'article', 'section', 'h1', 'h2', 'h3', 'h4', 'tr', 'br']);
 const clean = (v) => String(v || '').replace(/\s+/g, ' ').trim();
 
@@ -15,6 +15,7 @@ function contains(parent, child) {
 
 function walk(node, predicate, result = []) {
   if (SKIP.has(node.name)) return result;
+  if (node.name === 'header' && !insideArticle(node)) return result;
   if (predicate(node)) result.push(node);
   for (const child of node.children || []) walk(child, predicate, result);
   return result;
@@ -22,9 +23,17 @@ function walk(node, predicate, result = []) {
 
 function text(node) {
   if (!node || SKIP.has(node.name)) return '';
+  if (node.name === 'header' && !insideArticle(node)) return '';
   if (node.type === 'text') return node.data;
   const s = (node.children || []).map(text).join('');
   return BLOCK.has(node.name) ? '\n' + s + '\n' : s;
+}
+
+function insideArticle(node) {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent.name === 'main' || parent.name === 'article') return true;
+  }
+  return false;
 }
 
 function urlOf(href, base) {
@@ -44,7 +53,7 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
   const pageSignal = SIGNAL.test(clean(headings.slice(0, 4).map(text).join(' '))) || SIGNAL.test(baseUrl);
   const candidates = [];
   const seen = new Set();
-  const add = (title, body, href) => {
+  const add = (title, body, href, block = null) => {
     const url = urlOf(href, baseUrl);
     title = clean(title);
     if (!title || GENERIC.test(title) || title.length < 8 || !url) return;
@@ -53,7 +62,8 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
     const key = url + '|' + title.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    candidates.push({ title, text: body, href: url });
+    const journalNames = block ? walk(block, (n) => n.name === 'a' && /\/journal\//i.test(n.attribs?.href || '')).map((n) => clean(text(n))) : [];
+    candidates.push({ title, text: body, href: url, journalNames, detail: url === urlOf(baseUrl, baseUrl) });
   };
   // Springer collections are one call with related articles, not a CFP list.
   let pageUrl;
@@ -79,7 +89,7 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
       block = p;
       if (['li', 'article', 'tr'].includes(p.name)) break;
     }
-    add(text(a), text(block), a.attribs.href);
+    add(text(a), text(block), a.attribs.href, block);
   }
   // Some publishers link only a generic "details" button below the topic heading.
   for (const h of headings.filter((n) => n.name !== 'h1')) {
@@ -106,7 +116,7 @@ export function publisherCandidates(html, baseUrl, { detail = false } = {}) {
     const body = text(main);
     const isTandf = /^https:\/\/callforpapers\.taylorandfrancis\.com\/special_issues\//i.test(baseUrl);
     const topic = isTandf ? headings.find((n) => n.name === 'h2' && !GENERIC.test(clean(text(n)))) || h1 : h1;
-    if (SIGNAL.test(body)) add(text(topic), body, baseUrl);
+    if (SIGNAL.test(body)) add(text(topic), body, baseUrl, main);
   }
   return candidates.slice(0, 200);
 }

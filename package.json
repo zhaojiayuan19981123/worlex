@@ -1,6 +1,6 @@
 {
   "name": "worlex",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "description": "worlex —— 文献 AI 解析、PDF 阅读、项目管理、论文进度、AI 助手",
   "type": "module",
   "main": "electron/main.cjs",

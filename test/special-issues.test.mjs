@@ -17,7 +17,6 @@ import {
   profileFromGraph, scoreRelevance, recommendIssues, computeHotTopics, topicSnapshot,
   syncSpecialIssues, setSubscriptions, setPreferences, specialIssueSummary,
   toggleFavorite, addCustomIssue, purgeExpiredIssues, listIssues,
-  parsePastedContent, importPastedIssues,
 } from '../src/specialIssues.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -26,8 +25,10 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf-8').replace(/\r\n/g
 const YEAR = new Date().getFullYear() + 1;
 const CFP_HTML = `<html><body><ul>
   <li><h3><a href="/cfp/tourism-ai">Special Issue: Tourism and Artificial Intelligence</a></h3>
+      <a href="/journal/tourism-management">Tourism Management</a>
       <p>Call for papers on tourism, tourist experience and destination marketing. Submission deadline: 30 June ${YEAR}.</p></li>
   <li><h3><a href="/cfp/sustainable">Special Issue: Sustainable Tourism and ESG</a></h3>
+      <a href="/journal/tourism-management">Tourism Management</a>
       <p>Guest editors invite research on sustainable tourism and carbon. Deadline: December 15, ${YEAR}.</p></li>
 </ul></body></html>`;
 
@@ -161,7 +162,7 @@ test('抓取：注入式 fetch、单源失败隔离、订阅与偏好写回', as
     return { ok: true, status: 200, text: async () => CFP_HTML };
   };
   const state = setSubscriptions(createSpecialIssueState(), ['tm']);
-  state.cfpOverrides.tm = 'https://example.com/tm/call-for-papers';
+  state.cfpOverrides.tm = 'https://example.com/calls-for-papers';
   const result = await syncSpecialIssues(state, { fetchImpl, now: new Date(), concurrency: 2 });
   assert.ok(result.total > 0);
   assert.ok(result.added > 0);
@@ -265,56 +266,6 @@ test('搜索：标题 / 期刊 / 主题 / 关键词都能命中，且可与收�
   assert.equal(listIssues(toggleFavorite(state, 'b'), { favoriteOnly: true, query: 'tourism' }).length, 0);
 });
 
-// ---------------- 浏览器辅助导入 ----------------
-test('粘贴解析：纯文本多条 / HTML / 单条通知都能抽出标题、deadline 与链接', () => {
-  const plain = [
-    'Special Issue: AI and Sustainable Tourism',
-    'Call for papers on tourism and destinations. Submission deadline: 30 June 2027',
-    'https://example.com/cfp/1',
-    '',
-    'Special Issue: Digital Marketing',
-    'We invite submissions on digital marketing and consumer behavior. Deadline: 2027-09-30',
-    'https://example.com/cfp/2',
-  ].join('\n');
-  const items = parsePastedContent(plain, { baseUrl: 'https://example.com/cfp' });
-  assert.equal(items.length, 2);
-  assert.equal(items[0].title, 'AI and Sustainable Tourism');
-  assert.equal(items[0].deadline, '2027-06-30');
-  assert.equal(items[0].url, 'https://example.com/cfp/1');
-  assert.equal(items[1].title, 'Digital Marketing');
-  assert.equal(items[1].deadline, '2027-09-30');
-  assert.ok(items.every((i) => i.source === 'pasted' && i.topics.length >= 1));
-
-  const html = '<ul><li><h3>Special Issue: Tourism and AI</h3><p>Call for papers on tourism. Deadline: 31 March 2027</p><a href="/cfp/x">details</a></li></ul>';
-  const fromHtml = parsePastedContent(html, { baseUrl: 'https://example.com/cfp', journal: ABS_JOURNALS.find((j) => j.id === 'tm') });
-  assert.equal(fromHtml.length, 1);
-  assert.equal(fromHtml[0].journalId, 'tm');
-  assert.equal(fromHtml[0].deadline, '2027-03-31');
-
-  const single = parsePastedContent('Call for Papers: Special Issue on Tourism\nDeadline: 2027-12-31', {});
-  assert.equal(single.length, 1);
-  assert.equal(single[0].title, 'Special Issue on Tourism');
-  assert.equal(single[0].deadline, '2027-12-31');
-  assert.deepEqual(parsePastedContent('   ', {}), []);
-});
-
-test('粘贴导入：批量入库、自动订阅收藏、重复跳过', () => {
-  const items = parsePastedContent([
-    'Special Issue: Tourism Analytics',
-    'Call for papers on tourism. Deadline: 2027-05-20',
-    'https://example.org/tourism',
-  ].join('\n'), {});
-  assert.equal(items.length, 1);
-  const first = importPastedIssues(createSpecialIssueState(), items, { now: new Date() });
-  assert.equal(first.added.length, 1);
-  assert.equal(first.state.issues.length, 1);
-  assert.equal(first.state.favoriteIds.length, 1);
-  const again = importPastedIssues(first.state, items, { now: new Date() });
-  assert.equal(again.added.length, 0);
-  assert.equal(again.skipped[0].reason, '已存在');
-  assert.equal(again.state.issues.length, 1);
-});
-
 // ---------------- HTTP ----------------
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
@@ -324,7 +275,7 @@ async function close(server) {
   await new Promise((resolve) => server.close(() => resolve()));
 }
 
-test('HTTP：订阅 → 抓取 → 列表 / 热点 / 推荐 / 定时状态全链路', async () => {
+test('HTTP：公众号抓取 → 列表 / 热点 / 推荐 / 定时状态全链路', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'si-http-'));
   await mkdir(path.join(root, 'uploads'), { recursive: true });
   store.configure({ dataDir: path.join(root, 'data') });
@@ -334,10 +285,20 @@ test('HTTP：订阅 → 抓取 → 列表 / 热点 / 推荐 / 定时状态全链
     topics: [{ label: '旅游与酒店', terms: ['tourism', 'tourist'], count: 8 }],
     nodes: [{ keywords: ['tourism'] }], edges: [],
   };
-  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => CFP_HTML });
-  registerSpecialIssueRoutes(app, {
-    store, getGraph: () => graph, fetchImpl,
-    resolveRequestModel: () => ({ error: 'no model' }),
+  const deadline = ymd(shift(150));
+  const title = 'Sustainable Tourism and Platforms';
+  const url = 'https://mp.weixin.qq.com/s?__biz=TEST&mid=1&idx=1&sn=test';
+  const service = registerSpecialIssueRoutes(app, {
+    store, getGraph: () => graph,
+    fetchImpl: async () => { throw new Error('Publisher requests are not allowed'); },
+    resolveRequestModel: () => ({ profile: { model: 'test' } }),
+    fetchModelCompletion: async () => ({ up: { ok: true } }),
+    readLLMResponse: async () => ({ full: JSON.stringify([{ titleOriginal: title, title: '可持续旅游与平台', journal: 'Tourism Management', description: '旅游与酒店相关征稿。', deadline, deadlineEvidence: '投稿截止：' + deadline }]) }),
+    wechatProviderFactory: () => ({
+      page: async () => ({ articles: [{ id: 'wx:test', url, title, publishedAt: new Date().toISOString() }], dates: [Date.now()], hasMore: false, nextOffset: 10 }),
+      article: async () => ({ content: title + '\nTourism Management\n投稿截止：' + deadline, links: [] }),
+    }),
+    queryRank: async () => ({ code: 200, data: {} }),
   });
   const server = createServer(app);
   try {
@@ -356,13 +317,11 @@ test('HTTP：订阅 → 抓取 → 列表 / 热点 / 推荐 / 定时状态全链
     const subscribed = await send('/api/special-issues/subscriptions', 'PUT', { selectedJournalIds: ['tm', 'atr'] });
     assert.deepEqual(subscribed.selectedJournalIds, ['tm', 'atr']);
 
-    await send('/api/special-issues/sources', 'PUT', { cfpOverrides: {
-      tm: 'https://example.com/tm/call-for-papers', atr: 'https://example.com/atr/call-for-papers',
-    } });
-
-    const synced = await send('/api/special-issues/sync', 'POST', {});
-    assert.equal(synced.ok, true);
-    assert.ok(synced.added > 0);
+    await send('/api/special-issues/wechat', 'PUT', { historyUrl: 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=TEST' });
+    const accepted = await send('/api/special-issues/sync', 'POST', {});
+    assert.equal(accepted.accepted, true);
+    assert.equal((await service.runSync('wait')).ok, true);
+    const synced = await get('/api/special-issues');
     assert.ok(synced.issues.length > 0);
     assert.ok(synced.issues.every((i) => i.deadline && i.deadline.label), '每条 SI 都要带截止日期展示信息');
     assert.ok(synced.hotTopics.length > 0, '抓取后应生成领域热点');
@@ -403,21 +362,6 @@ test('HTTP：订阅 → 抓取 → 列表 / 热点 / 推荐 / 定时状态全链
     assert.ok(favOn.issues.some((i) => i.id === custom.issue.id));
     const purged = await send('/api/special-issues/purge', 'POST', {});
     assert.ok(Array.isArray(purged.removed));
-
-    // 浏览器辅助导入：解析粘贴内容 → 勾选导入 → 出现在列表
-    const parsed = await send('/api/special-issues/parse-paste', 'POST', {
-      text: 'Special Issue: Paste Import Tourism\nCall for papers on tourism. Deadline: 2027-10-15\nhttps://paste.example/t1',
-      journalId: 'tm',
-      url: 'https://paste.example/cfp',
-    });
-    assert.ok(parsed.items.length >= 1);
-    assert.ok(parsed.items.some((i) => i.title.includes('Paste Import Tourism')));
-    const beforeImport = (await get('/api/special-issues')).issues.length;
-    const imported = await send('/api/special-issues/import', 'POST', { items: parsed.items });
-    assert.ok(imported.added.length >= 1);
-    assert.ok((await get('/api/special-issues')).issues.length > beforeImport);
-    const badParse = await send('/api/special-issues/parse-paste', 'POST', { text: '' });
-    assert.ok(badParse.error);
   } finally {
     await close(server);
   }

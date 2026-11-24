@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="knowledge-graph.css" />
   <link rel="stylesheet" href="special-issue.css" />
   <link rel="stylesheet" href="workbench-extras.css" />
+  <link rel="stylesheet" href="interface.css" />
 </head>
 <body>
   <!-- ======================================================================
@@ -149,6 +150,9 @@
 
   <!-- 顶栏 -->
   <header class="topbar">
+    <button type="button" id="btnSidebarToggle" class="sidebar-toggle" aria-label="打开导航" aria-controls="sidebar" aria-expanded="false" title="打开导航">
+      <svg class="ico" aria-hidden="true"><use href="#i-list"/></svg>
+    </button>
     <div class="brand">
       <img src="favicon.png" alt="" class="brand-logo-img" />
       <div class="brand-copy">
@@ -176,15 +180,16 @@
           </div>
         </div>
       </div>
-      <button id="btnParseAll" class="btn btn-primary"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>解析全部</button>
-      <button id="btnRefreshRanks" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-trophy"/></svg>更新期刊等级</button>
-      <button id="btnExport" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-export"/></svg>导出</button>
-      <button id="btnSettings" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>设置</button>
+      <button id="btnParseAll" class="btn btn-primary" aria-label="解析全部" title="解析全部"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>解析全部</button>
+      <button id="btnRefreshRanks" class="btn" aria-label="更新期刊等级" title="更新期刊等级"><svg class="ico" aria-hidden="true"><use href="#i-trophy"/></svg>更新期刊等级</button>
+      <button id="btnExport" class="btn" aria-label="导出" title="导出"><svg class="ico" aria-hidden="true"><use href="#i-export"/></svg>导出</button>
+      <button id="btnSettings" class="btn" aria-label="设置" title="设置"><svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg>设置</button>
     </div>
   </header>
 
   <!-- 工作区：应用侧边栏 + 主区 -->
   <div class="workbench">
+    <button type="button" class="sidebar-scrim" id="sidebarScrim" aria-label="关闭导航" tabindex="-1" hidden></button>
     <!-- 应用级侧边栏 -->
     <aside class="sidebar" id="sidebar">
       <!-- SVG 图标精灵：全部 1.5px 线宽、24 网格、currentColor 描边，
@@ -2318,5 +2323,6 @@
   <script src="knowledge-graph.js"></script>
   <script src="special-issue.js"></script>
   <script src="app.js"></script>
+  <script src="interface.js"></script>
 </body>
 </html>

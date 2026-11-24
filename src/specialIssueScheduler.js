@@ -33,6 +33,7 @@ export function createSpecialIssueScheduler(deps = {}) {
     purgeIssues = null,
     logger = () => {},
     now = () => new Date(),
+    isReady = (s) => !!s.wechat?.config?.historyUrl,
   } = deps;
 
   let dailyTimer = null;
@@ -55,6 +56,8 @@ export function createSpecialIssueScheduler(deps = {}) {
       lastRunAt,
       lastError,
       lastSyncAt: s.lastSyncAt || '',
+      ready: isReady(s),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
   };
 
@@ -67,8 +70,10 @@ export function createSpecialIssueScheduler(deps = {}) {
       const key = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
       const all = s.preferences?.scope === 'all';
       const ids = s.selectedJournalIds || [];
-      const snap = snapshot(all ? s.issues : s.issues.filter((i) => !i.journalId || ids.includes(i.journalId)), t);
-      const next = { ...s, topicHistory: { ...(s.topicHistory || {}), [key]: { counts: snap.counts || {}, scope: all ? 'all' : [...ids].sort().join(',') } } };
+      const issues = all ? s.issues : s.issues.filter(i => i.source === 'wechat' || i.custom || ids.includes(i.journalId));
+      const snap = snapshot(issues, t);
+      const scope = all ? 'all' : 'wechat,custom|' + [...ids].sort().join(',');
+      const next = { ...s, topicHistory: { ...(s.topicHistory || {}), [key]: { counts: snap.counts || {}, scope } } };
       saveState(next);
       logger(`[SI] 主题快照已记录（${reason}）`);
     } catch (e) {
@@ -97,8 +102,11 @@ export function createSpecialIssueScheduler(deps = {}) {
     try {
       const result = await runNow(reason);
       lastRunAt = now().toISOString();
-      if (result?.ok === false) lastError = result.error || '本次未获取到有效 SI，请查看抓取诊断';
-      else writeSnapshot(reason);
+      if (result?.ok === false || result?.failed?.length) {
+        lastError = String(result.error || result.failed?.map((f) => f.error).filter(Boolean).join('；') || '抓取未成功').slice(0, 300);
+        logger('[SI] 定时抓取失败或不完整：' + lastError);
+      }
+      if (result?.ok !== false) writeSnapshot(reason);
       return result || { ok: true };
     } catch (e) {
       lastError = String(e?.message || e).slice(0, 300);
@@ -111,6 +119,8 @@ export function createSpecialIssueScheduler(deps = {}) {
 
   function schedule() {
     if (dailyTimer) clearTimeout(dailyTimer);
+    dailyTimer = null;
+    if (!started) { nextRunAt = ''; return; }
     const s = getState() || {};
     if (s.preferences?.autoSync === false) { nextRunAt = ''; return; }
     const hour = Number.isFinite(Number(s.preferences?.syncHour)) ? Number(s.preferences.syncHour) : 8;
@@ -118,10 +128,32 @@ export function createSpecialIssueScheduler(deps = {}) {
     nextRunAt = target.toISOString();
     const delay = Math.max(1000, target.getTime() - now().getTime());
     dailyTimer = setTimeout(async () => {
-      if (started && getState()?.preferences?.autoSync !== false) await trigger('daily');
-      if (started) schedule();
+      const latest = getState() || {};
+      if (started && latest.preferences?.autoSync !== false && isReady(latest)) await trigger('daily');
+      schedule();
     }, delay);
     if (typeof dailyTimer.unref === 'function') dailyTimer.unref();
+  }
+
+  function scheduleCatchup() {
+    if (catchupTimer) clearTimeout(catchupTimer);
+    catchupTimer = null;
+    const s = getState() || {};
+    if (!started || s.preferences?.autoSync === false || !isReady(s)) return;
+    const last = Date.parse(s.lastSyncAt);
+    const expected = new Date(now());
+    expected.setHours(Number(s.preferences?.syncHour) || 0, 0, 0, 0);
+    if (expected > now()) expected.setDate(expected.getDate() - 1);
+    const pending = Object.values(s.wechat?.articles || {}).some(a => a.status !== 'processed');
+    const stale = !Number.isFinite(last) || now().getTime() - last > DAY || last < expected.getTime();
+    if (!s.wechat?.backfill?.completedAt || pending || stale) {
+      catchupTimer = setTimeout(() => {
+        catchupTimer = null;
+        const latest = getState() || {};
+        if (started && latest.preferences?.autoSync !== false && isReady(latest)) trigger('catchup').catch(() => {});
+      }, 45000);
+      if (typeof catchupTimer.unref === 'function') catchupTimer.unref();
+    }
   }
 
   function start() {
@@ -131,28 +163,14 @@ export function createSpecialIssueScheduler(deps = {}) {
     cleanupTimer = setInterval(cleanup, 60 * 60 * 1000);
     if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
     schedule();
-    const s = getState() || {};
-    if (s.preferences?.autoSync === false || !(s.selectedJournalIds || []).length) return status();
-    const stale = !s.lastSyncAt || (now().getTime() - Date.parse(s.lastSyncAt) > DAY);
-    if (stale) {
-      catchupTimer = setTimeout(() => {
-        catchupTimer = null;
-        const latest = getState() || {};
-        if (started && latest.preferences?.autoSync !== false && latest.selectedJournalIds?.length
-          && (!latest.lastSyncAt || now().getTime() - Date.parse(latest.lastSyncAt) > DAY)) trigger('catchup').catch(() => {});
-      }, 45000);
-      if (typeof catchupTimer.unref === 'function') catchupTimer.unref();
-    }
+    scheduleCatchup();
     return status();
   }
 
   function refresh() {
     if (!started) return status();
-    if (getState()?.preferences?.autoSync === false && catchupTimer) {
-      clearTimeout(catchupTimer);
-      catchupTimer = null;
-    }
     schedule();
+    scheduleCatchup();
     return status();
   }
 

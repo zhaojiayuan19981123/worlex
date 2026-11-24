@@ -7,6 +7,7 @@
 // 抓取的是出版社/期刊「征稿页」的公开列表信息，不抓全文、不绕登录。
 
 import crypto from 'node:crypto';
+import { normalizeWechat } from './specialIssueWechat.js';
 import { canonicalSourceUrl, cfpPageEvidence } from './specialIssueSourcePolicy.js';
 import { discoverJournalCfpPages, publisherCandidates, publisherPageError, mayFetchDetail, officialSiDetailCandidates } from './specialIssueParser.js';
 import { officialSiDetailEvidence } from './specialIssueSourcePolicy.js';
@@ -55,6 +56,7 @@ export function createSpecialIssueState(value = {}) {
   const prefs = v.preferences && typeof v.preferences === 'object' ? v.preferences : {};
   return {
     version: 1,
+    wechat: normalizeWechat(v.wechat),
     selectedJournalIds: [...new Set(ids.filter((id) => typeof id === 'string' && ABS_JOURNALS.some((j) => j.id === id)))],
     cfpOverrides: Object.fromEntries(Object.entries(overrides)
       .filter(([id, url]) => ABS_JOURNALS.some((j) => j.id === id) && typeof url === 'string'
@@ -65,7 +67,7 @@ export function createSpecialIssueState(value = {}) {
       .slice(0, 50)
       .map((s) => ({ id: str(s.id) || stableId([s.url, s.label]), label: clean(s.label) || '自定义征稿页', url: s.url.trim(), journalId: str(s.journalId || '') })),
     issues: Array.isArray(v.issues) ? v.issues.filter((i) => i && typeof i === 'object' && i.id) : [],
-    ranks: Object.fromEntries(Object.entries(ranks).filter(([, r]) => r && typeof r === 'object').slice(0, 300)),
+    ranks: Object.fromEntries(Object.entries(ranks).filter(([, r]) => r && typeof r === 'object')),
     translations: v.translations && typeof v.translations === 'object' ? v.translations : {},
     sync: Object.fromEntries(Object.entries(sync).filter(([key, s]) => s && typeof s === 'object'
       && key !== 'publisher:Wiley Online Library' && !isLegacyWileyCfpUrl(s.url))),
@@ -154,6 +156,18 @@ export function deadlineMeta(issue, now = new Date()) {
   if (days <= 30) return { date, days, label: `${days} 天后截止`, tone: 'urgent' };
   if (days <= 90) return { date, days, label: `${days} 天后截止`, tone: 'soon' };
   return { date, days, label: date, tone: 'normal' };
+}
+
+export function extractSubmissionDeadline(body, now = new Date()) {
+  const windows = [...str(body).matchAll(/submission\s+window\s*[:：]?\s*([^\n]{4,150})/gi)];
+  for (const window of windows) {
+    const dates = [...window[1].matchAll(/\b(?:20\d{2}-\d{1,2}-\d{1,2}|[a-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+20\d{2}|\d{1,2}(?:st|nd|rd|th)?\s+[a-z]{3,9},?\s+20\d{2})\b/gi)];
+    if (dates.length >= 2) {
+      const deadline = normalizeDeadline(dates.at(-1)[0], now);
+      if (deadline.date) return deadline;
+    }
+  }
+  return normalizeDeadline(body, now);
 }
 
 // ---------------- HTML / RSS 解析 ----------------
@@ -314,10 +328,14 @@ export function parseSpecialIssueDocument(text, opts = {}) {
     const key = url + '|' + title.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const dl = normalizeDeadline(c.text, now);
+    const dl = extractSubmissionDeadline(c.text, now);
     let description = body.replace(title, '').replace(/^[\s:：|·\-–—]+/, '').trim();
     if (description.length < 20) description = body;
-    const journalId = journal?.id || matchJournal(body + ' ' + title);
+    const exactJournal = c.journalNames?.length
+      ? ABS_JOURNALS.find((j) => c.journalNames.some((name) => name.toLowerCase() === j.title.toLowerCase()))?.id || ''
+      : matchJournal(body + ' ' + title);
+    const journalId = journal?.id || exactJournal;
+    if (Array.isArray(opts.journalIds) && !opts.journalIds.includes(journalId)) continue;
     const j = journalId ? journalById(journalId) : null;
     out.push({
       id: stableId([journalId || 'unknown', url, title]),
@@ -337,6 +355,7 @@ export function parseSpecialIssueDocument(text, opts = {}) {
       discoveredAt: now.toISOString(),
       updatedAt: now.toISOString(),
       source: isFeed ? 'rss' : 'html',
+      ...(c.detail ? { detailPage: true } : {}),
     });
     if (out.length >= Math.max(1, Math.min(200, rows))) break;
   }
@@ -448,17 +467,25 @@ function parsePlainTextContent(raw, { baseUrl = '', journal = null, now = new Da
 // ---------------- 合并 / 列表 ----------------
 export function mergeIssues(existing = [], incoming = []) {
   const map = new Map();
-  for (const old of existing) if (old?.id) map.set(old.id, { ...old });
+  const identities = new Map();
+  const identity = (i) => i?.journalId && i.url && !i.custom && i.source !== 'wechat' ? i.journalId + '|' + safeUrl(i.url, i.url) : '';
+  for (const old of existing) if (old?.id) {
+    map.set(old.id, { ...old });
+    if (identity(old)) identities.set(identity(old), old.id);
+  }
   for (const item of incoming) {
     if (!item?.id) continue;
-    const prev = map.get(item.id) || {};
-    map.set(item.id, {
+    const id = map.has(item.id) ? item.id : identities.get(identity(item)) || item.id;
+    const prev = map.get(id) || {};
+    map.set(id, {
       ...prev, ...item,
+      id,
       discoveredAt: prev.discoveredAt || item.discoveredAt,
       description: item.description || prev.description || '',
       deadline: item.deadline || prev.deadline || '',
       topics: item.topics?.length ? item.topics : (prev.topics || []),
     });
+    if (identity(item)) identities.set(identity(item), id);
   }
   return [...map.values()].sort((a, b) => {
     const da = /^\d{4}-/.test(a.deadline || '') ? a.deadline : '9999';
@@ -566,6 +593,7 @@ export function recommendIssues(issues, profile, opts = {}) {
   const { limit = 6, now = new Date(), dismissedIds = [], minScore = 30 } = opts;
   const dismissed = new Set(dismissedIds);
   return (Array.isArray(issues) ? issues : [])
+    .filter((i) => isActiveIssue(i, now))
     .filter((i) => !dismissed.has(i.id))
     .map((i) => ({ issue: i, relevance: scoreRelevance(i, profile, now), deadline: deadlineMeta(i, now) }))
     .filter((x) => x.relevance.score >= minScore && x.deadline.days !== null && x.deadline.days >= 0)
@@ -580,7 +608,7 @@ export function topicSnapshot(issues, now = new Date()) {
   const snap = {};
   for (const i of Array.isArray(issues) ? issues : []) {
     const dm = deadlineMeta(i, now);
-    if (dm.days === null || dm.days < 0) continue;
+    if (dm.days === null || dm.days < 0 || i.status === 'closed') continue;
     for (const t of new Set(i?.topics || [])) snap[t] = (snap[t] || 0) + 1;
   }
   return { at: today(now), counts: snap };
@@ -593,7 +621,7 @@ export function topicSnapshot(issues, now = new Date()) {
 export function computeHotTopics(issues, opts = {}) {
   const { history = {}, now = new Date(), limit = 12, journalIds = null } = opts;
   const list = (Array.isArray(issues) ? issues : []).filter((i) => (!journalIds || !i?.journalId || journalIds.includes(i.journalId))
-    && deadlineMeta(i, now).days !== null && deadlineMeta(i, now).days >= 0);
+    && isActiveIssue(i, now));
   const buckets = new Map();
   const cutoff = now.getTime() - 7 * DAY;
   for (const i of list) {
@@ -632,6 +660,11 @@ export function computeHotTopics(issues, opts = {}) {
 }
 
 // ---------------- 列表筛选 ----------------
+export function isActiveIssue(issue, now = new Date()) {
+  const dm = deadlineMeta(issue, now);
+  return dm.days !== null && dm.days >= 0 && issue?.status !== 'closed';
+}
+
 export function listIssues(state, opts = {}) {
   const s = createSpecialIssueState(state);
   const { query = '', journalIds = null, topic = '', sort = 'deadline', now = new Date(), profile = null, recommendOnly = false, favoriteOnly = false, limit = 400 } = opts;
@@ -641,12 +674,22 @@ export function listIssues(state, opts = {}) {
   let items = s.issues.filter((i) => {
     // 只展示未截止的 SI；过期项由 purgeExpiredIssues 从磁盘清除，这里是双保险
     const dm = deadlineMeta(i, now);
-    if (dm.days === null || dm.days < 0) return false;
+    if (i.source === 'wechat') {
+      const expired = (dm.days !== null && dm.days < 0) || i.status === 'closed';
+      if (opts.status === 'expired' && !expired) return false;
+      if (opts.status === 'review' && !i.needsReview) return false;
+      if (!['all', 'expired', 'review'].includes(opts.status) && expired) return false;
+    } else if (!isActiveIssue(i, now)) return false;
     if (favoriteOnly && !favorites.has(i.id)) return false;
-    if (selected && i.journalId && !selected.has(i.journalId)) return false;
+    if (selected && !i.custom && i.source !== 'wechat' && i.journalId && !selected.has(i.journalId)) return false;
+    if (opts.journal && i.journalId !== opts.journal) return false;
+    if (opts.rankSystem) {
+      const rank = s.ranks[i.journalId];
+      if (opts.rankSystem === 'pending' ? !!rank?.queriedAt : !rank?.items?.some(r => r.label === opts.rankSystem && (!opts.rankValue || r.value === opts.rankValue))) return false;
+    }
     if (topic && !(i.topics || []).includes(topic)) return false;
     const tr = s.translations[i.id] || {};
-    if (q && !clean([i.title, i.description, tr.title, tr.description, i.journal, i.publisher, i.deadline, i.deadlineText, (i.topics || []).join(' '), (i.keywords || []).join(' ')].join(' ')).toLowerCase().includes(q)) return false;
+    if (q && !clean([i.title, i.titleOriginal, i.description, tr.title, tr.description, i.journal, i.publisher, i.deadline, i.deadlineText, (i.topics || []).join(' '), (i.keywords || []).join(' ')].join(' ')).toLowerCase().includes(q)) return false;
     return true;
   });
   items = items.map((i) => ({ ...i, deadline: deadlineMeta(i, now), relevance: profile ? scoreRelevance(i, profile, now) : { score: 0, matched: [] } }));
@@ -1049,6 +1092,7 @@ export function purgeExpiredIssues(stateInput, opts = {}) {
   const state = createSpecialIssueState(stateInput);
   const now = opts.now || new Date();
   const expired = new Set(state.issues.filter((i) => {
+    if (i.source === 'wechat') return false;
     const dm = deadlineMeta(i, now);
     return dm.days !== null && dm.days < 0;
   }).map((i) => i.id));
@@ -1065,7 +1109,7 @@ export function purgeExpiredIssues(stateInput, opts = {}) {
 export function specialIssueSummary(state, opts = {}) {
   const s = createSpecialIssueState(state);
   const now = opts.now || new Date();
-  const issues = s.issues;
+  const issues = s.issues.filter((i) => isActiveIssue(i, now));
   let expiringSoon = 0;
   let active = 0;
   for (const i of issues) {
@@ -1075,6 +1119,7 @@ export function specialIssueSummary(state, opts = {}) {
   }
   return {
     total: issues.length, active, pending: issues.length - active, expiringSoon,
+    pendingDeadline: s.issues.filter((i) => !i.deadline).length,
     subscribed: s.selectedJournalIds.length,
     catalogSize: ABS_JOURNALS.length,
     ranked: Object.keys(s.ranks).length,
