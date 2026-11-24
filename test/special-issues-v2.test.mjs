@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 
 import {
   parseFeed, canonicalArticleUrl, extractArticleUrls, articleIdOf, normalizeSource,
-  parseAnyDate, fetchSourceArticles,
+  parseAnyDate, fetchSourceArticles, SOURCE_TYPES,
 } from '../src/siSources.js';
 import {
   htmlToArticleText, extractContentHtml, wechatPageError, extractPublishDate, fetchWechatArticle,
@@ -17,6 +17,7 @@ import {
 import {
   createSpecialIssueState, listIssues, deadlineMeta, rankLevelKey, stableIssueId,
   purgeExpiredIssues, toggleFavorite, setPreferences, specialIssueSummary, topicCounts, buildIssue,
+  mergeArticles,
 } from '../src/specialIssues.js';
 import { collectArticles, processArticles, enrichRanks } from '../src/siPipeline.js';
 
@@ -102,6 +103,89 @@ test('RSS 源拉取：回溯窗口按时过滤', async () => {
   assert.equal(articles.length, 1);
   assert.equal(articles[0].title, '新文章');
   assert.equal(articles[0].sourceName, 't');
+});
+
+// wechat-mp-tools 这类自建服务的 RSS：<link> 指向它自己的离线预览文件，
+// 原文地址在 <guid>，正文落在 content:encoded。三个都得接对，否则卡片跳转和抽取都会出错。
+const FEED_WITH_FULLTEXT = `<rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>
+  <item>
+    <title>Omega 专刊征稿</title>
+    <link>http://127.0.0.1:5200/api/articles/serve-file/a/b/c.html</link>
+    <guid isPermaLink="false">https://mp.weixin.qq.com/s?__biz=MzU5&amp;mid=1&amp;idx=1&amp;sn=full01&amp;chksm=abc</guid>
+    <pubDate>2026-11-20</pubDate>
+    <description>本期聚焦供应链数字化</description>
+    <content:encoded><![CDATA[<div id="js_content"><p>期刊：Omega</p><p>专刊主题：供应链数字化</p><p>投稿系统：<a href="https://submit.elsevier.com/OMEGA">Editorial Manager</a></p><p>截稿日期：2027年3月31日</p></div>]]></content:encoded>
+  </item>
+</channel></rss>`;
+
+test('RSS 全文源：正文取 content:encoded，原文链接取 guid 而不是离线预览地址', async () => {
+  const items = parseFeed(FEED_WITH_FULLTEXT);
+  assert.equal(items.length, 1);
+  assert.match(items[0].url, /mp\.weixin\.qq\.com\/s\?/, '原文链接必须指向公众号，不能是服务自己的预览地址');
+  assert.match(items[0].url, /sn=full01/);
+  assert.match(items[0].content, /期刊：Omega/, 'content:encoded 全文要留下来');
+  assert.match(items[0].content, /submit\.elsevier\.com/, '正文里的投稿链接必须保留');
+  assert.equal(items[0].digest, '本期聚焦供应链数字化', '摘要仍取 description');
+
+  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => FEED_WITH_FULLTEXT });
+  const { articles } = await fetchSourceArticles(
+    { type: 'rss', name: 'wechat-mp-tools', target: 'https://feed.test/rss', backfillDays: 90 },
+    { fetchImpl, now: NOW, backfillDays: 90 },
+  );
+  assert.equal(articles.length, 1);
+  assert.equal(articles[0].contentKind, 'feed');
+  assert.match(articles[0].content, /供应链数字化/);
+});
+
+test('RSS 无全文时回落为需要抓正文', () => {
+  const plain = `<rss><channel><item><title>只有标题</title>
+    <link>https://mp.weixin.qq.com/s/plain01</link><pubDate>2026-11-20</pubDate></item></channel></rss>`;
+  const items = parseFeed(plain);
+  assert.equal(items[0].content, '');
+});
+
+test('管线：订阅源自带全文时不再请求正文页', async () => {
+  const requested = [];
+  const fetchImpl = async (url) => {
+    requested.push(String(url));
+    return { ok: true, status: 200, text: async () => FEED_WITH_FULLTEXT };
+  };
+  let state = createSpecialIssueState({
+    sources: [{ type: 'rss', name: 'wechat-mp-tools', target: 'https://feed.test/rss', backfillDays: 90 }],
+  });
+  state = (await collectArticles(state, { fetchImpl, now: NOW })).state;
+  const extract = async (text, ctx) => {
+    assert.match(text, /投稿系统/, '交给模型的是订阅源里的正文');
+    assert.equal(ctx.articleUrl.includes('mp.weixin.qq.com'), true, '上下文里要带公众号原文地址');
+    return {
+      issues: [{ journal: 'Omega', titleZh: '供应链数字化', deadline: '2027-03-31', extractedBy: 'ai' }],
+      notCfp: false,
+    };
+  };
+  const p = await processArticles(state, { fetchImpl, extract, now: NOW, limit: 10 });
+  assert.equal(p.stats.processed, 1);
+  assert.equal(p.state.issues.length, 1);
+  // 关键：只请求过订阅地址一次，没有再去抓 mp.weixin.qq.com
+  assert.equal(requested.filter((u) => u.includes('mp.weixin.qq.com')).length, 0);
+  assert.equal(p.state.articles[0].content, '', '抽取完成后要清掉全文，避免状态文件膨胀');
+});
+
+test('合并：已抽取的文章不再回填订阅源全文', () => {
+  const merged = mergeArticles(
+    [{ id: 'a1', status: 'extracted', content: '' }],
+    [{ id: 'a1', status: 'pending', content: '<p>又抓了一遍全文</p>' }],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].content, '');
+  // 还没处理的文章要拿到全文
+  const fresh = mergeArticles([{ id: 'a2', status: 'pending', content: '' }], [{ id: 'a2', content: '<p>新全文</p>' }]);
+  assert.equal(fresh[0].content, '<p>新全文</p>');
+});
+
+test('源类型：只保留 rss / folder / links / json', () => {
+  assert.deepEqual(SOURCE_TYPES.map((t) => t.type), ['rss', 'folder', 'links', 'json']);
+  // 微信读书源拿不到历史列表（官方列表接口已废弃，只能取最新一篇），不提供给用户选
+  assert.equal(normalizeSource({ type: 'weread', target: 'MP_WXS_123', cookie: 'wr_vid=1' }), null);
 });
 
 // ---------------- 正文 ----------------

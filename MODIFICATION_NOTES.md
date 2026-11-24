@@ -1,7 +1,34 @@
+## v2.3.1：RSS 源直接消费 wechat-mp-tools，正文取订阅源全文（2026-11-25）
+
+### 背景
+v2.3.0 把「列表从哪来」交给文章源，但推荐的 RSS 一栏仍指向收费的 wechat2rss。核对同类开源项目现状后确认可以做免费的：
+
+| 项目 | 结论 |
+| --- | --- |
+| `cooderl/wewe-rss` | **已归档**（2026-03 停更，274 个 issue 无人处理），且强依赖作者的第三方中转 `weread.111965.xyz`——实测该域名现返回 **502**，备用域名 `weread.965111.xyz` 完全连不上 |
+| `rachelos/we-mp-rss` | 仓库仍活跃（5244 star，3 天前有提交），但**采集功能已失效**：issue #465 起 10+ 用户反馈「授权成功、列表为空」，开发者未回应；issue #476 中用户指出微信已关闭对应接口。另有 issue #479 记录的**免认证 RSS 模板 `eval()` 远程代码执行**，公网部署的实例被植入 XMRig（有 IP、矿池地址与文件哈希证据链）；issue #485 至今 open。其 `weread_mp` 模式的文档自述「只能取最新一篇，无法回补历史」，不满足首次回溯需求 |
+| `x554960766/wechat-mp-tools` | **可用**：用 Playwright 驱动真实 Chromium 操作公众号后台页面，不硬调已被关闭的接口，因此未被波及。支持按时间范围全量抓取，输出标准 RSS 2.0，代码中无 `eval`/`exec` |
+
+### 改动
+| 文件 | 改动 |
+| --- | --- |
+| `src/siSources.js` | `parseFeed` 解析 `content:encoded` 全文（上限 12 万字符）与 `<guid>`；原 `<link>` 指向服务自己的离线预览文件时改用 `<guid>`，保证卡片「原文」跳公众号；`fetchRss` 按有无全文给出 `contentKind: 'feed' / 'url'`；`fetchSourceArticles` 透传 `content`；移除只加了壳的 `weread` 源类型（无抓取实现，选中会抛「不支持的文章源类型」，且文案「可翻页取历史」与微信读书现状不符） |
+| `src/siPipeline.js` | `extractOne` 优先用文章自带全文（经 `htmlToArticleText` 转文本，保留正文里的投稿链接），跳过正文抓取 |
+| `src/specialIssues.js` | 状态规范化白名单补 `content`，`contentKind` 承认 `'feed'`——此前白名单会静默丢掉全文，这是「采集成功但 content 为 0」的根因；`mergeArticles` 对已抽取/已跳过的文章不回填全文，避免每次采集把几十篇全文重新塞进状态 |
+| `src/siExtract.js` | 规则抽取三处修正：`trimJournalTail` 去掉全角括号内的收录说明（`（SSCI/SCIE双收录）`）；`STOP_RE` 补 `投稿开(?:放|始)(?:日期)?`，修客座编辑粘连下一行；摘要支持「期刊介绍：…」同行的写法 |
+| `docs/SI_WECHAT_PIPELINE.md` | 新增 3.1 节：wechat-mp-tools 的 Docker 启动、扫码、取订阅地址与注意事项 |
+| `README.md` / `.github/release-body.md` | 同步 v2.3.1 说明；更正「we-mp-rss/wewe-rss 均已停更」的表述为各自的确切状态 |
+
+### 验证
+- SI 单测 33/33（新增 5 条：全文源解析、无全文回落、管线跳过正文抓取、合并不回填、源类型收敛）。
+- 端到端：用按其输出格式构造的 RSS（`<link>` 指向离线预览、原文在 `<guid>`、正文在 `content:encoded`）起本地服务，真实应用跑「采集 → 抽取 → 出卡」。**文章链接故意指向不存在的微信地址**——卡片仍正常生成，且订阅服务日志中没有任何预览/正文请求，证明走的是全文而非抓正文。
+- Playwright 真浏览器 11/11：卡片字段、原文链接指向公众号、关键词筛选、面板源列表、无 JS 报错。
+- 未验证：真实 wechat-mp-tools 实例（需本机扫码，涉及账号凭据）。
+
 ## v2.3.0：SI 征稿重做——改为公众号文章驱动（2026-11-24）
 
 ### 背景
-旧方案逐刊访问出版社官网抓征稿页，两条路都已封死：出版社站点普遍有 Cloudflare / Akamai 站点级反爬（服务端直连超时、挂代理 403）；微信 2026-07-30 下线公众号后台 `searchbiz` / `appmsgpublish` 接口族，能批量列出历史文章的工具（wechat-article-exporter、we-mp-rss、wewe-rss）全部停更。保留的可用通道只有一条：**单篇公众号正文仍可免登录抓取**（须带 `chksm` 等完整参数 + 桌面 UA）。
+旧方案逐刊访问出版社官网抓征稿页，两条路都已封死：出版社站点普遍有 Cloudflare / Akamai 站点级反爬（服务端直连超时、挂代理 403）；微信 2026-07-30 下线公众号后台 `searchbiz` / `appmsgpublish` 接口族，能批量列出历史文章的工具（wechat-article-exporter、we-mp-rss、wewe-rss）相继失效（各自的确切状态见 v2.3.1 节更正）。保留的可用通道只有一条：**单篇公众号正文仍可免登录抓取**（须带 `chksm` 等完整参数 + 桌面 UA）。
 
 > **与远端 v2.2.6 的关系**：远端 `0465942`（v2.2.6）已先做过一版公众号接入，它依赖微信会话链接（`profile_ext`）加 Cookie / `appmsg_token` 分页拉历史列表，自身提交信息也标注「真实公众号采集尚未完成验收」。该方案的凭据会过期、且无法脱离登录态，本版本不采用。v2.3.0 以 v2.2.5 为基线独立重做 SI，再 merge `0465942`：**SI 数据与视图全部取 v2.3.0 版本**，v2.2.6 的 `src/specialIssueSources.js`、`src/specialIssueWechat.js` 及其两个测试删除；**保留** v2.2.6 与 SI 无关的界面层 `public/interface.js` / `public/interface.css`（侧栏抽屉、无障碍、响应式）与 `server.js` 的备份互斥 / 调度刷新接线（`isBusy()` 由本版本在路由中补齐）。
 

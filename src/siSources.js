@@ -26,7 +26,7 @@ export const SOURCE_TYPES = [
   {
     type: 'rss',
     label: 'RSS 订阅地址',
-    hint: '把公众号转成 RSS 的服务（如取阅、wechat2rss、自建 WeRSS）。粘贴该公众号的订阅地址即可，每日自动拉取。',
+    hint: '粘贴公众号的 RSS 订阅地址，每日自动拉取。可接自建的 wechat-mp-tools（免费、可回溯历史，订阅地址形如 http://127.0.0.1:5200/api/articles/rss，需扫码登录一次），也可用收费的 wechat2rss。如果订阅源自带全文，会直接用它抽取，不再重复抓正文。',
     recommended: true,
   },
   {
@@ -204,6 +204,9 @@ function ymd(d) {
 
 // ---------------- RSS / Atom ----------------
 
+/** RSS 自带全文的长度上限，和抓正文的上限保持同一量级，避免状态文件被撑爆。 */
+const MAX_FEED_CONTENT = 120000;
+
 function decodeEntities(s) {
   return str(s)
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
@@ -245,14 +248,28 @@ export function parseFeed(xmlText) {
       const href = /<link\b[^>]*href\s*=\s*'([^']+)'/i.exec(frag);
       link = decodeEntities(href?.[1] || '');
     }
+    // 有些自建服务（如 wechat-mp-tools）的 <link> 指向它自己的离线预览文件，
+    // 真正的公众号原文地址在 <guid> 里。卡片「原文」必须跳微信，所以这里让微信链接优先。
+    const guid = tagValue(frag, 'guid');
+    if (isWechatArticleUrl(guid)) link = guid;
+    else if (!link && /^https?:\/\//i.test(guid)) link = guid;
     const publishedAt = parseAnyDate(
       tagValue(frag, 'pubDate') || tagValue(frag, 'published') || tagValue(frag, 'updated') || tagValue(frag, 'dc:date'),
     );
     const digest = stripHtml(
-      tagValue(frag, 'description') || tagValue(frag, 'summary') || tagValue(frag, 'content:encoded') || tagValue(frag, 'content'),
+      tagValue(frag, 'description') || tagValue(frag, 'summary'),
     ).slice(0, 600);
+    // 订阅源若已带全文（wechat-mp-tools 的 content:encoded 默认输出全文），
+    // 就存下来直接用于抽取，不必再去请求一次正文页——少一次网络请求就少一次被风控的机会。
+    const content = (tagValue(frag, 'content:encoded') || tagValue(frag, 'content')).slice(0, MAX_FEED_CONTENT);
     if (!title && !link) continue;
-    out.push({ url: link.trim(), title, publishedAt, digest });
+    out.push({
+      url: link.trim(),
+      title,
+      publishedAt,
+      digest: digest || stripHtml(content).slice(0, 600),
+      content,
+    });
   }
   return out;
 }
@@ -314,7 +331,7 @@ async function fetchRss(source, { fetchImpl, timeoutMs }) {
     if (/<html/i.test(text.slice(0, 500))) throw new Error('返回的是网页而不是 RSS，请确认填的是订阅地址');
     throw new Error('RSS 里没有解析到文章条目，可能格式不受支持或该号近期没有更新');
   }
-  return items.map((i) => ({ ...i, contentKind: 'url' }));
+  return items.map((i) => ({ ...i, contentKind: i.content ? 'feed' : 'url' }));
 }
 
 async function fetchJson(source, { fetchImpl, timeoutMs }) {
@@ -450,6 +467,8 @@ export async function fetchSourceArticles(sourceInput, opts = {}) {
       publishedAt: item.publishedAt || '',
       digest: clean(item.digest).slice(0, 600),
       contentKind: item.contentKind || 'url',
+      // 订阅源自带的全文（有就用，抽取时不再请求正文页），抽取完成后会被清空以控制状态体积
+      content: str(item.content).slice(0, MAX_FEED_CONTENT),
       sourceId: source.id,
       sourceName: source.name,
     });

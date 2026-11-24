@@ -9,7 +9,7 @@
 // 网络、模型、等级查询全部由调用方注入，本文件不发请求、不写磁盘。
 
 import { fetchSourceArticles, isOneShotSource, canonicalArticleUrl } from './siSources.js';
-import { fetchWechatArticle, readLocalArticle } from './wechatArticle.js';
+import { fetchWechatArticle, readLocalArticle, htmlToArticleText } from './wechatArticle.js';
 import { buildIssue, mergeIssues, mergeArticles, deadlineMeta } from './specialIssues.js';
 import { formatRank as defaultFormatRank } from './easyscholar.js';
 
@@ -103,12 +103,22 @@ async function extractOne(state, article, opts) {
     fetchImpl, extract, now, timeoutMs,
   } = opts;
   let content;
-  try {
-    content = article.localPath
-      ? await readLocalArticle(article.localPath, { maxChars: 16000 })
-      : await fetchWechatArticle(article.url, { fetchImpl, timeoutMs });
-  } catch (e) {
-    return { ok: false, error: clean(e?.message || e) };
+  // 订阅源已带全文时直接用，不再请求正文页：省一次往返，也少一次被微信风控拦下的机会
+  if (article.content && str(article.content).length >= 60) {
+    content = {
+      url: article.url || '',
+      title: article.title || '',
+      publishedAt: article.publishedAt || '',
+      text: htmlToArticleText(article.content, { maxChars: 16000 }),
+    };
+  } else {
+    try {
+      content = article.localPath
+        ? await readLocalArticle(article.localPath, { maxChars: 16000 })
+        : await fetchWechatArticle(article.url, { fetchImpl, timeoutMs });
+    } catch (e) {
+      return { ok: false, error: clean(e?.message || e) };
+    }
   }
   const text = str(content?.text);
   if (text.length < 60) return { ok: false, error: '正文过短，无法抽取' };
@@ -219,6 +229,7 @@ export async function processArticles(stateInput, opts = {}) {
           lastError: '',
           extractedAt: nowIso(now),
           contentChars: res.contentChars,
+          content: '',
         });
         continue;
       }
@@ -234,6 +245,8 @@ export async function processArticles(stateInput, opts = {}) {
         lastError: '',
         extractedAt: nowIso(now),
         contentChars: res.contentChars,
+        // 抽完就丢掉原文，状态文件不必背着几十篇全文；失败时保留，方便下次直接重试
+        content: '',
       });
     }
   }

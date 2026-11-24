@@ -48,12 +48,36 @@ state.ranks + issue.rank    中科院分区 / 新锐分区 / ABS / UTD24 / SSCI 
 
 | 类型 | 说明 | 适用 |
 | --- | --- | --- |
-| `rss` | 第三方把公众号转成 RSS（取阅、wechat2rss、自建 WeRSS），粘贴订阅地址 | 最省心，推荐 |
-| `folder` | 本地导出目录（wechatDownload 等工具导出 md/html/txt/json），深度 3、最多 3000 个文件 | 不依赖任何接口，永不失效 |
+| `rss` | 第三方或自建服务把公众号转成 RSS，粘贴订阅地址。**自建推荐 wechat-mp-tools**（免费、可回溯历史，见下节） | 最省心，推荐 |
+| `folder` | 本地导出目录（wechatDownload、MPider 等工具导出 md/html/txt/json），深度 3、最多 3000 个文件 | 不依赖任何接口，永不失效 |
 | `links` | 直接粘贴文章链接，一行一个 | 补录、验证、兜底 |
 | `json` | 自建桥接接口，返回 `[{url,title,publishedAt}]` 或 `{items:[...]}` | 接本机脚本 / MCP |
 
 源的配置项：`type`、`name`、`target`（地址或目录）、`enabled`、`backfillDays`。同一时刻最多 20 个源，单个源失败只写自己的 `lastError`，界面在「诊断」里显示。
+
+### 3.1 用 wechat-mp-tools 自建免费订阅源（推荐）
+
+wechat2rss 这类托管服务要收费，可以自己跑一个。选择 wechat-mp-tools 的原因是它用 Playwright 驱动真实 Chromium 操作公众号后台页面，而不是硬调微信接口——2026-07-30 微信关闭的是后者，所以同类项目（we-mp-rss、wewe-rss）的采集功能都废了，它还在更新。
+
+```bash
+# 本机或 NAS 上跑（只要公众号 + RSS 的轻量版）
+docker run -d --name wechat-mp-tools --restart unless-stopped \
+  -p 5200:5200 -v $(pwd)/data:/app/data \
+  -e TZ=Asia/Shanghai -e BIND_ADDR=127.0.0.1 \
+  ghcr.io/x554960766/wechat-mp-tools:latest
+```
+
+装好后：
+
+1. 打开 `http://127.0.0.1:5200`，在「账号池」扫码登录一个微信号（建议用小号，有封号风险；不要勾选 24 小时自动退出）。
+2. 添加「SSCI征稿」这个公众号，按时间范围触发一次采集，把近 3 个月的文章拉下来。
+3. 复制该号的 RSS 地址，形如 `http://127.0.0.1:5200/api/articles/rss/...`；如果设置了 `RSS_TOKEN`，要在地址后加 `?token=你的密钥`。
+4. 在 worlex 的「专刊征稿 → 设置 → 文章源」里选「RSS 订阅地址」，粘贴上面这个地址，回溯天数填 90。
+
+**为什么不需要再抓正文**：它的 RSS 默认带 `content:encoded` 全文（`full=1`，上限 30 万字符）。worlex 解析时会把这段全文存进文章记录（`contentKind: 'feed'`），抽取阶段直接用它，不再请求一次正文页——少一次往返，也少一次被微信风控的机会。若在 wechat-mp-tools 里关掉了全文输出，worlex 会自动回落到抓正文。
+
+注意它的 `<link>` 指向自己的离线预览文件，真正的公众号原文地址在 `<guid>` 里。worlex 解析时优先取 `<guid>`，所以卡片上的「原文」按钮仍然跳微信，不会跳到本地服务。
+
 
 ## 4. 文件与职责
 

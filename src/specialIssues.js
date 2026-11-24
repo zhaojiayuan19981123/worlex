@@ -59,7 +59,9 @@ export function createSpecialIssueState(value = {}) {
       title: clean(a.title).slice(0, 200),
       publishedAt: str(a.publishedAt),
       digest: clean(a.digest).slice(0, 600),
-      contentKind: a.contentKind === 'file' ? 'file' : 'url',
+      // feed = 订阅源里直接带了全文（如 wechat-mp-tools 的 content:encoded），抽取时不必再抓正文
+      contentKind: a.contentKind === 'file' || a.contentKind === 'feed' ? a.contentKind : 'url',
+      content: str(a.content).slice(0, 120000),
       sourceId: str(a.sourceId),
       sourceName: clean(a.sourceName).slice(0, 60),
       status: ['pending', 'extracted', 'skipped', 'failed'].includes(a.status) ? a.status : 'pending',
@@ -252,7 +254,16 @@ export function mergeArticles(existing = [], incoming = []) {
   for (const item of incoming) {
     if (!item?.id) continue;
     const prev = map.get(item.id);
-    map.set(item.id, prev ? { ...prev, ...item, fetchedAt: prev.fetchedAt || item.fetchedAt } : item);
+    if (!prev) { map.set(item.id, item); continue; }
+    const done = prev.status === 'extracted' || prev.status === 'skipped';
+    map.set(item.id, {
+      ...prev,
+      ...item,
+      fetchedAt: prev.fetchedAt || item.fetchedAt,
+      // 已处理完的文章不再回填订阅源全文：否则每次采集都会把几十篇全文重新塞进状态文件，
+      // 而这些文章已经有卡片了，正文没有再用到的场合。
+      content: done ? '' : (item.content || prev.content || ''),
+    });
   }
   return [...map.values()];
 }
