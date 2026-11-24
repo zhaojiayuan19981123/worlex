@@ -82,6 +82,10 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     runtime.message = message || '';
   };
 
+  // 供外部（如备份恢复）判断是否有写在跑：抓取、阶段任务期间都不应替换数据文件。
+  let activeOps = 0;
+  const isBusy = () => runtime.running || !!syncPromise || activeOps > 0;
+
   // ---------- 抽取器：模型优先，失败退规则 ----------
   function buildExtractor() {
     const am = resolveRequestModel('');
@@ -383,6 +387,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   app.post('/api/special-issues/step', async (req, res) => {
     const step = clean(req.body?.step);
     const state = readState();
+    activeOps++;
     try {
       if (step === 'extract') {
         const extractor = buildExtractor();
@@ -418,6 +423,8 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       return res.status(400).json({ error: '未知的步骤：' + step });
     } catch (e) {
       res.status(502).json({ error: clean(e?.message || e) || '执行失败' });
+    } finally {
+      activeOps = Math.max(0, activeOps - 1);
     }
   });
 
@@ -549,5 +556,5 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     res.json({ ...payload(), removed });
   });
 
-  return { scheduler, runSync, payload };
+  return { scheduler, runSync, payload, isBusy };
 }

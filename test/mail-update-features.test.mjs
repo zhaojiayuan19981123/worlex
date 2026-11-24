@@ -32,7 +32,8 @@ test('更新检查结果包含发布说明字段并在 Release 中列出变更',
   assert.match(workflow, /generate_release_notes:\s*false/);
   assert.doesNotMatch(workflow, /generate_release_notes:\s*true/, '不得再打开自动生成发布说明');
   assert.match(releaseBody, /## 安装包说明/);
-  assert.match(releaseBody, /本版本主要更新（v1\.\d+\.\d+）/);
+  const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(releaseBody.includes(`本版本主要更新（v${version}）`));
   assert.match(releaseBody, /Windows 客户端自动更新还需要本 Release 中的同名 `\.blockmap` 和 `latest\.yml`/);
 });
 

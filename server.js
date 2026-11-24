@@ -4554,8 +4554,10 @@ export function createApp({
   app.post('/api/backup/restore', (req, res) => {
     const name = String(req.body?.name || '');
     if (!name) return res.status(400).json({ error: '请指定要恢复的备份' });
+    if (specialIssueService.isBusy()) return res.status(409).json({ error: 'SI 抓取、期刊等级查询或翻译正在进行，请等待完成后再恢复备份' });
     try {
       const n = store.restoreBackup(name);
+      specialIssueService.scheduler.refresh();
       res.json({ ok: true, restored: n, message: `已从备份恢复 ${n} 个数据文件，建议重启应用以完全生效` });
     } catch (e) {
       res.status(400).json({ error: e.message });
@@ -5213,6 +5215,7 @@ export function createApp({
     s.activeProfileId = id;
     s.aiProvider = s.modelProfiles.find((p) => p.id === id).provider;
     const saved = store.saveSettings(s);
+    specialIssueService.scheduler.refresh();
     const active = catalog.resolveActive(saved);
     res.json({ activeProfileId: saved.activeProfileId, active: active ? { id: active.id, label: active.label, provider: active.provider, providerName: active.providerName, model: active.model, vision: active.vision } : null });
   });
@@ -5332,6 +5335,9 @@ export function createApp({
       next.localGateway = localGateway.normalizeGatewayConfig(next.localGateway);
     }
     const saved = store.saveSettings(next);
+    if (['aiEnabled', 'modelProfiles', 'activeProfileId', 'aiProvider'].some(key => Object.prototype.hasOwnProperty.call(body, key))) {
+      specialIssueService.scheduler.refresh();
+    }
     if (Object.prototype.hasOwnProperty.call(body, 'modelRouter')) {
       modelRouter.applyRouterConfig(routerState, modelRouter.readRouterConfig(saved));
     }

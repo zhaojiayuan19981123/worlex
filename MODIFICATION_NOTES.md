@@ -3,6 +3,8 @@
 ### 背景
 旧方案逐刊访问出版社官网抓征稿页，两条路都已封死：出版社站点普遍有 Cloudflare / Akamai 站点级反爬（服务端直连超时、挂代理 403）；微信 2026-07-30 下线公众号后台 `searchbiz` / `appmsgpublish` 接口族，能批量列出历史文章的工具（wechat-article-exporter、we-mp-rss、wewe-rss）全部停更。保留的可用通道只有一条：**单篇公众号正文仍可免登录抓取**（须带 `chksm` 等完整参数 + 桌面 UA）。
 
+> **与远端 v2.2.6 的关系**：远端 `0465942`（v2.2.6）已先做过一版公众号接入，它依赖微信会话链接（`profile_ext`）加 Cookie / `appmsg_token` 分页拉历史列表，自身提交信息也标注「真实公众号采集尚未完成验收」。该方案的凭据会过期、且无法脱离登录态，本版本不采用。v2.3.0 以 v2.2.5 为基线独立重做 SI，再 merge `0465942`：**SI 数据与视图全部取 v2.3.0 版本**，v2.2.6 的 `src/specialIssueSources.js`、`src/specialIssueWechat.js` 及其两个测试删除；**保留** v2.2.6 与 SI 无关的界面层 `public/interface.js` / `public/interface.css`（侧栏抽屉、无障碍、响应式）与 `server.js` 的备份互斥 / 调度刷新接线（`isBusy()` 由本版本在路由中补齐）。
+
 ### 新的处理流程
 `文章源 → 采集 → 抓正文 → 大模型抽取译中 → EasyScholar 查等级 → 卡片 + 筛选`。首次按 90 天回溯，之后每日 09:00 增量。
 
@@ -27,10 +29,12 @@
 | `src/specialIssueRoutes.js` | 重写，路由清单见文档；同步改为后台任务 + `/status` 轮询 |
 | `src/store.js` | `getSpecialIssues()` 默认值改为 v2 结构 |
 | `public/special-issue.js` / `.css` | 重写，卡片 + 筛选 + 侧滑面板 |
-| 删除 | `src/specialIssueCatalog.js`、`specialIssueParser.js`、`specialIssueSourcePolicy.js`、`specialIssueSourceAudit.json` 及三个旧测试文件、`docs/SI_REPAIR.md`、`docs/SI_LINK_VERIFICATION.md`（下文历史记录中的链接已失效） |
+| `public/interface.js` / `.css` | 保留（来自 v2.2.6），通用侧栏抽屉、焦点管理与响应式，与各视图数据逻辑无关 |
+| `server.js` | 保留 v2.2.6 接线：备份恢复前用 `isBusy()` 互斥、设置变更后 `scheduler.refresh()`；`isBusy()` 由路由新增导出 |
+| 删除 | `src/specialIssueCatalog.js`、`specialIssueParser.js`、`specialIssueSourcePolicy.js`、`specialIssueSourceAudit.json`、`src/specialIssueSources.js`、`src/specialIssueWechat.js` 及旧测试（3 个 v1 + 2 个 v2.2.6）、`docs/SI_REPAIR.md`、`docs/SI_LINK_VERIFICATION.md`、3 个引用已删模块的 `scripts/*-si-*.mjs`（下文历史记录中的链接已失效） |
 
 ### 验证
-- `node --test`：859 项，858 通过；唯一失败为 `pdf-crash-guard.test.mjs` 在并行负载下 60s 超时（单独运行 2/2 通过），与本轮改动无关。
+- `node --test`：859 项全通过、0 失败。注：本机 default 并行跑全量时，PDF 相关用例会因文件句柄/临时目录抖动卡住或超时，逐文件串行执行可稳定通过；另需把 `TEMP/TMP/TMPDIR` 指向可写目录（默认 `C:\WINDOWS\temp` 不可写会让 `mkdtemp` 报 EPERM）。均属环境问题，与本轮改动无关。
 - `test/special-issues-v2.test.mjs`：28 项全通过。
 - 浏览器端到端（Playwright）：视图切换、卡片字段、主题/关键词/等级筛选、排序、展开、面板三页、收藏回显、立即同步的增量出卡，均通过且无 JS 运行时错误。
 - 真实环境：抓取真实公众号文章（标题、发布时间、7883 字正文、正文链接保留）成功；真实文章经模型通道抽出卡片；停掉模型后自动回落规则抽取并记日志。
