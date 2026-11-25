@@ -92,51 +92,65 @@ export function splitJournalShort(name) {
   return { journal: s, short: '' };
 }
 
-export const SI_PROMPT_VERSION = 2;
+export const SI_PROMPT_VERSION = 3;
 
 /**
  * 抽取用提示词。
  * 刻意把「这个号的常见版式」写进 system，模型对中文征稿文的字段定位会稳很多。
+ *
+ * v3 的关键变化：detailZh 要求**全文翻译**而不是概括。
+ * 用户看这个模块是为了判断「这个专刊值不值得投」，摘要式概括会把征稿范围、客座编辑背景、
+ * 投稿类型要求这些真正决定投不投的信息丢掉，所以卡片详情必须是逐段翻译。
  */
 export function buildExtractMessages(article, opts = {}) {
   const { sourceName = 'SSCI征稿', articleTitle = '', articleDate = '' } = opts;
   const system = [
-    '你是学术专刊（Special Issue / Call for Papers）征稿信息抽取器。',
-    '输入是微信公众号文章正文，作者常在一篇推文里介绍一本期刊的一个专刊。',
+    '你是学术专刊（Special Issue / Call for Papers）征稿信息抽取与翻译器。',
+    '输入可能来自微信公众号文章，也可能来自出版社的专刊征稿页或用户直接粘贴的正文。',
+    '一篇材料通常介绍一本期刊的一个专刊。',
     '',
     '【输出】只输出一个 JSON 对象，不要 Markdown 代码围栏，不要任何解释。格式：',
     '{"isCallForPapers":true,"issues":[{"journal":"","journalShort":"","publisher":"",',
-    '"titleEn":"","titleZh":"","summaryZh":"","topicsZh":[],',
+    '"titleEn":"","titleZh":"","summaryZh":"","detailZh":"","topicsZh":[],',
     '"guestEditors":[{"name":"","affiliation":""}],',
     '"openDate":"","deadline":"","submitUrl":"","siUrl":"","journalUrl":"",',
     '"submissionNote":"","confidence":0.0}]}',
     '',
     '【字段要求】',
-    '- journal：期刊英文全名（必须原样取自正文，用于后续查询期刊等级；不要翻译、不要加书名号）。',
-    '  正文常见写法是「期刊：Omega – The International Journal of Management Science」，取冒号后完整名称。',
-    '- journalShort：正文给出的常用缩写，如 Omega、TFSC、JIMF；没有就留空字符串。',
+    '- journal：期刊英文全名（必须原样取自原文，用于后续查询期刊等级；不要翻译、不要加书名号）。',
+    '  原文常见写法是「期刊：Omega – The International Journal of Management Science」，取冒号后完整名称。',
+    '- journalShort：原文给出的常用缩写，如 Omega、TFSC、JIMF；没有就留空字符串。',
     '- titleEn：专刊主题的英文原名。titleZh：专刊主题的中文译名。',
-    '  若正文只有中文主题，titleZh 用原文、titleEn 留空；若只有英文，把 titleEn 照抄、titleZh 翻译成中文。',
-    '- summaryZh：用 2~3 句中文概括这个专刊要解决什么问题、面向什么研究，不要复述标题。',
+    '  若原文只有中文主题，titleZh 用原文、titleEn 留空；若只有英文，把 titleEn 照抄、titleZh 翻译成中文。',
+    '- summaryZh：**一句话**（30~60 字）说明这个专刊收什么方向的文章，只用于列表页一眼扫过。',
+    '- detailZh：**全文翻译**，这是最重要的字段。把原文里所有对投稿者有意义的文字逐段译成中文：',
+    '  专刊背景与缘起、征稿主题与范围（原文若分条列出，必须逐条译出、保留分条）、重要日期',
+    '  （开放投稿、截稿、评审、出版）、客座编辑及其单位、投稿方式与文章类型要求、篇幅与格式要求、',
+    '  费用与开放获取说明、原文中的联系方式与注意事项。',
+    '  要求：① 不要概括、不要合并、不要省略段落，宁可长也不要丢信息；② 不要添加原文没有的内容，',
+    '  不要写「本文介绍了…」这类导读；③ 数字、日期、期刊名、系统名（Editorial Manager 等）、',
+    '  邮箱、链接一律原样保留，不要意译；④ 用小标题或换行分段，段落之间用 \\n 分隔；',
+    '  ⑤ 已经是中文的段落原样保留，只需把英文段落翻译过来；⑥ 全文控制在 4000 字以内，',
+    '  超长时优先保留征稿范围、日期、编辑、投稿要求这些决策相关信息。',
     '- topicsZh：3~6 个中文主题词（如「生成式AI」「数字运营」「可持续金融」），便于筛选。',
-    '- guestEditors：客座编辑，name 姓名原文、affiliation 单位（正文有就填，没有留空）。',
+    '- guestEditors：客座编辑，name 姓名原文、affiliation 单位（原文有就填，没有留空）。',
     '- openDate / deadline：投稿开放日与截稿日，统一 YYYY-MM-DD。',
-    '  正文常写「截稿日期：2026年12月31日」「投稿截止 2026.12.31」；只给月日时用文章年份推断。不要猜不存在的日期。',
+    '  原文常写「截稿日期：2026年12月31日」「投稿截止 2026.12.31」；只给月日时用文章年份推断。不要猜不存在的日期。',
     '- submitUrl：投稿系统地址（如 Editorial Manager / ScholarOne）。siUrl：该专刊在出版社的详情页（如 sciencedirect.com/special-issue/...）。',
-    '  journalUrl：期刊主页。三者都只能从正文出现的链接里取，取不到就留空字符串，**绝对不要自己拼地址**。',
+    '  journalUrl：期刊主页。三者都只能从原文出现的链接里取，取不到就留空字符串，**绝对不要自己拼地址**。',
     '- submissionNote：投稿时的注意事项，如「文章类型选择 VSI: xxx」。',
     '- confidence：0~1，表示这条抽取的可信度。',
     '',
     '【判断】',
-    '- 一篇推文通常只有 1 个专刊。若确实介绍了多个专刊，就输出多条 issues。',
-    '- 若文章不是征稿信息（广告、招聘、论文推介、纯资讯），输出 {"isCallForPapers":false,"issues":[]}。',
+    '- 一篇材料通常只有 1 个专刊。若确实介绍了多个专刊，就输出多条 issues。',
+    '- 若内容不是征稿信息（广告、招聘、论文推介、纯资讯），输出 {"isCallForPapers":false,"issues":[]}。',
     '- 宁可留空也不要编造。抽不到期刊名时把 confidence 压到 0.3 以下。',
   ].join('\n');
 
   const user = [
-    `来源公众号：${sourceName}`,
-    articleTitle ? `文章标题：${articleTitle}` : '',
-    articleDate ? `文章日期：${articleDate}` : '',
+    `材料来源：${sourceName}`,
+    articleTitle ? `材料标题：${articleTitle}` : '',
+    articleDate ? `发布日期：${articleDate}` : '',
     '',
     '正文：',
     str(article).slice(0, 14000),
@@ -146,6 +160,84 @@ export function buildExtractMessages(article, opts = {}) {
     { role: 'system', content: system },
     { role: 'user', content: user },
   ];
+}
+
+/**
+ * 单独做「全文翻译」的提示词。
+ * 用于给旧卡片补 detailZh（抽取时还没有这个字段），或用户点了「重新翻译」。
+ */
+export function buildTranslateMessages(issue = {}, articleText = '') {
+  const system = [
+    '你是学术专刊征稿信息的翻译器。把下面的英文（或中英混排）征稿材料完整译成简体中文。',
+    '',
+    '要求：',
+    '1. 逐段翻译，不概括、不合并、不省略；原文分条列出的，译文也分条列出。',
+    '2. 不添加原文没有的内容，不写导读、不写总结、不写「以上」。',
+    '3. 数字、日期、期刊名、投稿系统名、邮箱、链接、专刊编号（如 VSI: xxx）原样保留。',
+    '4. 已是中文的段落原样保留。',
+    '5. 用换行分段；小标题单独成行。',
+    '6. 只输出译文本身，不要 JSON、不要代码围栏、不要任何解释。',
+  ].join('\n');
+  const meta = [
+    `期刊：${clean(issue.journal) || '未知'}`,
+    clean(issue.titleZh || issue.titleEn) ? `专刊主题：${clean(issue.titleZh || issue.titleEn)}` : '',
+    clean(issue.deadline) ? `截稿日期：${clean(issue.deadline)}` : '',
+  ].filter(Boolean).join('\n');
+  const user = [meta, '', '材料正文：', str(articleText).slice(0, 14000)].filter(Boolean).join('\n');
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+}
+
+/**
+ * 模型输出被截断（全文翻译太长、max_tokens 用完）时的抢救：
+ * JSON.parse 必然失败，但前面那些短字段是完整的，可以用正则一个个捞出来，
+ * 至少能出卡；detailZh 取到断点为止的部分译文，也好过整条丢弃。
+ * 只有连期刊名/主题都捞不到时才真的失败。
+ */
+export function salvageModelJson(full) {
+  const s = str(full);
+  const pick = (key) => {
+    const m = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`, 'i').exec(s);
+    return m ? m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\') : '';
+  };
+  // detailZh 可能被截断在中间，没有收尾引号：取到文本末尾
+  const detailOpen = /"detailZh"\s*:\s*"([\s\S]*)$/i.exec(s);
+  let detail = pick('detailZh');
+  if (!detail && detailOpen) {
+    detail = detailOpen[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\+$/, '');
+  }
+  const journal = pick('journal') || pick('journalName');
+  const titleZh = pick('titleZh');
+  if (!journal && !titleZh) return null;
+  const arr = (key) => {
+    const m = new RegExp(`"${key}"\\s*:\\s*\\[([\\s\\S]*?)\\]`, 'i').exec(s);
+    if (!m) return [];
+    try { return JSON.parse('[' + m[1] + ']'); } catch { return []; }
+  };
+  return {
+    isCallForPapers: true,
+    issues: [{
+      journal,
+      journalShort: pick('journalShort'),
+      publisher: pick('publisher'),
+      titleEn: pick('titleEn'),
+      titleZh,
+      summaryZh: pick('summaryZh'),
+      detailZh: detail,
+      topicsZh: arr('topicsZh'),
+      guestEditors: arr('guestEditors'),
+      openDate: pick('openDate'),
+      deadline: pick('deadline'),
+      submitUrl: pick('submitUrl'),
+      siUrl: pick('siUrl'),
+      journalUrl: pick('journalUrl'),
+      submissionNote: pick('submissionNote'),
+      confidence: 0.5,
+    }],
+    salvaged: true,
+  };
 }
 
 /** 从模型返回的文本里抠出 JSON（容忍代码围栏与前后废话）。 */
@@ -182,7 +274,14 @@ export function normalizeExtractedIssues(payload, ctx = {}) {
     if (!titleZh && titleEn) titleZh = titleEn;
     const deadline = normalizeDate(item.deadline || item.submissionDeadline || '', now);
     const openDate = normalizeDate(item.openDate || item.openingDate || '', now);
-    const summaryZh = clean(item.summaryZh || item.summary || item.description || '').slice(0, 1200);
+    const summaryZh = clean(item.summaryZh || item.summary || item.abstract || '').slice(0, 400);
+    // 全文翻译：保留换行（卡片详情要分段显示），只收敛多余空行
+    const detailZh = str(item.detailZh || item.detail || item.translationZh || item.fullTextZh || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t\u00a0]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .slice(0, 12000);
     // 没有期刊名也没有主题，无法构成一张卡片
     if (!journal && !titleZh) { rejected += 1; continue; }
     if (deadline && Date.parse(deadline + 'T00:00:00') < Date.parse(new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString())) {
@@ -201,7 +300,7 @@ export function normalizeExtractedIssues(payload, ctx = {}) {
       journal,
       journalShort: clean(item.journalShort || item.abbr || nameParts.short || '').slice(0, 40),
       publisher: clean(item.publisher || '').slice(0, 60),
-      titleEn, titleZh, summaryZh, topicsZh, guestEditors,
+      titleEn, titleZh, summaryZh, detailZh, topicsZh, guestEditors,
       openDate, deadline,
       submitUrl: safeHttpUrl(item.submitUrl || item.submissionUrl || '', articleUrl),
       siUrl: safeHttpUrl(item.siUrl || item.callUrl || item.detailUrl || '', articleUrl),
@@ -393,7 +492,11 @@ export function ruleExtractIssues(text, ctx = {}) {
       journal,
       journalShort: derivedShort,
       publisher: detectPublisher(body),
-      titleEn, titleZh, summaryZh, topicsZh, guestEditors,
+      titleEn, titleZh, summaryZh,
+      // 规则抽取不做翻译：detailZh 留空，界面会提示「配好模型后可生成全文翻译」，
+      // 而不是把中文原文冒充成译文。
+      detailZh: '',
+      topicsZh, guestEditors,
       openDate: normalizeDate(fieldValue(body, '投稿开放|开放日期|投稿开始'), now),
       deadline,
       submitUrl, siUrl, journalUrl,

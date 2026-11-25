@@ -27,6 +27,61 @@ function shortHash(parts) {
 
 // ---------------- 状态 ----------------
 
+/**
+ * 单条征稿卡片的字段收敛。
+ * 单独提出来是因为「读取时规范化」和「回写前合并」两处都要用同一套规则，
+ * 散在 map 里容易出现「A 处有 detailZh、B 处没有」这种静默丢字段（v2.3.0 就踩过全文被丢的坑）。
+ */
+export function normalizeIssueRecord(i = {}) {
+  return {
+    id: str(i.id),
+    articleId: str(i.articleId),
+    articleUrl: str(i.articleUrl),
+    articleTitle: clean(i.articleTitle).slice(0, 200),
+    articlePublishedAt: str(i.articlePublishedAt),
+    sourceId: str(i.sourceId),
+    sourceName: clean(i.sourceName).slice(0, 60),
+    journal: clean(i.journal).slice(0, 160),
+    journalShort: clean(i.journalShort).slice(0, 40),
+    publisher: clean(i.publisher).slice(0, 60),
+    titleEn: clean(i.titleEn).slice(0, 300),
+    titleZh: clean(i.titleZh).slice(0, 300),
+    summaryZh: clean(i.summaryZh).slice(0, 400),
+    // 全文翻译：保留换行（详情面板按段显示），只压掉多余空行
+    detailZh: str(i.detailZh).replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 12000),
+    topicsZh: (Array.isArray(i.topicsZh) ? i.topicsZh : []).map((t) => clean(t).slice(0, 24)).filter(Boolean).slice(0, 8),
+    guestEditors: (Array.isArray(i.guestEditors) ? i.guestEditors : [])
+      .map((e) => ({ name: clean(e?.name).slice(0, 60), affiliation: clean(e?.affiliation).slice(0, 80) }))
+      .filter((e) => e.name).slice(0, 10),
+    openDate: str(i.openDate),
+    deadline: str(i.deadline),
+    submitUrl: str(i.submitUrl),
+    siUrl: str(i.siUrl),
+    journalUrl: str(i.journalUrl),
+    submissionNote: clean(i.submissionNote).slice(0, 300),
+    confidence: Math.max(0, Math.min(1, Number(i.confidence) || 0)),
+    extractedBy: i.extractedBy === 'rule' ? 'rule' : 'ai',
+    rank: i.rank && typeof i.rank === 'object'
+      ? { summary: str(i.rank.summary), items: Array.isArray(i.rank.items) ? i.rank.items.slice(0, 10) : [], queriedAt: str(i.rank.queriedAt), journal: str(i.rank.journal) }
+      : null,
+    // 已加入「任务安排」的任务 id：列表据此显示「已加入任务」，统计里据此算最近截止
+    taskId: str(i.taskId),
+    taskAddedAt: str(i.taskAddedAt),
+    // 模型梳理出的相关灵感：只存结论，标题正文从灵感库现取，避免同一份内容存两处
+    ideaMatches: (Array.isArray(i.ideaMatches) ? i.ideaMatches : [])
+      .map((m) => ({
+        ideaId: str(m?.ideaId),
+        score: Math.max(0, Math.min(100, Math.round(Number(m?.score) || 0))),
+        reason: clean(m?.reason).slice(0, 300),
+        angle: clean(m?.angle).slice(0, 300),
+        at: str(m?.at),
+      }))
+      .filter((m) => m.ideaId).slice(0, 6),
+    createdAt: str(i.createdAt),
+    updatedAt: str(i.updatedAt),
+  };
+}
+
 export const SI_STATE_VERSION = 2;
 
 export const DEFAULT_PREFERENCES = {
@@ -59,8 +114,9 @@ export function createSpecialIssueState(value = {}) {
       title: clean(a.title).slice(0, 200),
       publishedAt: str(a.publishedAt),
       digest: clean(a.digest).slice(0, 600),
-      // feed = 订阅源里直接带了全文（如 wechat-mp-tools 的 content:encoded），抽取时不必再抓正文
-      contentKind: a.contentKind === 'file' || a.contentKind === 'feed' ? a.contentKind : 'url',
+      // feed = 订阅源自带全文；file = 本地导出文件；text = 用户直接粘贴的正文
+      // 三者都不必再抓正文页，抽取时直接用 content（text 的 content 就是粘贴内容本身）
+      contentKind: ['file', 'feed', 'text'].includes(a.contentKind) ? a.contentKind : 'url',
       content: str(a.content).slice(0, 120000),
       sourceId: str(a.sourceId),
       sourceName: clean(a.sourceName).slice(0, 60),
@@ -76,36 +132,7 @@ export function createSpecialIssueState(value = {}) {
   const articleIds = new Set(articles.map((a) => a.id));
   const issues = (Array.isArray(v.issues) ? v.issues : [])
     .filter((i) => i && typeof i === 'object' && i.id && (i.journal || i.titleZh))
-    .map((i) => ({
-      id: str(i.id),
-      articleId: str(i.articleId),
-      articleUrl: str(i.articleUrl),
-      articleTitle: clean(i.articleTitle).slice(0, 200),
-      articlePublishedAt: str(i.articlePublishedAt),
-      sourceId: str(i.sourceId),
-      sourceName: clean(i.sourceName).slice(0, 60),
-      journal: clean(i.journal).slice(0, 160),
-      journalShort: clean(i.journalShort).slice(0, 40),
-      publisher: clean(i.publisher).slice(0, 60),
-      titleEn: clean(i.titleEn).slice(0, 300),
-      titleZh: clean(i.titleZh).slice(0, 300),
-      summaryZh: clean(i.summaryZh).slice(0, 1200),
-      topicsZh: (Array.isArray(i.topicsZh) ? i.topicsZh : []).map((t) => clean(t).slice(0, 24)).filter(Boolean).slice(0, 8),
-      guestEditors: (Array.isArray(i.guestEditors) ? i.guestEditors : [])
-        .map((e) => ({ name: clean(e?.name).slice(0, 60), affiliation: clean(e?.affiliation).slice(0, 80) }))
-        .filter((e) => e.name).slice(0, 10),
-      openDate: str(i.openDate),
-      deadline: str(i.deadline),
-      submitUrl: str(i.submitUrl),
-      siUrl: str(i.siUrl),
-      journalUrl: str(i.journalUrl),
-      submissionNote: clean(i.submissionNote).slice(0, 300),
-      confidence: Math.max(0, Math.min(1, Number(i.confidence) || 0)),
-      extractedBy: i.extractedBy === 'rule' ? 'rule' : 'ai',
-      rank: i.rank && typeof i.rank === 'object' ? { summary: str(i.rank.summary), items: Array.isArray(i.rank.items) ? i.rank.items.slice(0, 10) : [], queriedAt: str(i.rank.queriedAt), journal: str(i.rank.journal) } : null,
-      createdAt: str(i.createdAt),
-      updatedAt: str(i.updatedAt),
-    }))
+    .map(normalizeIssueRecord)
     .slice(0, 4000);
 
   const issueIds = new Set(issues.map((i) => i.id));
@@ -235,14 +262,20 @@ export function mergeIssues(existing = [], incoming = []) {
     if (!item?.id) continue;
     const prev = map.get(item.id);
     if (!prev) { map.set(item.id, item); continue; }
-    // 新数据优先，但不要把已有的等级/翻译/用户修正冲掉
+    // 新数据优先，但不要把已有的等级/翻译/任务/灵感关联冲掉
     const merged = { ...prev, ...item };
     merged.createdAt = prev.createdAt || item.createdAt;
     merged.rank = item.rank || prev.rank || null;
     merged.summaryZh = item.summaryZh || prev.summaryZh;
+    // 二次推送常只写主题不写全文；旧译文比空字符串有价值，别用空覆盖
+    merged.detailZh = item.detailZh || prev.detailZh || '';
     merged.deadline = item.deadline || prev.deadline;
     merged.guestEditors = item.guestEditors?.length ? item.guestEditors : (prev.guestEditors || []);
     merged.topicsZh = item.topicsZh?.length ? item.topicsZh : (prev.topicsZh || []);
+    // 用户自己加的任务与模型给出的灵感关联属于用户数据，抽取结果无权清空
+    merged.taskId = prev.taskId || '';
+    merged.taskAddedAt = prev.taskAddedAt || '';
+    merged.ideaMatches = prev.ideaMatches || [];
     map.set(item.id, merged);
   }
   return [...map.values()];
@@ -309,7 +342,7 @@ export function listIssues(stateInput, opts = {}) {
   const s = createSpecialIssueState(stateInput);
   const {
     query = '', topics = [], deadlineWindow = 'all', rankSystem = '', rankLevels = [],
-    favoriteOnly = false, sourceId = '', sort = '', limit = 800, now = new Date(),
+    favoriteOnly = false, taskOnly = false, sourceId = '', sort = '', limit = 800, now = new Date(),
   } = opts;
   const q = clean(query).toLowerCase();
   const favorites = new Set(s.favoriteIds);
@@ -323,6 +356,7 @@ export function listIssues(stateInput, opts = {}) {
     if (!s.preferences.showRuleExtracted && i.extractedBy === 'rule') return false;
     if (sourceId && i.sourceId !== sourceId) return false;
     if (favoriteOnly && !favorites.has(i.id)) return false;
+    if (taskOnly && !i.taskId) return false;
     const dm = deadlineMeta(i, now);
     if (!includeExpired && dm.days !== null && dm.days < 0) return false;
     if (deadlineWindow === '30' && !(dm.days !== null && dm.days >= 0 && dm.days <= 30)) return false;
@@ -452,9 +486,29 @@ export function specialIssueSummary(stateInput, opts = {}) {
     enabledSources: s.sources.filter((x) => x.enabled).length,
     ranked: s.issues.filter((i) => i.rank?.items?.length).length,
     favorites: s.favoriteIds.length,
+    tasks: s.issues.filter((i) => i.taskId).length,
+    nearestTask: nearestTaskDeadline(s.issues, now),
     lastSyncAt: s.lastSyncAt,
     lastAttemptAt: s.lastAttemptAt,
   };
+}
+
+/**
+ * 已加入任务的征稿里最近的一个截止日。
+ * 用于 SI 页面的统计条和首页「征稿截止」卡片：用户真正要盯的是自己接下的那几个截稿日，
+ * 而不是全部征稿里最近的那个（后者可能根本不想投）。
+ */
+export function nearestTaskDeadline(issues = [], now = new Date()) {
+  let best = null;
+  for (const i of issues) {
+    if (!i?.taskId) continue;
+    const dm = deadlineMeta(i, now);
+    if (dm.days === null || dm.days < 0) continue;
+    if (!best || dm.days < best.days) {
+      best = { id: i.id, date: dm.date, days: dm.days, label: dm.label, journal: i.journalShort || i.journal, title: i.titleZh || i.titleEn };
+    }
+  }
+  return best;
 }
 
 // ---------------- 供前端使用的元数据 ----------------

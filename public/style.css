@@ -2661,7 +2661,7 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 }
 
 .home-mid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 14px; margin-top: 14px; align-items: stretch; }
-.home-bottom { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px; }
+.home-bottom { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
 .home-card { padding: 14px 16px; }
 
 /* 科研日历 */
@@ -2823,6 +2823,21 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 }
 .countdown-days.urgent { background: var(--red-soft); color: var(--red); }
 .countdown-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 首页：征稿截止（来自 SI 的「加入任务」） */
+.si-task-list { display: flex; flex-direction: column; gap: 6px; }
+.si-task-item {
+  display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--surface);
+}
+.si-task-item:hover { border-color: var(--primary); }
+.si-task-item.is-urgent { border-color: var(--red); box-shadow: inset 3px 0 0 var(--red); }
+.si-task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.si-task-main b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.si-task-main span { font-size: 11px; color: var(--text-3); }
+.si-task-days { flex: none; font-size: 11.5px; font-weight: 700; color: var(--primary); }
+.si-task-days.over { color: var(--red); }
+.si-home-hint { font-size: 11px; color: var(--text-3); line-height: 1.5; }
 
 /* 文献中心：文库切换条 */
 .lib-bar {

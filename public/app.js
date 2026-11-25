@@ -12470,7 +12470,7 @@
     for (const t of tasks) {
       if (t.status !== 'done' && t.due) {
         const d = daysUntil(t.due);
-        if (d != null && d >= 0) cds.push({ d, label: t.title, kind: '任务截止' });
+        if (d != null && d >= 0) cds.push({ d, label: t.title, kind: t.source === 'si' ? '征稿截止' : '任务截止' });
       }
     }
     for (const p of journalPapers) {
@@ -12503,6 +12503,27 @@
     $('countdownList').innerHTML = cds.length
       ? cds.slice(0, 5).map((c) => `<div class="countdown-item"><span class="countdown-days${c.d <= 7 ? ' urgent' : ''}">${c.d}天</span><span class="countdown-label" title="${esc(c.label)}">${esc(clipTitle(c.label, 24))}</span><span class="side-count">${c.kind}</span></div>`).join('')
       : '<div class="pr-loading">暂无临近节点</div>';
+
+    // 征稿截止：只看「从 SI 加入任务」的条目。
+    // 这类任务的标题是「投稿 SI｜期刊｜专刊」，直接列出比塞进倒计时更容易扫。
+    const siTasks = tasks
+      .filter((t) => t.source === 'si' && t.status !== 'done')
+      .map((t) => ({ ...t, d: t.due ? daysUntil(t.due) : null }))
+      .sort((a, b) => (a.d ?? 99999) - (b.d ?? 99999))
+      .slice(0, 4);
+    $('siTaskList').innerHTML = siTasks.length
+      ? siTasks.map((t) => {
+        const over = t.d != null && t.d < 0;
+        const days = t.d == null ? '无日期' : over ? `逾期 ${-t.d} 天` : t.d === 0 ? '今天截止' : `${t.d} 天后截止`;
+        return `<div class="si-task-item${t.d != null && t.d <= 14 && !over ? ' is-urgent' : ''}" data-sitask="${esc(t.id)}">
+          <div class="si-task-main">
+            <b title="${esc(t.title)}">${esc(clipTitle(t.title.replace(/^投稿 SI｜/, ''), 30))}</b>
+            <span>${esc(t.due || '未设截止')}${t.priority ? ` · ${esc(t.priority)}优先` : ''}</span>
+          </div>
+          <span class="si-task-days${over ? ' over' : ''}">${esc(days)}</span>
+        </div>`;
+      }).join('')
+      : '<div class="pr-loading">还没有加入任务的征稿<br><span class="si-home-hint">在「SI 征稿」详情里点「加入任务」，这里会自动显示截止倒计时</span></div>';
 
     renderCalendar();
   }
@@ -12704,6 +12725,7 @@
     return `<div class="task-item${t.status === 'done' ? ' done' : ''}" data-task="${t.id}">
       <input type="checkbox" data-tasktoggle="${t.id}" ${t.status === 'done' ? 'checked' : ''} />
       <span class="task-title" title="${esc(t.title)}">${esc(t.title)}</span>
+      ${t.source === 'si' ? `<span class="task-chip" title="来自 SI 征稿">${ico('megaphone')}征稿</span>` : ''}
       ${proj ? `<span class="task-chip" style="background:var(--primary-soft);color:var(--primary)">${ico('folder')}${esc(clipTitle(proj.name, 12))}</span>` : ''}
       <span class="task-chip tp-${esc(t.priority)}">${esc(t.priority)}优先</span>
       ${t.due ? `<span class="task-due${over ? ' over' : ''}">${over ? '逾期 ' : ''}${t.due}</span>` : ''}
@@ -14865,6 +14887,16 @@ a { color: #176b87; }
     $('profProgress').addEventListener('input', () => { $('profProgressVal').textContent = $('profProgress').value; });
     document.querySelector('[data-goto-lib]').addEventListener('click', () => switchView('library'));
 
+    // 首页「征稿截止」卡片：点条目直接跳到 SI 并打开那一条的详情抽屉
+    document.querySelector('[data-goto-si]').addEventListener('click', () => switchView('specialissue'));
+    $('siTaskList').addEventListener('click', async (e) => {
+      const row = e.target.closest('[data-sitask]');
+      if (!row) return;
+      const task = tasks.find((t) => t.id === row.dataset.sitask);
+      await switchView('specialissue');
+      if (task?.issueId) window.SpecialIssueView?.open?.(task.issueId);
+    });
+
     async function addTodayTask() {
       const title = $('todayInput').value.trim();
       if (!title) return;
@@ -15596,6 +15628,23 @@ a { color: #176b87; }
     },
     isReaderOpen: () => !!pr.open,
     refreshItems: () => loadItems(),
+    /**
+     * SI 里「加入任务」之后要立刻反映到任务安排和首页，
+     * 但任务列表在 app.js 的闭包里，所以由这里统一刷新，避免 SI 自己再拉一份造成两处状态不一致。
+     */
+    refreshTasks: async () => {
+      try { tasks = await api('/api/tasks'); } catch { return; }
+      renderHome();
+      if (view === 'tasks') renderTasks();
+      renderChatMeta();
+    },
+    /** 从 SI 的相关灵感跳到灵感孵化并打开那一条。 */
+    openIdea: async (id) => {
+      if (!ideasLoaded) { try { await loadIdeas(); } catch { /* 用已有缓存 */ } }
+      await switchView('ideas');
+      if (id && ideas.some((x) => x.id === id)) openIdeaModal(id);
+    },
+    goView: (v) => switchView(v),
     /**
      * 框选任意内容 → 只把截图放进「AI 助读」的输入区，**不自动提问**。
      * 用户要自己写问题、自己按发送，模型才开始分析（框选只是准备素材）。

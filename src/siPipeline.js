@@ -8,8 +8,9 @@
 //
 // 网络、模型、等级查询全部由调用方注入，本文件不发请求、不写磁盘。
 
-import { fetchSourceArticles, isOneShotSource, canonicalArticleUrl } from './siSources.js';
+import { fetchSourceArticles, isOneShotSource, isWechatArticleUrl, canonicalArticleUrl } from './siSources.js';
 import { fetchWechatArticle, readLocalArticle, htmlToArticleText } from './wechatArticle.js';
+import { fetchWebPageArticle } from './siWebPage.js';
 import { buildIssue, mergeIssues, mergeArticles, deadlineMeta } from './specialIssues.js';
 import { formatRank as defaultFormatRank } from './easyscholar.js';
 
@@ -113,9 +114,16 @@ async function extractOne(state, article, opts) {
     };
   } else {
     try {
+      // 三种来源三种取正文的方式：
+      //   localPath   → 本地导出文件
+      //   mp.weixin…  → 公众号正文页（有 #js_content 专用解析）
+      //   其它 http   → 出版社/期刊的专刊页，走通用正文识别
+      // 之前把所有链接都当微信文章抓，官网链接必定失败，这是「贴了官网地址没反应」的根因。
       content = article.localPath
         ? await readLocalArticle(article.localPath, { maxChars: 16000 })
-        : await fetchWechatArticle(article.url, { fetchImpl, timeoutMs });
+        : isWechatArticleUrl(article.url)
+          ? await fetchWechatArticle(article.url, { fetchImpl, timeoutMs })
+          : await fetchWebPageArticle(article.url, { fetchImpl, timeoutMs });
     } catch (e) {
       return { ok: false, error: clean(e?.message || e) };
     }

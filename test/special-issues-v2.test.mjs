@@ -13,12 +13,14 @@ import {
 } from '../src/wechatArticle.js';
 import {
   normalizeDate, parseModelJson, normalizeExtractedIssues, ruleExtractIssues,
+  salvageModelJson, buildTranslateMessages,
 } from '../src/siExtract.js';
 import {
   createSpecialIssueState, listIssues, deadlineMeta, rankLevelKey, stableIssueId,
   purgeExpiredIssues, toggleFavorite, setPreferences, specialIssueSummary, topicCounts, buildIssue,
-  mergeArticles,
+  mergeArticles, mergeIssues, nearestTaskDeadline,
 } from '../src/specialIssues.js';
+import { htmlToPlainText, htmlTitle, fetchWebPageArticle } from '../src/siWebPage.js';
 import { collectArticles, processArticles, enrichRanks } from '../src/siPipeline.js';
 
 const NOW = new Date('2026-11-25T10:00:00+08:00');
@@ -546,4 +548,84 @@ test('管线：等级查询失败只记错误不中断', async () => {
   assert.equal(r.updated, 1);
   assert.equal(r.errors.length, 1);
   assert.equal(r.errors[0].journal, 'Bad');
+});
+
+// ---------------- v2.4.0：全文翻译 / 官网正文 / 任务与灵感 ----------------
+
+test('全文翻译字段保留分段，CRLF 归一，超长截断', () => {
+  const long = ('第一段：征稿范围。\r\n\r\n\r\n第二段：投稿要求。' + '补充说明。'.repeat(3000));
+  const r = normalizeExtractedIssues({
+    isCallForPapers: true,
+    issues: [{ journal: 'Omega', titleZh: '生成式AI专刊', detailZh: long }],
+  }, { now: NOW });
+  const detail = r.issues[0].detailZh;
+  assert.ok(detail.includes('\n'), '分段信息不能丢');
+  assert.ok(!detail.includes('\r'), 'CRLF 要归一成 LF');
+  assert.ok(!detail.includes('\n\n\n'), '多余空行要压掉');
+  assert.equal(detail.length, 12000);
+});
+
+test('模型输出被截断时按字段抢救，仍能出卡并保留半截译文', () => {
+  const truncated = '{"isCallForPapers":true,"issues":[{"journal":"Journal of Testing","titleEn":"AI for Ops","titleZh":"AI 与运营","deadline":"2026-12-31","detailZh":"专刊背景：本专刊关注生成式人工智能在运营管理中的应用，';
+  assert.equal(parseModelJson(truncated), null, '截断的 JSON 一定解析不了');
+  const salvaged = salvageModelJson(truncated);
+  assert.ok(salvaged);
+  assert.equal(salvaged.issues[0].journal, 'Journal of Testing');
+  assert.match(salvaged.issues[0].detailZh, /生成式人工智能/);
+  const r = normalizeExtractedIssues(salvaged, { now: NOW });
+  assert.equal(r.issues.length, 1);
+});
+
+test('全文翻译提示词要求逐段翻译而不是概括', () => {
+  const messages = buildTranslateMessages({ journal: 'Omega', deadline: '2026-12-31' }, 'Call for papers text');
+  const system = messages[0].content;
+  assert.match(system, /不概括|不要概括/);
+  assert.match(system, /逐段/);
+  assert.match(messages[1].content, /Omega/);
+});
+
+test('最近任务截止只统计已加入任务的征稿', () => {
+  const soon = issue({ journal: 'A', deadline: '2026-12-01' });
+  const later = issue({ journal: 'B', deadline: '2026-12-20' });
+  soon.taskId = 'task_1';
+  const state = createSpecialIssueState({ issues: [soon, later] });
+  const near = nearestTaskDeadline(state.issues, NOW);
+  assert.equal(near.id, soon.id);
+  assert.equal(near.days, 6);
+  assert.equal(specialIssueSummary(state, { now: NOW }).tasks, 1);
+  assert.equal(nearestTaskDeadline([later], NOW), null);
+});
+
+test('二次抽取不会冲掉任务与灵感关联', () => {
+  const old = issue({ journal: 'Omega', deadline: '2026-12-31', detailZh: '旧译文' });
+  old.taskId = 'task_9';
+  old.ideaMatches = [{ ideaId: 'idea_1', score: 82, reason: '贴合', angle: '', at: '' }];
+  const incoming = issue({ journal: 'Omega', deadline: '2026-12-31' });
+  const merged = mergeIssues([old], [incoming]).find((x) => x.id === old.id);
+  assert.equal(merged.taskId, 'task_9');
+  assert.equal(merged.ideaMatches.length, 1);
+  assert.equal(merged.detailZh, '旧译文', '空译文不能覆盖已有译文');
+});
+
+test('通用网页正文：去掉导航脚本，保留段落与小标题', () => {
+  const html = `<html><body>
+    <nav>Home · Login</nav>
+    <script>var x = 1;</script>
+    <article><h1>Call for Papers</h1><p>Scope: AI in operations.</p><p>Deadline: 2026-12-31</p></article>
+    <footer>© 2026</footer>
+  </body></html>`;
+  const text = htmlToPlainText(html);
+  assert.match(text, /Call for Papers/);
+  assert.match(text, /Deadline: 2026-12-31/);
+  assert.ok(!/Login/.test(text), '导航应被剔除');
+  assert.ok(!/var x/.test(text), '脚本应被剔除');
+  assert.equal(htmlTitle('<html><head><title>SI 征稿页</title></head></html>'), 'SI 征稿页');
+});
+
+test('官网拒绝访问时给出「粘贴正文」的可用建议', async () => {
+  const fetchImpl = async () => new Response('blocked', { status: 403 });
+  await assert.rejects(
+    () => fetchWebPageArticle('https://www.example.org/si', { fetchImpl }),
+    /粘贴/,
+  );
 });

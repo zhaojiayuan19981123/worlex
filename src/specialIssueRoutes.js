@@ -7,19 +7,21 @@
 //   AI 结构化抽取 → 注入 fetchModelCompletion / readLLMResponse / resolveRequestModel
 //   出网          → 注入 fetchImpl（server.js 的 modelFetch，自动直连/代理切换）
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { queryPublicationRank, formatRank } from './easyscholar.js';
 import { defaultTranslationProvider, translate } from './translate.js';
 import { resolveActive } from './modelCatalog.js';
 import { createSpecialIssueScheduler } from './specialIssueScheduler.js';
 import {
   createSpecialIssueState, listIssues, specialIssueSummary, setPreferences,
-  toggleFavorite, removeIssue, purgeExpiredIssues, deadlineMeta, topicCounts,
+  removeIssue, purgeExpiredIssues, deadlineMeta, rankBadges, topicCounts,
   RANK_FILTERS, SOURCE_TYPES, normalizeSource, articleIdOf, today,
 } from './specialIssues.js';
 import { collectArticles, processArticles, requeueArticles, enrichRanks, pendingRankCount, runSyncPipeline } from './siPipeline.js';
-import { buildExtractMessages, parseModelJson, normalizeExtractedIssues, ruleExtractIssues } from './siExtract.js';
-import { extractArticleUrls, isWechatArticleUrl } from './siSources.js';
+import { buildExtractMessages, buildTranslateMessages, parseModelJson, salvageModelJson, normalizeExtractedIssues, ruleExtractIssues } from './siExtract.js';
+import { extractArticleUrls, isWechatArticleUrl, canonicalArticleUrl } from './siSources.js';
+import { fetchWechatArticle, readLocalArticle, htmlToArticleText } from './wechatArticle.js';
+import { fetchWebPageArticle } from './siWebPage.js';
 
 const str = (v) => String(v == null ? '' : v);
 const clean = (v) => str(v).replace(/\s+/g, ' ').trim();
@@ -36,6 +38,20 @@ const DEADLINE_WINDOWS = [
 function compact(text, max = 260) {
   const s = clean(text);
   return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
+/** 整理模型返回的译文：留换行（详情按段渲染），去掉代码围栏与行尾空白。 */
+function cleanParagraphs(text) {
+  return str(text)
+    .trim()
+    .replace(/^```[a-z]*\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t\u00a0]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function translationEngine(settings) {
@@ -109,13 +125,20 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
             model: am.profile.model,
             messages,
             temperature: 0.1,
-            max_tokens: 2600,
-          }, { stream: false, timeoutMs: 60000 });
+            // 全文翻译比原来的「两三句摘要」长得多，2600 token 会被截断在 JSON 中间；
+            // 4 秒级的模型也够用，所以直接把预算提到 4000。
+            max_tokens: 4000,
+          }, { stream: false, timeoutMs: 90000 });
           if (!request?.up?.ok) throw new Error('模型没有返回有效响应');
           const full = (await readLLMResponse(request.up)).full || '';
-          const json = parseModelJson(full);
+          let json = parseModelJson(full);
           if (!json) {
-            // 模型输出不是 JSON（常见于小模型/长文截断），退回规则抽取，至少能出卡
+            // 全文翻译太长导致 JSON 被截断时，短字段其实是完整的，先按字段抢救一遍，
+            // 抢救不到才退回规则抽取（否则等于白花一次模型调用）。
+            json = salvageModelJson(full);
+            if (json) logger('[SI] 模型输出不是完整 JSON（多半是全文翻译被截断），已按字段抢救');
+          }
+          if (!json) {
             logger('[SI] 模型输出无法解析为 JSON，本条改用规则抽取');
             const res = ruleExtractIssues(text, ctx);
             return { issues: res.issues, notCfp: res.issues.length === 0, rejected: res.rejected, by: 'rule' };
@@ -137,23 +160,84 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   let syncPromise = null;
 
   /**
-   * 把用户粘贴的链接放进「待处理」队列。
-   * 只入库不抽取：这样即使界面被关掉、或者要分批处理很久，文章也已经记下来了。
+   * 把用户粘贴的内容拆成「待处理条目」。
+   *
+   * 三种输入混在同一个文本框里，按下面的顺序判断，避免同一份材料被处理两次：
+   *   1. 去掉链接后仍有 400 字以上的正文 → 只按正文处理（用户粘的往往是整页内容，
+   *      链接只是来源标注；再抓一次页面既慢又会和正文出重复卡）
+   *   2. 否则收下所有链接：mp.weixin.qq.com 走公众号正文，其它域名走通用网页抓取
+   *   3. 链接都没有但正文够长 → 同样按正文处理
    */
-  function enqueueArticleUrls(state, urls, { sourceName = '微信粘贴' } = {}) {
-    const now = new Date();
+  const PASTE_URL_RE = /https?:\/\/[^\s<>"'（）()，。、；;]+/gi;
+  const CFP_SIGNAL_RE = /(专刊|特刊|征稿|截稿|客座编辑|call\s+for\s+(?:papers|paper)|special\s+issue)/i;
+  const SHARE_NOISE_RE = /^(?:复制链接|阅读原文|点击.{0,8}关注|长按.{0,8}二维码|扫码|分享|在看|点赞|写留言|预览时标签不可点)/;
+
+  /** 纯文本条目的稳定 id：同一段正文贴两次不会重复入库。 */
+  function textArticleId(text) {
+    return 'art_t' + createHash('sha1').update(clean(text)).digest('hex').slice(0, 16);
+  }
+
+  function parseCollectInput(raw) {
+    const text = str(raw);
+    const urls = [];
+    const seen = new Set();
+    PASTE_URL_RE.lastIndex = 0;
+    let m;
+    while ((m = PASTE_URL_RE.exec(text))) {
+      const url = m[0].replace(/[)）\]】,，。.;；]+$/, '');
+      const key = canonicalArticleUrl(url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      urls.push(url);
+    }
+    const leftover = text
+      .replace(PASTE_URL_RE, '\n')
+      .split('\n')
+      .map((line) => clean(line))
+      .filter((line) => line.length >= 2 && !SHARE_NOISE_RE.test(line))
+      .join('\n')
+      .trim();
+    const richContent = leftover.length >= 400 && CFP_SIGNAL_RE.test(leftover);
+    return {
+      urls: richContent ? [] : urls,
+      wechatUrls: urls.filter((u) => isWechatArticleUrl(u)),
+      pageUrls: urls.filter((u) => !isWechatArticleUrl(u)),
+      contentText: richContent ? leftover.slice(0, 60000) : '',
+      leftover,
+    };
+  }
+
+  /**
+   * 把待处理条目放进队列。
+   * 只入库不抽取：这样即使界面被关掉、或者要分批处理很久，内容也已经记下来了。
+   */
+  function enqueueTargets(state, targets, { sourceName = '粘贴收稿' } = {}) {
+    const now = new Date().toISOString();
     const seen = new Set(state.articles.map((a) => a.id));
     let queued = 0;
     let existing = 0;
-    for (const url of urls) {
-      const id = articleIdOf(url);
+    for (const t of targets) {
+      const id = t.kind === 'text' ? textArticleId(t.text) : articleIdOf(t.url);
       if (seen.has(id)) { existing += 1; continue; }
       seen.add(id);
       state.articles.push({
-        id, url, localPath: '', title: '', publishedAt: '', digest: '',
-        contentKind: 'url', sourceId: '', sourceName,
-        status: 'pending', attempts: 0, lastError: '', fetchedAt: now.toISOString(),
-        extractedAt: '', contentChars: 0,
+        id,
+        url: t.kind === 'text' ? '' : t.url,
+        localPath: '',
+        title: '',
+        publishedAt: '',
+        digest: '',
+        contentKind: t.kind === 'text' ? 'text' : 'url',
+        // 粘贴的正文直接存进 content，抽取时不再请求任何页面
+        content: t.kind === 'text' ? t.text : '',
+        sourceId: '',
+        sourceName: t.kind === 'text' ? '粘贴正文' : (isWechatArticleUrl(t.url) ? '微信粘贴' : '官网页面'),
+        status: 'pending',
+        attempts: 0,
+        lastError: '',
+        fetchedAt: now,
+        extractedAt: '',
+        contentChars: 0,
       });
       queued += 1;
     }
@@ -327,6 +411,8 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const state = readState();
     const now = new Date();
     const settings = store.getSettings();
+    // 列表不返回全文翻译：400 条 × 上万字会把响应撑到几 MB，
+    // 详情面板打开时再按 id 取（见 GET /api/special-issues/:id）。
     const issues = listIssues(state, {
       now,
       query: options.query || '',
@@ -335,10 +421,14 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       rankSystem: options.rankSystem || '',
       rankLevels: options.rankLevels || [],
       favoriteOnly: options.favoriteOnly === true,
+      taskOnly: options.taskOnly === true,
       sourceId: options.sourceId || '',
       sort: options.sort || '',
       limit: 400,
-    }).map((i) => ({ ...i, summaryZh: compact(i.summaryZh, 600) }));
+    }).map((i) => {
+      const { detailZh, ...rest } = i;
+      return { ...rest, summaryZh: compact(i.summaryZh, 400), detailChars: str(detailZh).length, hasTask: !!i.taskId };
+    });
 
     const summary = specialIssueSummary(state, { now });
     const recentArticles = [...state.articles]
@@ -357,11 +447,16 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
 
     return {
       issues,
-      favoriteIds: state.favoriteIds,
       summary,
       sources: state.sources,
       sourceTypes: SOURCE_TYPES,
       preferences: state.preferences,
+      // 界面顶部要告诉用户「去哪粘贴」：公众号名放在这里，换号时只改一处
+      guide: {
+        accountName: 'SSCI征稿',
+        accountId: 'sscizhenggao',
+        tip: '在微信里搜索并关注这个号，每天推送最新的 SSCI/SCIE 专刊征稿。',
+      },
       filters: {
         deadlineWindows: DEADLINE_WINDOWS,
         rankFilters: RANK_FILTERS,
@@ -392,6 +487,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     rankSystem: str(req.query?.rankSystem),
     rankLevels: str(req.query?.rankLevels).split(',').map((t) => t.trim()).filter(Boolean),
     favoriteOnly: req.query?.favoriteOnly === '1',
+    taskOnly: req.query?.taskOnly === '1',
     sourceId: str(req.query?.sourceId),
     sort: str(req.query?.sort),
   });
@@ -489,8 +585,10 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   });
 
   /**
-   * 粘贴收稿：一次给多条（微信「复制链接」的短链、分享文案、一行一个都行）。
+   * 粘贴收稿：公众号链接、出版社 SI 页面链接、整段正文都能收。
    * 这是「不想折腾 RSS / 订阅服务」时的主路径，零配置可用。
+   * 每篇都要过一次大模型，几十篇会跑很久，所以接口只负责入队并立即返回，
+   * 前端轮询 /status 看进度（与「立即同步」共用同一套运行态）。
    */
   app.post('/api/special-issues/collect', (req, res) => {
     if (syncPromise || collectPromise || runtime.running) {
@@ -499,21 +597,31 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const raw = Array.isArray(req.body?.urls)
       ? req.body.urls.join('\n')
       : str(req.body?.text || req.body?.url);
-    const all = extractArticleUrls(raw).filter((u) => isWechatArticleUrl(u));
-    if (!all.length) {
-      return res.status(400).json({ error: '没有识别到公众号文章链接。请在微信里打开文章，点右上角「…」→ 复制链接，再粘贴到这里。' });
+    const parsed = parseCollectInput(raw);
+    const targets = [];
+    if (parsed.contentText) targets.push({ kind: 'text', text: parsed.contentText });
+    for (const url of parsed.urls) targets.push({ kind: 'url', url });
+    if (!targets.length) {
+      return res.status(400).json({
+        error: '没有识别到可处理的内容。可以粘贴公众号文章链接、出版社专刊页链接，或直接粘贴正文（400 字以上会自动识别）。',
+      });
     }
-    const urls = all.slice(0, COLLECT_MAX);
-    const dropped = Math.max(0, all.length - urls.length);
+    const picked = targets.slice(0, COLLECT_MAX);
+    const dropped = Math.max(0, targets.length - picked.length);
 
     // 先在请求里入队并落盘：这样「收下了没有」有确定答案，
-    // 全是重复链接时也不必白跑一趟后台任务。
+    // 全是重复内容时也不必白跑一趟后台任务。
     const state = readState();
-    const { queued, existing } = enqueueArticleUrls(state, urls);
+    const { queued, existing } = enqueueTargets(state, picked);
     if (queued) writeState(state);
+    const counted = {
+      wechat: parsed.contentText ? 0 : parsed.wechatUrls.length,
+      page: parsed.contentText ? 0 : parsed.pageUrls.length,
+      text: parsed.contentText ? 1 : 0,
+    };
     if (!queued) {
       return res.json({
-        started: false, running: false, queued: 0, existing, dropped,
+        started: false, running: false, queued: 0, existing, dropped, counted,
         ...payload(queryOpts(req)),
       });
     }
@@ -525,7 +633,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       setPhase('idle', '');
     });
     res.json({
-      started: true, running: true, queued, existing, dropped,
+      started: true, running: true, queued, existing, dropped, counted,
       ...payload(queryOpts(req)),
     });
   });
@@ -575,18 +683,222 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     }
   });
 
-  // ---------- 偏好 / 收藏 / 修正 ----------
+  // ---------- 偏好 / 修正 ----------
   app.put('/api/special-issues/preferences', (req, res) => {
     writeState(setPreferences(readState(), req.body || {}));
     scheduler.refresh();
     res.json(payload());
   });
 
-  app.post('/api/special-issues/:id/favorite', (req, res) => {
+  // ---------- 加入任务（替代原来的收藏） ----------
+  // 收藏只是标记，用户真正要做的是「在截止前把稿子投出去」，所以直接进任务安排，
+  // 首页的今日计划 / 倒计时 / 征稿卡片都会自动带上它。
+
+  const newTaskId = () => (typeof store?.newId === 'function' ? store.newId() : 'task_' + randomUUID());
+
+  function buildTaskFromIssue(issue, now = new Date()) {
+    const dm = deadlineMeta(issue, now);
+    const journal = clean(issue.journalShort || issue.journal) || '期刊';
+    const topic = clean(issue.titleZh || issue.titleEn).slice(0, 80);
+    // 没有公布截止日期时给一个两周后的软提醒：任务永远沉在「无期限」里等于没加
+    const fallbackDue = today(new Date(now.getTime() + 14 * DAY));
+    const priority = dm.days === null ? '中' : dm.days <= 14 ? '高' : dm.days <= 45 ? '中' : '低';
+    return {
+      title: `投稿 SI｜${journal}${topic ? '｜' + topic : ''}`.slice(0, 200),
+      due: dm.date || fallbackDue,
+      priority,
+      projectId: null,
+      status: 'todo',
+      createdAt: now.toISOString(),
+      completedAt: null,
+      // 任务安排/首页据此把这条任务标成「征稿」，并能跳回 SI 详情
+      source: 'si',
+      issueId: issue.id,
+      issueUrl: clean(issue.siUrl || issue.submitUrl || issue.articleUrl),
+      journal: clean(issue.journal),
+      deadline: clean(issue.deadline),
+    };
+  }
+
+  app.post('/api/special-issues/:id/task', (req, res) => {
     const state = readState();
-    if (!state.issues.some((i) => i.id === req.params.id)) return res.status(404).json({ error: '该征稿不存在或已被清理' });
-    writeState(toggleFavorite(state, req.params.id, typeof req.body?.favorite === 'boolean' ? req.body.favorite : null));
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    const list = typeof store.listTasks === 'function' ? store.listTasks() : [];
+    // 已经加过：直接回显，不重复建任务（用户往往连点两下）
+    const existingTask = issue.taskId ? list.find((t) => t.id === issue.taskId) : null;
+    if (existingTask) return res.json({ ...payload(), task: existingTask, already: true });
+
+    const task = { id: newTaskId(), ...buildTaskFromIssue(issue) };
+    // 允许界面覆盖截止日/优先级（例如用户想在截稿前一周提醒自己）
+    const due = clean(req.body?.due);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(due)) task.due = due;
+    if (['高', '中', '低'].includes(req.body?.priority)) task.priority = req.body.priority;
+
+    list.unshift(task);
+    if (typeof store.saveTasks === 'function') store.saveTasks(list);
+    issue.taskId = task.id;
+    issue.taskAddedAt = task.createdAt;
+    issue.updatedAt = new Date().toISOString();
+    writeState(state);
+    res.json({ ...payload(), task });
+  });
+
+  app.delete('/api/special-issues/:id/task', (req, res) => {
+    const state = readState();
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    if (issue.taskId && typeof store.listTasks === 'function' && typeof store.saveTasks === 'function') {
+      const list = store.listTasks().filter((t) => t.id !== issue.taskId);
+      store.saveTasks(list);
+    }
+    issue.taskId = '';
+    issue.taskAddedAt = '';
+    issue.updatedAt = new Date().toISOString();
+    writeState(state);
     res.json(payload());
+  });
+
+  // ---------- 详情（含全文翻译与相关灵感） ----------
+  app.get('/api/special-issues/:id', (req, res) => {
+    const state = readState();
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    const article = state.articles.find((a) => a.id === issue.articleId) || null;
+    res.json({
+      issue: {
+        ...issue,
+        deadline: deadlineMeta(issue),
+        badges: rankBadges(issue),
+      },
+      article: article
+        ? {
+          id: article.id,
+          url: article.url,
+          title: article.title,
+          publishedAt: article.publishedAt,
+          sourceName: article.sourceName,
+          status: article.status,
+          contentChars: article.contentChars || str(article.content).length,
+        }
+        : null,
+      ideaMatches: hydrateIdeaMatches(issue),
+    });
+  });
+
+  // ---------- 相关灵感（大模型梳理） ----------
+  function hydrateIdeaMatches(issue) {
+    const ideas = typeof store.listIdeas === 'function' ? store.listIdeas() : [];
+    const byId = new Map(ideas.map((x) => [x.id, x]));
+    return (issue?.ideaMatches || [])
+      .map((m) => {
+        const idea = byId.get(m.ideaId);
+        // 灵感被删了就别再显示死链接
+        if (!idea) return null;
+        return {
+          ...m,
+          title: idea.title || '未命名灵感',
+          content: clean(idea.content).slice(0, 240),
+          tags: Array.isArray(idea.tags) ? idea.tags.slice(0, 4) : [],
+          status: idea.status || 'seed',
+        };
+      })
+      .filter(Boolean);
+  }
+
+  app.post('/api/special-issues/:id/ideas', async (req, res) => {
+    const state = readState();
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    const ideas = typeof store.listIdeas === 'function' ? store.listIdeas() : [];
+    if (!ideas.length) {
+      return res.json({ ...payload(), ideaMatches: [], message: '灵感孵化里还没有记录，先去记两条想法再来匹配。' });
+    }
+    const am = resolveRequestModel(req.body?.profileId || '');
+    if (am?.error || typeof fetchModelCompletion !== 'function' || typeof readLLMResponse !== 'function') {
+      return res.status(400).json({ error: '未配置大模型，无法梳理灵感关联。请先在「AI 设置」里启用一个模型。' });
+    }
+
+    // 只把最近更新的 40 条送进模型：灵感库可能攒了几百条，全塞进去既超上下文也更不准
+    const pool = [...ideas]
+      .sort((a, b) => str(b.updatedAt || b.createdAt).localeCompare(str(a.updatedAt || a.createdAt)))
+      .slice(0, 40);
+    const ideaLines = pool.map((idea, idx) => [
+      `[${idx + 1}] id=${idea.id}`,
+      `标题：${clean(idea.title || '未命名').slice(0, 120)}`,
+      `内容：${clean(idea.content).slice(0, 700) || '（未填写）'}`,
+      idea.field ? `领域：${clean(idea.field).slice(0, 60)}` : '',
+      (idea.tags || []).length ? `标签：${(idea.tags || []).join('、').slice(0, 120)}` : '',
+    ].filter(Boolean).join('\n')).join('\n\n');
+
+    const siInfo = [
+      `期刊：${clean(issue.journal)}`,
+      clean(issue.titleEn) ? `专刊英文主题：${clean(issue.titleEn)}` : '',
+      `专刊中文主题：${clean(issue.titleZh)}`,
+      issue.deadline ? `截稿日期：${issue.deadline}` : '截稿日期未公布',
+      (issue.topicsZh || []).length ? `主题词：${issue.topicsZh.join('、')}` : '',
+      clean(issue.summaryZh) ? `征稿说明：${clean(issue.summaryZh)}` : '',
+      clean(issue.detailZh || '').slice(0, 2500) ? `征稿详情（节选）：\n${clean(issue.detailZh).slice(0, 2500)}` : '',
+    ].filter(Boolean).join('\n');
+
+    const messages = [
+      {
+        role: 'system',
+        content: [
+          '你是研究选题与征稿信息的匹配助手。',
+          '任务：判断「用户的科研灵感」与「某个期刊专刊的征稿方向」是否真的贴合，只输出 JSON。',
+          '',
+          '【输出】{"matches":[{"id":"灵感id","score":0,"reason":"","angle":""}]}',
+          '- score：0~100 的整数，表示这条灵感写成该专刊论文的契合度。',
+          '  80 以上＝主题、方法或情境直接对口；60~79＝有明显交集，需要调整切口；',
+          '  45~59＝勉强相关；低于 45 的一律不要返回。',
+          '- reason：一句话说明为什么契合（≤60 字，要具体到主题/机制/情境，不要空话）。',
+          '- angle：一句话说明怎么把它写成这个专刊的文章（切入角度或需要补的部分，≤60 字）。',
+          '- 最多返回 5 条，按 score 从高到低。一条都不贴合就返回 {"matches":[]}。',
+          '- 不要为了凑数硬匹配：灵感与征稿方向没有实质交集时必须返回空数组。',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: `【征稿信息】\n${siInfo}\n\n【用户的灵感】\n${ideaLines}`,
+      },
+    ];
+
+    try {
+      const request = await fetchModelCompletion(am.profile, {
+        model: am.profile.model,
+        messages,
+        temperature: 0.2,
+        max_tokens: 1200,
+      }, { stream: false, timeoutMs: 60000 });
+      if (!request?.up?.ok) throw new Error('模型没有返回有效响应');
+      const full = (await readLLMResponse(request.up)).full || '';
+      const json = parseModelJson(full);
+      const rawMatches = Array.isArray(json?.matches) ? json.matches : Array.isArray(json) ? json : [];
+      const valid = new Set(pool.map((x) => x.id));
+      const matches = rawMatches
+        .map((m) => ({
+          ideaId: str(m?.id || m?.ideaId),
+          score: Math.max(0, Math.min(100, Math.round(Number(m?.score) || 0))),
+          reason: clean(m?.reason).slice(0, 300),
+          angle: clean(m?.angle).slice(0, 300),
+          at: new Date().toISOString(),
+        }))
+        .filter((m) => valid.has(m.ideaId) && m.score >= 45)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5);
+
+      // 重新读一遍：模型跑了几十秒，期间用户可能改了别的卡片
+      const latest = readState();
+      const target = latest.issues.find((i) => i.id === issue.id);
+      if (!target) return res.status(404).json({ error: '该征稿已删除，未保存匹配结果' });
+      target.ideaMatches = matches;
+      target.updatedAt = new Date().toISOString();
+      writeState(latest);
+      res.json({ ...payload(), ideaMatches: hydrateIdeaMatches(target), matched: matches.length });
+    } catch (e) {
+      res.status(400).json({ error: '梳理灵感失败：' + clean(e?.message || e) });
+    }
   });
 
   app.patch('/api/special-issues/:id', (req, res) => {
@@ -612,7 +924,12 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
 
   app.delete('/api/special-issues/:id', (req, res) => {
     const state = readState();
-    if (!state.issues.some((i) => i.id === req.params.id)) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    const issue = state.issues.find((i) => i.id === req.params.id);
+    if (!issue) return res.status(404).json({ error: '该征稿不存在或已被清理' });
+    // 删掉征稿等于「不投了」，它派生出的任务也一并撤掉，免得任务列表里留一条无主待办
+    if (issue.taskId && typeof store.listTasks === 'function' && typeof store.saveTasks === 'function') {
+      store.saveTasks(store.listTasks().filter((t) => t.id !== issue.taskId));
+    }
     writeState(removeIssue(state, req.params.id));
     res.json(payload());
   });
@@ -623,7 +940,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const urls = extractArticleUrls(raw);
     const single = /^https?:\/\//i.test(clean(req.body?.url)) ? clean(req.body.url) : '';
     const targets = urls.length ? urls : (single ? [single] : []);
-    if (!targets.length) return res.status(400).json({ error: '请粘贴公众号文章链接（https://mp.weixin.qq.com/s/...）' });
+    if (!targets.length) return res.status(400).json({ error: '请粘贴征稿页链接（公众号文章或出版社专刊页都可以）' });
     const state = readState();
     const now = new Date();
     const extractor = buildExtractor();
@@ -667,7 +984,34 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     }
   });
 
-  // ---------- 补充翻译（抽取已中文化，这里只处理残留英文） ----------
+  // ---------- 全文翻译（旧卡片补 detailZh / 用户手动重译） ----------
+  // 抽取时已经带 detailZh；这个接口是给两类情况兜底：
+  //   ① 升级前生成的卡片只有一句话摘要；
+  //   ② 用户觉得上次翻译质量不好，想重来。
+  // 所以需要重新拿到原文：优先用文章缓存里的正文，其次按链接重抓。
+  async function readArticleText(issue, state) {
+    const article = state.articles.find((a) => a.id === issue.articleId);
+    if (!article) return { text: '', title: '', url: '' };
+    if (article.content && str(article.content).length >= 60) {
+      return { text: htmlToArticleText(article.content), title: article.title, url: article.url };
+    }
+    try {
+      if (article.localPath) {
+        const r = await readLocalArticle(article.localPath, { maxChars: 16000 });
+        return { text: str(r?.text), title: r?.title || article.title, url: article.url };
+      }
+      if (article.url) {
+        const r = isWechatArticleUrl(article.url)
+          ? await fetchWechatArticle(article.url, { fetchImpl })
+          : await fetchWebPageArticle(article.url, { fetchImpl });
+        return { text: str(r?.text), title: r?.title || article.title, url: article.url };
+      }
+    } catch (e) {
+      logger('[SI] 重取原文失败：' + (e?.message || e));
+    }
+    return { text: '', title: article.title, url: article.url };
+  }
+
   app.post('/api/special-issues/:id/translate', async (req, res) => {
     const state = readState();
     const issue = state.issues.find((i) => i.id === req.params.id);
@@ -675,23 +1019,44 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const settings = store.getSettings();
     const engine = translationEngine(settings);
     try {
-      const opts = { target: 'zh', provider: engine.provider, fetchImpl };
-      const title = issue.titleZh || issue.titleEn;
-      const needTitle = /[A-Za-z]{12,}/.test(title) && !/[\u4e00-\u9fa5]/.test(title);
-      const translatedTitle = needTitle ? await translateImpl(issue.titleEn || title, settings, opts) : '';
-      const summary = issue.summaryZh;
-      const needSummary = !summary || (/[A-Za-z]{40,}/.test(summary) && !/[\u4e00-\u9fa5]{6,}/.test(summary));
-      const translatedSummary = needSummary
-        ? await translateImpl((issue.summaryZh || issue.titleEn || '').slice(0, 4000), settings, opts)
-        : '';
+      const { text, title } = await readArticleText(issue, state);
+      if (!text || text.length < 60) {
+        return res.status(400).json({ error: '找不到这条征稿的原文（可能已被微信删除）。可以重新粘贴一次文章链接再试。' });
+      }
+
+      let detailZh = '';
+      const am = resolveRequestModel('');
+      if (!am?.error && typeof fetchModelCompletion === 'function' && typeof readLLMResponse === 'function') {
+        const request = await fetchModelCompletion(am.profile, {
+          model: am.profile.model,
+          messages: buildTranslateMessages(issue, text),
+          temperature: 0.1,
+          max_tokens: 4000,
+        }, { stream: false, timeoutMs: 90000 });
+        if (!request?.up?.ok) throw new Error('模型没有返回有效响应');
+        detailZh = cleanParagraphs((await readLLMResponse(request.up)).full || '');
+        try { request?.cancel?.(); } catch { /* ignore */ }
+      } else {
+        // 没配模型时退到「文本翻译」通道，至少把英文段落译出来（会按长度截断）
+        detailZh = cleanParagraphs(await translateImpl(text.slice(0, 6000), settings, {
+          target: 'zh', provider: engine.provider, fetchImpl,
+        }));
+      }
+      if (!detailZh) throw new Error('翻译结果为空，请检查模型配置');
+
       const latest = readState();
       const current = latest.issues.find((i) => i.id === issue.id);
       if (!current) return res.status(404).json({ error: '该征稿已删除或到期，未保存译文' });
-      if (translatedTitle) current.titleZh = translatedTitle.slice(0, 300);
-      if (translatedSummary) current.summaryZh = translatedSummary.slice(0, 1200);
+      current.detailZh = detailZh.slice(0, 12000);
+      // 顺带补上标题译文：有些卡片来自纯英文官网，标题还是英文
+      const zhTitle = current.titleZh || current.titleEn;
+      if (zhTitle && !/[\u4e00-\u9fa5]/.test(zhTitle)) {
+        current.titleZh = (title || zhTitle).slice(0, 300);
+      }
       current.translatedAt = new Date().toISOString();
+      current.updatedAt = new Date().toISOString();
       writeState(latest);
-      res.json({ ...payload(), translated: true });
+      res.json({ ...payload(), translated: true, detailChars: current.detailZh.length });
     } catch (e) {
       res.status(400).json({ error: '翻译失败：' + (e?.message || '未知错误') });
     }

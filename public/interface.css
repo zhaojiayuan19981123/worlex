@@ -128,10 +128,12 @@ input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color:
 /* Content stays opaque and still while navigation transitions. */
 .main-area > .view { animation: interface-view-in 180ms var(--ease); }
 @keyframes interface-view-in { from { opacity: .25; } to { opacity: 1; } }
-.card, .proj-card, .paper-card, .note-card, .idea-card, .si-card, .tj-stat, .si-stat, .wl-item { border-radius: 8px; border-color: var(--border-soft); }
+.card, .proj-card, .paper-card, .note-card, .idea-card, .si-row, .tj-stat, .si-stat, .wl-item { border-radius: 8px; border-color: var(--border-soft); }
 .view-toolbar { flex-wrap: wrap; }
 .home-mid { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
-.home-bottom { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* 卡片数从 3 张增到 4 张（新增「征稿截止」）：固定 3 列会把第 4 张挤到下一行留下大片空白，
+   改成按可用宽度自动排布；窄屏由下面的媒体查询收成单列。 */
+.home-bottom { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
 .home-mid > *, .home-bottom > *, .cal-grid > *, .cal-week > * { min-width: 0; }
 .home-banner .hb-greet { font-size: 22px; line-height: 1.4; }
 .home-banner { padding: 22px 24px; }

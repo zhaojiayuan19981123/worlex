@@ -1,3 +1,41 @@
+## v2.4.0：SI 改为「一览表 + 右侧抽屉」，收稿支持官网链接与整段正文，翻译改全文、收藏改任务（2026-11-25）
+
+### 背景
+v2.3.2 的「粘贴收稿」只认 `mp.weixin.qq.com` 链接，界面仍是卡片网格 + 点击原地展开。用户提了 7 条具体的用法问题，逐条对应如下：
+
+| # | 用户诉求 | 本版做法 |
+| --- | --- | --- |
+| 1 | SI 改成列表排列，点击时右侧弹出 | 一览表 + 620px 右侧抽屉（含 Esc / 遮罩关闭、焦点回收、三档响应式） |
+| 2 | 界面要告诉用户去哪个公众号粘贴 | 顶部「去哪找征稿」指引卡：**SSCI征稿**（微信号 `sscizhenggao`）+ 三步操作，可收起并记忆 |
+| 3 | 支持粘贴官网 SI 链接或内容 | 新增 `src/siWebPage.js` 通用网页正文抽取；`parseCollectInput` 让「链接」与「整段正文」自动分流 |
+| 4 | 翻译不要概括，要全文翻译 | 新增 `detailZh`（全文）与 `summaryZh`（一句话）；提示词版本 2 → 3；截断 JSON 用 `salvageModelJson` 抢救 |
+| 5 | 去掉收藏，改为添加到工作任务并在首页展示 | `POST/DELETE /:id/task` 派生真任务（截止日取截稿日、按天数定优先级、`source: 'si'`）；首页新增「征稿截止」卡；移除 `favoriteIds` 与 `/favorite` |
+| 6 | 首页展示最近 deadline | `nearestTaskDeadline()` 只统计已加任务且未过期的征稿；SI 统计条第 4 格 + 首页卡片取前 4 条 |
+| 7 | 抽屉里链接灵感孵化中的相关想法（需大模型梳理） | `POST /:id/ideas`：最近 40 条灵感 → 模型打分排序 → `score >= 45`、≤5 条写回 `ideaMatches`，可点回灵感 |
+
+### 改动
+| 文件 | 改动 |
+| --- | --- |
+| `src/siWebPage.js` | **新增**。`fetchWebPageArticle(url)`：`article` → `main` → `id/class` 含 article/content/main/body/text/detail/call 的容器，取文本量最大且 ≥200 字者，无则退回 `body`；去 `nav/script/style/header/footer/aside`、块级标签转换行、链接转「文字 (URL)」。拦截检测：人机验证 / `cf-challenge` / `captcha` / 「访问过于频繁」→ 可读报错并提示改成粘贴正文；401/403 →「不允许程序访问」；>4MB 与正文 <80 字各有专门文案 |
+| `src/siPipeline.js` | `extractOne` 取正文从「本地文件 / 微信」两路改为四路：`feed` 自带全文 → `text` 粘贴正文 → 本地文件 → 微信 `fetchWechatArticle` → 其他 `fetchWebPageArticle`。**这是「贴官网地址没反应」的根因**：此前所有 URL 都被当微信文章抓 |
+| `src/siExtract.js` | `SI_PROMPT_VERSION` 2 → 3；`buildExtractMessages` 重写：新增 `detailZh`（全文翻译，不概括不合并不省略段落、数字日期期刊名邮箱链接原样保留、段间 `\n`、≤4000 字），`summaryZh` 收窄为一句话；来源文案改为「材料来源 / 材料标题」以兼容官网。新增 `buildTranslateMessages()`（单独全译提示词，只输出译文）与 `salvageModelJson()`（JSON 被 token 上限截断时逐字段正则抢救，含 `detailZh` 取到断点）。`normalizeExtractedIssues` 增加 `detailZh` 清洗（CRLF 归一、压空行、保留分段、≤12000 字），`summaryZh` 上限 1200 → 400；`ruleExtractIssues` 输出 `detailZh: ''` |
+| `src/specialIssues.js` | 抽出 `normalizeIssueRecord()` 作为字段白名单的**单一出口**（v2.3.0 曾因 map 里漏字段静默丢全文）；新增 `detailZh` / `summaryZh` / `taskId` / `taskAddedAt` / `ideaMatches`；`contentKind` 白名单加 `'text'`；`mergeIssues` 里空译文不覆盖旧译文，`taskId` / `taskAddedAt` / `ideaMatches` 一律保留旧值（抽取无权清用户数据）；`listIssues` 支持 `taskOnly`；`specialIssueSummary` 新增 `tasks` 与 `nearestTask`；导出 `nearestTaskDeadline()` |
+| `src/specialIssueRoutes.js` | `POST /collect` 重写：接受公众号链接 / 官网链接 / 整段正文，返回 `counted:{wechat,page,text}`；新增 `parseCollectInput()`（去链接后 ≥400 字且含征稿信号则整体按正文收，避免「链接 + 正文」重复出两条）、`textArticleId()`（`art_t` + sha1 前 16 位）、`enqueueTargets()` 取代 `enqueueArticleUrls()`。新增路由 `GET /:id`（详情，含 `deadline` / `badges` / `article` / `ideaMatches`）、`POST /:id/task`、`DELETE /:id/task`、`POST /:id/ideas`；删除 `POST /:id/favorite`。`POST /:id/translate` 改为取缓存正文（丢了按链接重抓）→ 优先模型全译、无模型回落 `translateImpl` → 写 `detailZh`。`payload()` 列表**不再下发全文**（只给 `detailChars` / `hasTask`），新增 `guide` 公众号指引；`DELETE /:id` 连带删除派生任务。抽取 `max_tokens` 2600 → 4000、超时 60s → 90s，解析失败先 `salvageModelJson` 再退规则 |
+| `public/special-issue.js` | 整体重写。`renderGuide()` 指引卡（`localStorage: worlex.si.guideHidden`）；`renderStats()` 5 格（含「任务最近截止」「已加入任务的征稿」）；`renderList()` / `rowHtml()` 一览表（行可 `Tab` 聚焦、`Enter`/空格打开、已加任务行左侧主色条）；`openDrawer/closeDrawer/loadDetail/renderDrawer` 右侧抽屉（两页签、事实网格、全文翻译按段渲染、缺失时给「生成全文翻译」）；`addTask/removeTask/translateDetail/matchIdeas`；`openCollect()` 三态计数 + 读剪贴板；`bindGlobalPaste()` 空白处 Ctrl+V；导出 `open(id)` 供首页跳转。移除收藏相关状态与渲染 |
+| `public/special-issue.css` | 新增 `.si-guide*`、`.si-list/-head/-row*`（1180/900/720 三档降级）、`.si-drawer*`、`.si-detail-*`、`.si-idea*`、`.si-task-*`；统计条改 5 列。修掉抽屉里主按钮渲染成灰底的问题：改为 `.si-root .tb-btn.is-primary` 祖先覆盖（原先逐个列举容器类，漏了抽屉） |
+| `public/app.js` | `window.Worlex` 新增 `refreshTasks()` / `openIdea(id)` / `goView(v)`；`renderHome()` 新增「征稿截止」卡（`source === 'si' && status !== 'done'`，按天数取 4 条，显示「N 天后截止 / 今天截止 / 逾期 N 天」）；倒计时标签对 SI 任务显示「征稿截止」；任务行对 SI 任务加「征稿」chip；点条目 → `switchView('specialissue')` → `SpecialIssueView.open(issueId)` |
+| `public/index.html` | 首页 `home-bottom` 新增「征稿截止」卡与 `#siTaskList` |
+| `public/style.css` / `public/interface.css` | `.si-task-list/-item/-days` 等；`.home-bottom` 由固定 3 列改 `auto-fit / minmax`——4 张卡时固定 3 列会把第 4 张挤到下一行（`interface.css` 的规则原来覆盖了 `style.css`，两处都要改） |
+| `test/special-issues-collect.test.mjs` | 新增 5 项：官网专刊页抓取、整段正文零网络请求、加入任务（`due` 取截稿日、`already` 去重、`summary.tasks`）、移出任务、未配模型时 `/ideas` 返回 400；首条断言改为新文案「没有识别到可处理的内容」 |
+| `test/special-issues-v2.test.mjs` | 新增 7 项：`detailZh` 保留分段 / CRLF 归一 / 12000 字截断、截断 JSON 抢救、翻译提示词含「不概括 / 逐段」、`nearestTaskDeadline` 只算已加任务、`mergeIssues` 不冲掉任务与旧译文、`htmlToPlainText` 去 nav/script、403 报错提示粘贴 |
+| `README.md` / `docs/SI_WECHAT_PIPELINE.md` | SI 段落改为「一览表 + 抽屉 / 三种粘贴 / 全文翻译 / 加入任务 / 灵感关联」；文档新增 3.3~3.6 四节、更新流程图（四路取正文）、状态字段表与接口表 |
+
+### 验证
+- 全量 `node --test` **881 项 0 失败**（`duration_ms 28068`）；`special-issues-collect` 10/10、`special-issues-v2` 40/40；`node --check` 全部通过。
+- Playwright 端到端（1680×980，无 console / page 错误）：粘贴正文识别「1 段正文（766 字）」→ 出 1 行 → 打开抽屉 → 相关灵感页签 → 加入任务提示「已加入任务安排，截止 2026-12-31」→ 统计格第 4 格变 `12-31 / 任务最近截止 · 36 天后截止`、第 5 格 `1`；首页四卡同排（`gridTemplateColumns` 为 345.5px × 4，`tops` 全一致），"征稿截止"卡显示该条目；任务安排里带「征稿」chip；粘贴三种形态计数正确（微信 1 篇 / 网页 1 个 / 短文本提示「没有识别到内容」且按钮 disabled）；指引卡收起后刷新仍收起。
+- 修复过程中发现并解决：列表中「让模型梳理相关灵感」按钮无实心主色（CSS 祖先覆盖缺失）、加入任务后统计格未立即更新（`loadDetail` 在 `renderList/renderStats` 之前）、首页第 4 张卡换行（`interface.css` 覆盖）、列表布局用例断言与新文案不匹配。
+- 未验证：真实大模型的全文翻译质量与耗时、真实出版社官网上大面积 Cloudflare 站点的抓取成功率。
+
 ## v2.3.2：SI 增加「粘贴收稿」零配置主路径（2026-11-25）
 
 ### 背景
