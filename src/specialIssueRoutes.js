@@ -19,7 +19,7 @@ import {
 } from './specialIssues.js';
 import { collectArticles, processArticles, requeueArticles, enrichRanks, pendingRankCount, runSyncPipeline } from './siPipeline.js';
 import { buildExtractMessages, parseModelJson, normalizeExtractedIssues, ruleExtractIssues } from './siExtract.js';
-import { extractArticleUrls } from './siSources.js';
+import { extractArticleUrls, isWechatArticleUrl } from './siSources.js';
 
 const str = (v) => String(v == null ? '' : v);
 const clean = (v) => str(v).replace(/\s+/g, ' ').trim();
@@ -84,7 +84,8 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
 
   // 供外部（如备份恢复）判断是否有写在跑：抓取、阶段任务期间都不应替换数据文件。
   let activeOps = 0;
-  const isBusy = () => runtime.running || !!syncPromise || activeOps > 0;
+  let collectPromise = null;
+  const isBusy = () => runtime.running || !!syncPromise || !!collectPromise || activeOps > 0;
 
   // ---------- 抽取器：模型优先，失败退规则 ----------
   function buildExtractor() {
@@ -135,6 +136,30 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   // ---------- 同步（手动 / 定时共用，单飞） ----------
   let syncPromise = null;
 
+  /**
+   * 把用户粘贴的链接放进「待处理」队列。
+   * 只入库不抽取：这样即使界面被关掉、或者要分批处理很久，文章也已经记下来了。
+   */
+  function enqueueArticleUrls(state, urls, { sourceName = '微信粘贴' } = {}) {
+    const now = new Date();
+    const seen = new Set(state.articles.map((a) => a.id));
+    let queued = 0;
+    let existing = 0;
+    for (const url of urls) {
+      const id = articleIdOf(url);
+      if (seen.has(id)) { existing += 1; continue; }
+      seen.add(id);
+      state.articles.push({
+        id, url, localPath: '', title: '', publishedAt: '', digest: '',
+        contentKind: 'url', sourceId: '', sourceName,
+        status: 'pending', attempts: 0, lastError: '', fetchedAt: now.toISOString(),
+        extractedAt: '', contentChars: 0,
+      });
+      queued += 1;
+    }
+    return { queued, existing };
+  }
+
   function runSync(reason = 'manual', opts = {}) {
     if (syncPromise) return syncPromise;
     syncPromise = (async () => {
@@ -169,10 +194,29 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       } finally {
         runtime.running = false;
         setPhase('idle', '');
-        syncPromise = null;
       }
-    })();
+    })().finally(() => { syncPromise = null; });
     return syncPromise;
+  }
+
+  /**
+   * 把管线产物写回磁盘。偏好 / 收藏 / 文章源以「最新」为准：
+   * 抽取可能跑十几分钟，期间用户点收藏、改偏好都不该被整份状态覆盖掉。
+   */
+  function commitPipeline(nextState) {
+    const latest = readState();
+    const merged = {
+      ...latest,
+      articles: nextState.articles,
+      issues: nextState.issues,
+      ranks: { ...latest.ranks, ...nextState.ranks },
+      sync: nextState.sync || latest.sync,
+      lastAttemptAt: nextState.lastAttemptAt || latest.lastAttemptAt,
+      lastSyncAt: nextState.lastSyncAt || latest.lastSyncAt,
+      sources: latest.sources,
+    };
+    writeState(merged);
+    return merged;
   }
 
   async function runPipeline(state, { settings, extractor, sourceIds, backfillDays }) {
@@ -192,23 +236,84 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       rounds: 6,
       rankLimit: 25,
       concurrency: 2,
-    }).then(({ state: nextState, summary }) => {
-      const latest = readState();
-      // 同步期间用户可能改了偏好/收藏：以最新为底，只并入管线产出
-      const merged = {
-        ...latest,
-        articles: nextState.articles,
-        issues: nextState.issues,
-        ranks: { ...latest.ranks, ...nextState.ranks },
-        sync: nextState.sync,
-        lastAttemptAt: nextState.lastAttemptAt,
-        lastSyncAt: nextState.lastSyncAt || latest.lastSyncAt,
-        sources: latest.sources,
-      };
-      writeState(merged);
-      return { state: merged, summary };
-    });
+    }).then(({ state: nextState, summary }) => ({ state: commitPipeline(nextState), summary }));
   }
+
+  // ---------- 粘贴收稿（零配置主路径） ----------
+  // 一条公众号文章链接就能开工：不依赖 RSS、不依赖任何外部服务。
+  // 因为每篇都要过一次大模型，几十篇会跑很久，所以接口只负责入队并立即返回，
+  // 前端轮询 /status 看进度（与「立即同步」共用同一套运行态）。
+  const COLLECT_MAX = 60;
+  const COLLECT_BATCH = 6;
+
+  function runCollect(total) {
+    if (collectPromise) return collectPromise;
+    collectPromise = (async () => {
+      runtime.running = true;
+      runtime.startedAt = new Date().toISOString();
+      runtime.lastResult = null;
+      const extractor = buildExtractor();
+      const summary = {
+        added: total, processed: 0, extractedArticles: 0, newIssues: 0,
+        skipped: 0, failed: 0, ranked: 0, errors: [],
+      };
+      try {
+        setPhase('extract', `正在识别 ${total} 篇文章`);
+        let done = 0;
+        const batches = Math.ceil(total / COLLECT_BATCH);
+        for (let round = 0; round < batches; round += 1) {
+          const cur = readState();
+          const { stats } = await processArticles(cur, {
+            fetchImpl,
+            extract: (text, ctx) => extractor.extract(text, ctx),
+            now: new Date(),
+            limit: COLLECT_BATCH,
+            concurrency: 2,
+            onProgress: (n) => setPhase('extract', `正在识别 ${Math.min(total, done + n)}/${total} 篇`),
+          });
+          // 每批都把结果并入最新状态：长任务中断也不会丢掉前面已识别的内容
+          commitPipeline(cur);
+          if (!stats.processed) break;
+          done += stats.processed;
+          summary.processed += stats.processed;
+          summary.extractedArticles += stats.extracted;
+          summary.newIssues += stats.issues;
+          summary.skipped += stats.skipped;
+          summary.failed += stats.failed;
+          if (stats.errors?.length) summary.errors.push(...stats.errors);
+        }
+
+        const settings = store.getSettings();
+        const secretKey = clean(settings.easyScholarKey);
+        if (secretKey && readState().preferences.autoRank !== false) {
+          setPhase('rank', '正在查期刊等级');
+          const cur = readState();
+          try {
+            const r = await enrichRanks(cur, {
+              queryRank: queryRankImpl, formatRank, secretKey, now: new Date(), limit: 25,
+            });
+            commitPipeline(cur);
+            summary.ranked = r.updated || 0;
+          } catch (e) {
+            // 等级查不到不该影响已经识别出来的卡片
+            logger('[SI] 收稿后查等级失败：' + (e?.message || e));
+          }
+        }
+
+        runtime.lastResult = summary;
+        return { ok: true, summary, extractedBy: extractor.hasModel ? 'ai' : 'rule' };
+      } catch (e) {
+        summary.errors.push({ error: clean(e?.message || e) || '处理失败' });
+        runtime.lastResult = summary;
+        return { ok: false, summary, error: clean(e?.message || e) || '处理失败' };
+      } finally {
+        runtime.running = false;
+        setPhase('idle', '');
+      }
+    })().finally(() => { collectPromise = null; });
+    return collectPromise;
+  }
+
 
   const scheduler = createSpecialIssueScheduler({
     getState: readState,
@@ -275,8 +380,8 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
         hasEasyScholarKey: !!clean(settings.easyScholarKey),
       },
       rankPending: pendingRankCount(state, { now }),
-      runtime: { ...runtime, running: runtime.running || !!syncPromise },
-      scheduler: { ...scheduler.status(), running: runtime.running || !!syncPromise },
+      runtime: { ...runtime, running: runtime.running || !!syncPromise || !!collectPromise },
+      scheduler: { ...scheduler.status(), running: runtime.running || !!syncPromise || !!collectPromise },
     };
   }
 
@@ -295,7 +400,7 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
   app.get('/api/special-issues', (req, res) => res.json(payload(queryOpts(req))));
   app.get('/api/special-issues/status', (_req, res) => res.json({
     ...scheduler.status(),
-    runtime: { ...runtime, running: runtime.running || !!syncPromise },
+    runtime: { ...runtime, running: runtime.running || !!syncPromise || !!collectPromise },
   }));
 
   // ---------- 文章源 CRUD ----------
@@ -381,6 +486,48 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
       runtime.message = '';
     });
     res.json({ started: true, running: true, ...payload(queryOpts(req)) });
+  });
+
+  /**
+   * 粘贴收稿：一次给多条（微信「复制链接」的短链、分享文案、一行一个都行）。
+   * 这是「不想折腾 RSS / 订阅服务」时的主路径，零配置可用。
+   */
+  app.post('/api/special-issues/collect', (req, res) => {
+    if (syncPromise || collectPromise || runtime.running) {
+      return res.status(409).json({ error: '上一批还在处理，等它跑完再贴下一批。' });
+    }
+    const raw = Array.isArray(req.body?.urls)
+      ? req.body.urls.join('\n')
+      : str(req.body?.text || req.body?.url);
+    const all = extractArticleUrls(raw).filter((u) => isWechatArticleUrl(u));
+    if (!all.length) {
+      return res.status(400).json({ error: '没有识别到公众号文章链接。请在微信里打开文章，点右上角「…」→ 复制链接，再粘贴到这里。' });
+    }
+    const urls = all.slice(0, COLLECT_MAX);
+    const dropped = Math.max(0, all.length - urls.length);
+
+    // 先在请求里入队并落盘：这样「收下了没有」有确定答案，
+    // 全是重复链接时也不必白跑一趟后台任务。
+    const state = readState();
+    const { queued, existing } = enqueueArticleUrls(state, urls);
+    if (queued) writeState(state);
+    if (!queued) {
+      return res.json({
+        started: false, running: false, queued: 0, existing, dropped,
+        ...payload(queryOpts(req)),
+      });
+    }
+
+    runtime.running = true;
+    runCollect(queued).catch((e) => {
+      logger('[SI] 收稿异常：' + (e?.message || e));
+      runtime.running = false;
+      setPhase('idle', '');
+    });
+    res.json({
+      started: true, running: true, queued, existing, dropped,
+      ...payload(queryOpts(req)),
+    });
   });
 
   /** 只跑某一阶段，便于界面分开操作（例如只补等级、只重试失败）。 */

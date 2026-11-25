@@ -1,5 +1,5 @@
 // electron/main.cjs —— Electron 主进程：启动内嵌 Express 后端 + 桌面窗口
-const { app, BrowserWindow, shell, Notification, dialog } = require('electron');
+const { app, BrowserWindow, shell, Notification, dialog, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { shouldPrompt, PROMPT_SKIP, PROMPT_IN_APP } = require('./update-prompt.cjs');
 const updateSource = require('./update-source.cjs');
@@ -750,6 +750,12 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   setupUpdater();
+  // SI「粘贴收稿」需要一键读剪贴板。只放行剪贴板读写，其余权限仍按默认拒绝。
+  const allowClipboard = (permission) => permission === 'clipboard-read' || permission === 'clipboard-sanitized-write';
+  try {
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(allowClipboard(permission)));
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowClipboard(permission));
+  } catch (_) { /* 老版本 Electron 缺 API 时退回手按 Ctrl+V */ }
   try {
     backendPort = await startBackend();
   } catch (e) {

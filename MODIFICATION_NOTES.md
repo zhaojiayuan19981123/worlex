@@ -1,3 +1,26 @@
+## v2.3.2：SI 增加「粘贴收稿」零配置主路径（2026-11-25）
+
+### 背景
+v2.3.1 把免费方案押在自建 wechat-mp-tools 上，但它要么 Docker、要么装二进制，而且**必须登录 mp.weixin.qq.com 公众号后台**（得有自己能登录的公众号）——对只是想追一个号的读者来说门槛过高。实测本机 `docker` 不存在，用户明确反馈「不会弄这个 RSS」。
+
+另外确认过几条「更省事」的路，全部不通：搜狗微信搜索返回 200 但响应体为 0 字节（已被反爬拦死）；纯靠 `__biz` 拼 `profile_ext` 仍需要微信客户端环境里的 `key`/`uin`；Hook 本机微信本地库需要特定微信版本 + 解密注入，风控与维护成本都高于收益。**结论：文章列表只能来自「已经在微信里看过的人」，所以把「复制链接」这一步做到最省力。**
+
+### 改动
+| 文件 | 改动 |
+| --- | --- |
+| `src/specialIssueRoutes.js` | 新增 `POST /api/special-issues/collect`：从任意文本提取微信文章链接 → 先入队落盘 → 后台分批（每批 6 篇）抽取 → 每批落盘一次 → 自动补 EasyScholar 等级；单次上限 60 篇，超出用 `dropped` 告知；与「立即同步」共用 `runtime` 互斥。抽出 `enqueueArticleUrls()` 与 `commitPipeline()`（后者原本内联在 `runPipeline` 里，避免长任务期间覆盖用户刚改的偏好/收藏）。**修复**：`syncPromise` / `collectPromise` 在「提前 return」路径上会永久留在已完成状态，导致此后 `/sync` 与 `/collect` 全部静默失败——改用 `.finally()` 挂在 Promise 链上释放 |
+| `public/special-issue.js` | 头部新增主按钮「粘贴收稿」；新增收稿浮层（实时识别计数、重复链接自动去重、一键读剪贴板）；**页面任意空白处 Ctrl+V 自动弹窗预填**（`paste` 监听在 `mount` 挂、`close` 解绑，来回切视图不会重复弹层）；空态与顶部提示文案改为「复制链接 → Ctrl+V」；文章源面板说明重写（不再推荐 RSS 作为首选） |
+| `public/special-issue.css` | 收稿浮层与主按钮样式，全部走既有 token 变量 |
+| `src/siSources.js` | `SOURCE_TYPES` 文案按新定位重写：`links` 标注推荐且说明「消费后自动移除」 |
+| `electron/main.cjs` | 放行 `clipboard-read` 权限（其余仍拒绝），让「从剪贴板读取」按钮在桌面版可用 |
+| `test/special-issues-collect.test.mjs` | 新增 5 项：非微信链接被拒、分享文案混合去重、重复贴不入库、忙碌时 409、60 条上限 |
+| `README.md` / `docs/SI_WECHAT_PIPELINE.md` | 把「粘贴收稿」写成默认用法；3.1 节改为粘贴收稿，wechat-mp-tools 降为 3.2 并补 Windows 免安装包与「需要公众号账号」的前提 |
+
+### 验证
+- 新增收稿测试 5/5；SI 单测 33/33；全量 `node --test` 869/869 通过。
+- Playwright 真浏览器 15/15：主按钮存在且有实际底色、浮层打开、初始「开始识别」禁用、混排文本去重计数为 2、关闭、空白处粘贴自动弹层并预填、普通文本不打扰、来回切视图只弹一层、无 JS 运行时错误。截图确认浮层与空态排版无溢出。
+- 未验证：真实大模型下的收稿耗时（一条链接到出卡的端到端时长），以及桌面版打包后 `clipboard-read` 权限在 Electron 沙箱下的实际表现（已 try/catch 兜底，失败时提示手按 Ctrl+V）。
+
 ## v2.3.1：RSS 源直接消费 wechat-mp-tools，正文取订阅源全文（2026-11-25）
 
 ### 背景

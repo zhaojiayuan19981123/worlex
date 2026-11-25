@@ -178,6 +178,25 @@
 .si-status.is-failed { color: var(--rank-red, var(--text-2)); border-color: color-mix(in srgb, var(--rank-red, var(--border)) 40%, var(--border)); }
 .si-status.is-skipped { color: var(--text-3); }
 
+/* ===== 粘贴收稿 ===== */
+.si-head-actions .tb-btn.is-primary,
+.si-collect .tb-btn.is-primary,
+.si-empty-actions .tb-btn.is-primary {
+  background: var(--primary); border-color: var(--primary); color: var(--primary-fg, #fff);
+}
+.si-head-actions .tb-btn.is-primary:hover:not(:disabled),
+.si-collect .tb-btn.is-primary:hover:not(:disabled),
+.si-empty-actions .tb-btn.is-primary:hover:not(:disabled) { opacity: .9; color: var(--primary-fg, #fff); }
+
+.si-collect { width: min(640px, 100%); }
+.si-collect .si-panel-head { padding: 12px 14px; }
+.si-collect .si-panel-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.si-collect-input { margin-top: 10px; min-height: 140px; font-size: 12px; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.si-collect-count { margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.si-collect-count.is-ready { color: var(--primary); font-weight: 600; }
+.si-collect-note { margin-top: 12px; }
+.si-collect .si-panel-actions { justify-content: flex-end; }
+
 /* ===== 响应式 ===== */
 @media (max-width: 1080px) {
   .si-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

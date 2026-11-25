@@ -26,8 +26,7 @@ export const SOURCE_TYPES = [
   {
     type: 'rss',
     label: 'RSS 订阅地址',
-    hint: '粘贴公众号的 RSS 订阅地址，每日自动拉取。可接自建的 wechat-mp-tools（免费、可回溯历史，订阅地址形如 http://127.0.0.1:5200/api/articles/rss，需扫码登录一次），也可用收费的 wechat2rss。如果订阅源自带全文，会直接用它抽取，不再重复抓正文。',
-    recommended: true,
+    hint: '一次配置后每天自动拉取，适合要回溯大量历史文章。可接自建的 wechat-mp-tools（有 Windows 免安装包，不需要 Docker，但要用自己的公众号账号扫码登录），也可用收费的 wechat2rss。订阅源自带全文时不会再重复抓正文。',
   },
   {
     type: 'folder',
@@ -37,7 +36,8 @@ export const SOURCE_TYPES = [
   {
     type: 'links',
     label: '粘贴文章链接',
-    hint: '在微信里复制文章链接，一行一个粘贴进来。适合补录、验证和没有订阅服务时使用。',
+    hint: '零配置：一行一个粘贴公众号文章链接，保存后自动抓正文并抽取。适合一次性批量补录——这批处理完，这条来源会自动移除，不会每天重复抓。日常零散文章直接用页面上的「粘贴收稿」。',
+    recommended: true,
   },
   {
     type: 'json',

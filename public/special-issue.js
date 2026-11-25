@@ -39,6 +39,7 @@
     pollTimer: null,
     pollStartedAt: 0,
     expanded: new Set(),
+    pasteHandler: null,
   };
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -95,6 +96,7 @@
           <div class="si-meta-line" id="siMeta"></div>
         </div>
         <div class="si-head-actions">
+          <button class="tb-btn is-primary" id="siCollectBtn">${ico('clipboard')}<span>粘贴收稿</span></button>
           <button class="tb-btn" id="siSyncBtn">${ico('refresh')}<span>立即同步</span></button>
           <button class="tb-btn" id="siRankBtn">${ico('award')}<span>刷新等级</span></button>
           <button class="tb-btn" id="siSettingsBtn">${ico('settings')}<span>设置</span></button>
@@ -124,6 +126,7 @@
     host.appendChild(root);
     S.root = root;
 
+    root.querySelector('#siCollectBtn').addEventListener('click', () => openCollect());
     root.querySelector('#siSyncBtn').addEventListener('click', () => sync());
     root.querySelector('#siRankBtn').addEventListener('click', () => refreshRanks());
     root.querySelector('#siSettingsBtn').addEventListener('click', () => openPanel('sources'));
@@ -226,8 +229,10 @@
       return;
     }
     if (!d.summary.enabledSources) {
-      el.innerHTML = `<div class="si-banner is-warn">${ico('info')}<span>还没有配置文章源。这个模块通过监控公众号「SSCI征稿」的文章来收录征稿信息。</span>
-        <button class="si-link-btn" id="siAddLink">去添加</button></div>`;
+      el.innerHTML = `<div class="si-banner is-warn">${ico('info')}<span>不需要订阅服务也能用：在微信里复制「SSCI征稿」的文章链接，回到这里按 Ctrl+V 就收下了。</span>
+        <button class="si-link-btn" id="siPasteLink">粘贴收稿</button>
+        <button class="si-link-btn" id="siAddLink">配置自动同步</button></div>`;
+      el.querySelector('#siPasteLink')?.addEventListener('click', () => openCollect());
       el.querySelector('#siAddLink')?.addEventListener('click', () => openPanel('sources'));
       return;
     }
@@ -400,15 +405,18 @@
         <p>${hasIssues
           ? '试试放宽截止时间或清空主题筛选。'
           : d.summary.enabledSources
-            ? '已配置文章源。点右上角「立即同步」开始抓取；首次会回溯最近的公众号文章，需要几分钟。'
-            : '先在「设置 → 文章源」里添加一个来源：可以粘贴公众号文章链接，或填 RSS 订阅地址。'}</p>
+            ? '文章源已就绪。点「立即同步」拉取新文章；也可以在微信里复制文章链接，回到这里按 Ctrl+V 直接收稿。'
+            : '最快的方式：在微信里打开「SSCI征稿」的文章 → 复制链接 → 回到这里按 Ctrl+V。不用装任何服务，也不用配 RSS。'}</p>
         <div class="si-empty-actions">
           ${hasIssues
             ? '<button class="tb-btn" id="siEmptyClear">清除筛选</button>'
-            : '<button class="tb-btn" id="siEmptyAdd">添加文章源</button><button class="tb-btn" id="siEmptySync">立即同步</button>'}
+            : `<button class="tb-btn is-primary" id="siEmptyCollect">${ico('clipboard')}<span>粘贴文章链接</span></button>
+               <button class="tb-btn" id="siEmptyAdd">添加文章源</button>
+               <button class="tb-btn" id="siEmptySync">立即同步</button>`}
         </div>
       </div>`;
       el.querySelector('#siEmptyClear')?.addEventListener('click', () => S.root.querySelector('#siClear')?.click());
+      el.querySelector('#siEmptyCollect')?.addEventListener('click', () => openCollect());
       el.querySelector('#siEmptyAdd')?.addEventListener('click', () => openPanel('sources'));
       el.querySelector('#siEmptySync')?.addEventListener('click', () => sync());
       return;
@@ -536,6 +544,148 @@
     } catch (e) { toast(e.message || '删除失败', 'error'); }
   }
 
+  // ---------------- 粘贴收稿（零配置主路径） ----------------
+  // 公众号「文章列表」目前没有免登录的免费获取方式（原因见 src/siSources.js 顶部），
+  // 所以这里把「在微信里复制链接」做成最小的显式动作，其余全自动化：
+  //   复制 → 本页 Ctrl+V → 抓正文 + 大模型抽取 + 查等级 → 出卡片。
+  const WX_LINK_RE = /https?:\/\/mp\.weixin\.qq\.com\/s[/?][^\s"'<>（）()，。、；;]*/gi;
+
+  function linkKey(url) {
+    try {
+      const u = new URL(url);
+      const sn = u.searchParams.get('sn');
+      if (sn) return 'sn:' + sn;
+      const biz = u.searchParams.get('__biz');
+      const mid = u.searchParams.get('mid') || u.searchParams.get('appmsgid');
+      if (biz && mid) return `wx:${biz}:${mid}:${u.searchParams.get('idx') || '1'}`;
+      const short = /^\/s\/([A-Za-z0-9_-]{4,})$/.exec(u.pathname);
+      if (short) return 'p:' + short[1];
+      return u.href.replace(/\/$/, '');
+    } catch { return String(url || ''); }
+  }
+
+  /** 从任意文本里挑出公众号链接并去重（微信分享文案、一行一个、混排都能处理）。 */
+  function pickedLinks(text) {
+    const found = String(text || '').match(WX_LINK_RE) || [];
+    const seen = new Set();
+    const out = [];
+    for (let url of found) {
+      url = url.replace(/[)）\]】,，。.;；]+$/, '');
+      const key = linkKey(url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(url);
+    }
+    return out;
+  }
+
+  function openCollect(prefill = '') {
+    if (!S.root) return;
+    closeCollect();
+    const mask = document.createElement('div');
+    mask.id = 'siCollectMask';
+    mask.className = 'si-mask';
+    mask.innerHTML = `<div class="si-panel si-collect" role="dialog" aria-modal="true">
+      <div class="si-panel-head">
+        <h3>粘贴微信文章链接</h3>
+        <button class="si-icon-btn" id="siCollectClose" title="关闭">${ico('x')}</button>
+      </div>
+      <div class="si-panel-body">
+        <p class="si-hint">在微信里打开文章 → 右上角「…」（电脑版右键）→ <b>复制链接</b> → 回到这里按 <b>Ctrl+V</b>。
+          一次一篇或多篇都行，重复链接会自动跳过。</p>
+        <textarea class="si-input si-textarea si-collect-input" id="siCollectText" rows="7"
+          placeholder="https://mp.weixin.qq.com/s/...">${esc(prefill)}</textarea>
+        <div class="si-collect-count" id="siCollectCount">还没有识别到链接</div>
+        <div class="si-panel-actions">
+          <button class="tb-btn" id="siCollectPaste">${ico('clipboard')}<span>从剪贴板读取</span></button>
+          <button class="tb-btn is-primary" id="siCollectGo">${ico('play')}<span>开始识别</span></button>
+        </div>
+        <p class="si-hint si-collect-note">每篇要过一次大模型（约 10–30 秒），进度显示在顶部横幅；可以先关掉窗口去干别的，不会丢。</p>
+      </div>
+    </div>`;
+    S.root.appendChild(mask);
+
+    const q = (sel) => mask.querySelector(sel);
+    const input = q('#siCollectText');
+    const countEl = q('#siCollectCount');
+
+    const refreshCount = () => {
+      const n = pickedLinks(input.value).length;
+      countEl.textContent = n ? `识别到 ${n} 篇文章` : '还没有识别到链接';
+      countEl.classList.toggle('is-ready', n > 0);
+      q('#siCollectGo').disabled = n === 0;
+    };
+
+    mask.addEventListener('click', (e) => { if (e.target === mask) closeCollect(); });
+    q('#siCollectClose').addEventListener('click', closeCollect);
+    input.addEventListener('input', refreshCount);
+    input.addEventListener('paste', () => setTimeout(refreshCount, 0));
+
+    q('#siCollectPaste').addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) { toast('剪贴板是空的', 'error'); return; }
+        input.value = [input.value, text].filter(Boolean).join('\n');
+        refreshCount();
+      } catch {
+        toast('读不到剪贴板，直接在这里按 Ctrl+V 就行', 'error');
+      }
+    });
+
+    q('#siCollectGo').addEventListener('click', () => submitCollect(pickedLinks(input.value), q('#siCollectGo')));
+
+    refreshCount();
+    setTimeout(() => {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }, 30);
+  }
+
+  function closeCollect() {
+    S.root?.querySelector('#siCollectMask')?.remove();
+  }
+
+  async function submitCollect(urls, btn) {
+    if (!urls.length) return;
+    if (btn) btn.disabled = true;
+    try {
+      const d = await api('/api/special-issues/collect', { method: 'POST', body: { urls } });
+      closeCollect();
+      S.data = d;
+      render();
+      if (!d.started) {
+        toast(d.existing ? `这 ${d.existing} 篇之前已经收过了` : '没有需要处理的新链接');
+        return;
+      }
+      startPolling();
+      const extra = d.dropped ? `，超出上限的 ${d.dropped} 条没处理，可以下批再贴` : '';
+      toast(`已收下 ${d.queued} 篇文章，正在识别${extra}`);
+    } catch (e) {
+      toast(e.message || '收稿失败', 'error');
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /** 粘在页面任意空白处就自动识别：省掉「先点按钮再粘贴」这一步。 */
+  function bindGlobalPaste() {
+    if (S.pasteHandler) return;
+    S.pasteHandler = (e) => {
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const text = e.clipboardData?.getData('text') || '';
+      if (!pickedLinks(text).length) return;
+      e.preventDefault();
+      openCollect(text);
+    };
+    document.addEventListener('paste', S.pasteHandler);
+  }
+
+  function unbindGlobalPaste() {
+    if (!S.pasteHandler) return;
+    document.removeEventListener('paste', S.pasteHandler);
+    S.pasteHandler = null;
+  }
+
   // ---------------- 面板 ----------------
   function openPanel(kind) {
     S.panel = kind || 'sources';
@@ -639,12 +789,12 @@
         </div>
       </div>
       <div class="si-panel-sec si-panel-note">
-        <h4>关于公众号抓取</h4>
-        <p class="si-hint">微信在 2026 年 7 月关闭了公众号后台的跨号文章搜索接口，原先能批量列出历史文章的工具（wechat-article-exporter、we-mp-rss 等）已全部停止维护。目前单篇文章正文仍可读取，但「文章列表」需要外部提供，所以这里支持三种方式：</p>
+        <h4>怎么拿到文章列表</h4>
+        <p class="si-hint">微信在 2026 年 7 月关闭了公众号后台的跨号文章搜索接口，目前<b>没有免登录、免费列出某个号全部历史文章的办法</b>。所以默认走「复制链接」，另外两种留给愿意一次性多花点时间的人。</p>
         <ul class="si-hint-list">
-          <li><b>RSS 订阅地址</b>（推荐）：用取阅、wechat2rss 等把公众号转成 RSS，粘贴订阅地址即可每日自动拉取。</li>
-          <li><b>本地导出目录</b>：用 wechatDownload 等工具把文章导出到文件夹，填目录路径；不依赖任何接口，永不失效。</li>
-          <li><b>粘贴文章链接</b>：在微信里复制链接，一行一个；适合补录与验证。</li>
+          <li><b>复制链接（零配置，默认）</b>：在微信里逐篇复制 → 打开 SI 页按 Ctrl+V。每天只有几篇新文章的话，十几秒就完事。</li>
+          <li><b>RSS 订阅地址</b>：配一次就全自动，适合要回溯大量历史文章。可接自建的 wechat-mp-tools（有 Windows 免安装包，<b>不需要 Docker</b>，但要用自己的公众号账号扫码登录）。</li>
+          <li><b>本地导出目录</b>：用导出工具把文章存成 md / html，填目录路径；不依赖任何接口。</li>
         </ul>
       </div>`;
   }
@@ -830,10 +980,13 @@
       S.mounted = true;
       container.innerHTML = '';
       buildDom(container);
+      bindGlobalPaste();
       await load();
     },
     close() {
       stopPolling();
+      unbindGlobalPaste();
+      closeCollect();
       if (S.panel) closePanel();
       S.mounted = false;
       S.container = null;

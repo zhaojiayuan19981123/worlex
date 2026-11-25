@@ -48,19 +48,43 @@ state.ranks + issue.rank    中科院分区 / 新锐分区 / ABS / UTD24 / SSCI 
 
 | 类型 | 说明 | 适用 |
 | --- | --- | --- |
-| `rss` | 第三方或自建服务把公众号转成 RSS，粘贴订阅地址。**自建推荐 wechat-mp-tools**（免费、可回溯历史，见下节） | 最省心，推荐 |
+| `rss` | 第三方或自建服务把公众号转成 RSS，粘贴订阅地址。**自建可用 wechat-mp-tools**（见 3.2），也可用收费的 wechat2rss | 需要每日全自动增量时 |
 | `folder` | 本地导出目录（wechatDownload、MPider 等工具导出 md/html/txt/json），深度 3、最多 3000 个文件 | 不依赖任何接口，永不失效 |
-| `links` | 直接粘贴文章链接，一行一个 | 补录、验证、兜底 |
+| `links` | 一次性批量补录，消费后该源自动移除 | 补录、验证、兜底 |
 | `json` | 自建桥接接口，返回 `[{url,title,publishedAt}]` 或 `{items:[...]}` | 接本机脚本 / MCP |
 
 源的配置项：`type`、`name`、`target`（地址或目录）、`enabled`、`backfillDays`。同一时刻最多 20 个源，单个源失败只写自己的 `lastError`，界面在「诊断」里显示。
 
-### 3.1 用 wechat-mp-tools 自建免费订阅源（推荐）
+### 3.1 零配置：粘贴收稿（默认路径）
+
+不配任何源也能用，这是给「不想装 Docker、不想折腾 RSS」的场景准备的主路径：
+
+1. 在微信里打开文章 → 右上角「…」（电脑版右键）→ **复制链接**。
+2. 回到 worlex 的 SI 页，点「粘贴收稿」，或在页面任意空白处直接 `Ctrl+V`（会自动弹窗并预填）。
+3. 点「开始识别」：抓正文 → 大模型拆分译中 → 查 EasyScholar 等级 → 出卡片，全自动。
+
+接口 `POST /api/special-issues/collect`：
+
+- 入参 `{ text }` 或 `{ urls: [...] }`；从任意文本里提取 `mp.weixin.qq.com/s...` 链接（微信分享文案、多行混排都行），**非微信链接会被过滤**；
+- 单次最多 60 篇，超出部分在响应里用 `dropped` 返回，前端提示用户下批再贴；
+- **先在请求里入队落盘再返回**，所以「收下了没有」有确定答案；全是重复链接时返回 `started:false, queued:0, existing:N`，不会白跑后台任务；
+- 抽取在后台分批（每批 6 篇）执行，每批结束落盘一次，中途关窗口或进程被杀不会丢掉已识别的结果；
+- 与「立即同步」共用同一份运行态 `runtime`，两者互斥：正在跑时再提交返回 409。
+
+耗时参考：每篇都要过一次大模型，约 10~30 秒一篇，进度显示在页面顶部横幅。
+
+### 3.2 可选：自建订阅源，实现「每日自动增量」
+
+需要电脑上长期跑一个服务，一次配好后每天自动发现新文章。适合要回溯大量历史文章的情况。
 
 wechat2rss 这类托管服务要收费，可以自己跑一个。选择 wechat-mp-tools 的原因是它用 Playwright 驱动真实 Chromium 操作公众号后台页面，而不是硬调微信接口——2026-07-30 微信关闭的是后者，所以同类项目（we-mp-rss、wewe-rss）的采集功能都废了，它还在更新。
 
+**前提**：它要登录 **mp.weixin.qq.com 公众号后台**，也就是你得有一个自己能登录的公众号（订阅号也行）。没有公众号账号就走 3.1，别在这上面花时间。
+
+**本机没装 Docker 也没关系**：项目在 Releases 里提供 Windows / macOS 免安装包（`WeChat_MP_Tools_Windows_Lite.zip` 约 40~60 MB，`Full` 约 200 MB 且内置 Chromium）。解压后双击运行即可，`data` 目录在程序同级，端口仍是 5200，后续步骤与下面完全一致。
+
 ```bash
-# 本机或 NAS 上跑（只要公众号 + RSS 的轻量版）
+# 有 Docker 时的轻量版（只要公众号 + RSS）
 docker run -d --name wechat-mp-tools --restart unless-stopped \
   -p 5200:5200 -v $(pwd)/data:/app/data \
   -e TZ=Asia/Shanghai -e BIND_ADDR=127.0.0.1 \
@@ -69,7 +93,7 @@ docker run -d --name wechat-mp-tools --restart unless-stopped \
 
 装好后：
 
-1. 打开 `http://127.0.0.1:5200`，在「账号池」扫码登录一个微信号（建议用小号，有封号风险；不要勾选 24 小时自动退出）。
+1. 打开 `http://127.0.0.1:5200`，在「账号池」扫码登录公众号后台（建议用小号，有风控风险；不要勾选 24 小时自动退出）。
 2. 添加「SSCI征稿」这个公众号，按时间范围触发一次采集，把近 3 个月的文章拉下来。
 3. 复制该号的 RSS 地址，形如 `http://127.0.0.1:5200/api/articles/rss/...`；如果设置了 `RSS_TOKEN`，要在地址后加 `?token=你的密钥`。
 4. 在 worlex 的「专刊征稿 → 设置 → 文章源」里选「RSS 订阅地址」，粘贴上面这个地址，回溯天数填 90。
@@ -128,6 +152,7 @@ docker run -d --name wechat-mp-tools --restart unless-stopped \
 | POST / PUT / DELETE | `/api/special-issues/sources[/:id]` | 源增删改；删除可加 `?purgeArticles=1` 连带清文章与卡片 |
 | POST | `/api/special-issues/sources/test` | 试拉一个源（不落盘） |
 | POST | `/api/special-issues/sync` | **启动后台同步并立即返回**，前端轮询 `/status` |
+| POST | `/api/special-issues/collect` | **粘贴收稿**：`{text}` 或 `{urls}`，入队后立即返回，后台分批抽取；与 sync 互斥（跑着时返回 409） |
 | POST | `/api/special-issues/step` | 单步：`collect` / `extract` / `rank` |
 | POST | `/api/special-issues/manual` | 手动粘贴一篇正文入库 |
 | POST | `/api/special-issues/ranks/refresh` | 强制刷新等级 |
@@ -148,8 +173,8 @@ docker run -d --name wechat-mp-tools --restart unless-stopped \
 
 ## 8. 验证
 
-单测：`node --test test/special-issues-v2.test.mjs`（28 项，覆盖源解析、去重、时窗、正文提取、模型 JSON 容错、字段归一化、规则抽取、跨文章去重、筛选各维度、管线编排与失败隔离）。
+单测：`node --test test/special-issues-v2.test.mjs`（33 项，覆盖源解析、去重、时窗、正文提取、模型 JSON 容错、字段归一化、规则抽取、跨文章去重、筛选各维度、管线编排与失败隔离）；`node --test test/special-issues-collect.test.mjs`（5 项，覆盖粘贴收稿的链接提取、重复入库、忙碌互斥、60 条上限）。
 
-浏览器端到端（Playwright，需先启动服务）：切视图 → 卡片渲染 → 主题/关键词/等级筛选 → 排序 → 展开 → 面板三个页签 → 收藏回显 → 立即同步的增量出卡。
+浏览器端到端（Playwright，需先启动服务）：切视图 → 卡片渲染 → 主题/关键词/等级筛选 → 排序 → 展开 → 面板三个页签 → 收藏回显 → 立即同步的增量出卡；「粘贴收稿」按钮 → 浮层识别计数 → 空白处 Ctrl+V 自动弹窗 → 普通文本不打扰 → 来回切视图不重复弹层。
 
 真实环境已验证：单篇公众号正文抓取（标题、发布时间、7883 字正文、正文内链接保留）、真实文章经模型抽取成卡、模型不可用时自动回落规则抽取。**未验证**：真实 EasyScholar 返回值（需有效 Key）、真实大模型的抽取质量（用本地假模型验证的是链路而非质量）。
