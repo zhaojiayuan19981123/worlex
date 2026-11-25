@@ -1,3 +1,30 @@
+## v2.4.1：删掉条目后重新粘贴能重新收（修「之前已经收过了」死锁）（2026-11-25）
+
+### 背景
+用户反馈：把之前收下的征稿删掉，想重新导入同一篇，却一直提示「这些内容之前已经收过了」。
+
+根因在入队判重：`DELETE /api/special-issues/:id` 只删条目（并把 id 记进 `dismissedIds`），
+文章记录 `state.articles` 仍然留着且状态还是 `extracted`；而 `enqueueTargets` 只按文章 id 判重：
+
+```js
+const seen = new Set(state.articles.map((a) => a.id));
+if (seen.has(id)) { existing += 1; continue; }   // ← 删了条目也照样命中
+```
+
+于是 `queued: 0`、`started: false`，前端只弹「之前已经收过了」，什么都不做——删掉的条目再也回不来。
+
+### 改动
+| 文件 | 改动 |
+| --- | --- |
+| `src/specialIssues.js` | 文章记录新增 `producedIds`（这篇上次抽出了哪几条），进入字段白名单（不写白名单就会被读路径静默丢掉，v2.3.0 踩过同类坑）；`mergeArticles` 里采集流程不得覆盖它（`item.producedIds?.length ? item.producedIds : prev.producedIds`） |
+| `src/siPipeline.js` | 抽取成功时写 `producedIds: res.issues.map(i => i.id)`；判定为非征稿（`skipped`）时写空数组 |
+| `src/specialIssueRoutes.js` | `enqueueTargets` 判重从「文章 id 存在」改为「**它上次抽出的条目是否还在**」：条目还在 → 真已收过；`status === 'extracted'` 但条目全被删掉/被过期清理 → 重置为 `pending` 重跑；`status === 'failed'` → 也允许这样重试（不必先去诊断页）。抽出 0 条（判非征稿）仍按已收过处理，避免重复粘贴反复烧模型。抽出 `articleStillHasIssue()` / `resetArticleForRetry()` 共用；`POST /manual` 同样改为可重收，不再静默跳过 |
+| `test/special-issues-collect.test.mjs` | 新增 2 项：删掉条目后重贴同一篇 `queued: 1` 且条目回来、文章记录不重复（条目还在时仍是 `queued: 0`）；抓取失败的文章重贴一次即重试成功 |
+
+### 验证
+- `special-issues-collect` 12/12、`special-issues-v2` 40/40，全量 `node --test` **883 项 0 失败**。
+- 兼容旧数据：旧文章记录没有 `producedIds`，改用 `articleId` 反查条目，删除后重贴同样能重收，不需要手工清 `data/special-issues.json`。
+
 ## v2.4.0：SI 改为「一览表 + 右侧抽屉」，收稿支持官网链接与整段正文，翻译改全文、收藏改任务（2026-11-25）
 
 ### 背景

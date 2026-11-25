@@ -275,3 +275,71 @@ test('没配模型时梳理灵感会明确报错，而不是返回空结果', as
   assert.equal(r.status, 400);
   assert.match(r.body.error, /未配置大模型/);
 });
+
+// ---------------- 删掉条目后重新收（用户实测反馈） ----------------
+//
+// 删除条目只删「条目」，文章记录还留着。如果入队只按文章 id 判重，
+// 同一篇再贴一次就会一直回「之前已经收过了」，等于删了就再也收不回来。
+// 现在的规则：文章还在但它的条目都不在了 → 重置这篇文章重跑一遍。
+
+test('删掉条目后重新粘贴同一篇能重新收，而不是一直提示「已经收过」', async () => {
+  const { app } = setup({
+    fetchImpl: async (url) => {
+      const html = /example\.org/.test(String(url)) ? PAGE_HTML() : ARTICLE_HTML('测试征稿');
+      return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    },
+  });
+  const text = 'https://www.example.org/special-issue/ai-ops';
+
+  await invoke(app, 'POST /api/special-issues/collect', { body: { text } });
+  await waitIdle(app);
+  const first = await invoke(app, 'GET /api/special-issues');
+  assert.equal(first.body.issues.length, 1);
+
+  // 条目还在列表里时再贴一次，仍然算「已经收过」，不重复烧模型
+  const dup = await invoke(app, 'POST /api/special-issues/collect', { body: { text } });
+  assert.equal(dup.body.queued, 0);
+  assert.equal(dup.body.existing, 1);
+
+  const removed = await invoke(app, 'DELETE /api/special-issues/:id', { params: { id: first.body.issues[0].id } });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.body.issues.length, 0);
+
+  // 删掉之后再贴同一篇：应当重新入队，而不是回「之前已经收过了」
+  const again = await invoke(app, 'POST /api/special-issues/collect', { body: { text } });
+  assert.equal(again.body.queued, 1, '条目被删掉后应当允许重新收');
+  assert.equal(again.body.existing, 0);
+
+  await waitIdle(app);
+  const second = await invoke(app, 'GET /api/special-issues');
+  assert.equal(second.body.issues.length, 1, '重新收之后条目应当回来');
+  assert.equal(second.body.articleStats.total, 1, '不该为同一篇文章新增第二条记录');
+});
+
+test('上次抓取失败的文章，重新粘贴一次就能重试（不用先去诊断页）', async () => {
+  let attempts = 0;
+  const { app } = setup({
+    fetchImpl: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('网络抖了一下');
+      return new Response(ARTICLE_HTML('测试征稿'), {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    },
+  });
+  const text = 'https://mp.weixin.qq.com/s/fail000001';
+
+  await invoke(app, 'POST /api/special-issues/collect', { body: { text } });
+  await waitIdle(app);
+  const failed = await invoke(app, 'GET /api/special-issues');
+  assert.equal(failed.body.articleStats.failed, 1);
+
+  const retry = await invoke(app, 'POST /api/special-issues/collect', { body: { text } });
+  assert.equal(retry.body.queued, 1);
+
+  await waitIdle(app);
+  const done = await invoke(app, 'GET /api/special-issues');
+  assert.equal(done.body.articleStats.failed, 0);
+  assert.equal(done.body.articleStats.total, 1);
+});

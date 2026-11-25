@@ -207,20 +207,59 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     };
   }
 
+  /** 这篇文章上次抽出的条目里还有没有活着的（旧记录没有 producedIds，退回按 articleId 反查） */
+  function articleStillHasIssue(state, article) {
+    const produced = Array.isArray(article.producedIds) ? article.producedIds : [];
+    if (produced.length) {
+      const alive = new Set(state.issues.map((i) => i.id));
+      return produced.some((id) => alive.has(id));
+    }
+    return state.issues.some((i) => i.articleId === article.id);
+  }
+
+  /** 重置成待处理：条目被删掉、被过期清理或上次抓取失败时，允许同一篇重新收一次 */
+  function resetArticleForRetry(article, now) {
+    article.status = 'pending';
+    article.attempts = 0;
+    article.lastError = '';
+    article.extractedAt = '';
+    article.fetchedAt = now;
+    article.producedIds = [];
+  }
+
   /**
    * 把待处理条目放进队列。
    * 只入库不抽取：这样即使界面被关掉、或者要分批处理很久，内容也已经记下来了。
+   *
+   * 「已收过」不能只看文章记录还在不在：用户在列表里删掉条目后文章记录仍留着，
+   * 如果只按文章 id 判重，同一篇再贴一次会被「之前已经收过了」永久挡住，删了就再也收不回来。
+   * 所以按「它上次抽出的条目是否还在」判断：
+   *   - 条目还在（或上次根本没抽出条目、判定为非征稿）→ 真的已收过，跳过；
+   *   - 条目被删掉 / 被过期清理 → 重置这篇文章，重新走一遍抓正文 → 抽取；
+   *   - 上次抓取失败 → 同样重置，省得先去「诊断」页点重试。
    */
-  function enqueueTargets(state, targets, { sourceName = '粘贴收稿' } = {}) {
+  function enqueueTargets(state, targets) {
     const now = new Date().toISOString();
-    const seen = new Set(state.articles.map((a) => a.id));
+    const byId = new Map(state.articles.map((a) => [a.id, a]));
     let queued = 0;
     let existing = 0;
     for (const t of targets) {
       const id = t.kind === 'text' ? textArticleId(t.text) : articleIdOf(t.url);
-      if (seen.has(id)) { existing += 1; continue; }
-      seen.add(id);
-      state.articles.push({
+      const prev = byId.get(id);
+      if (prev) {
+        const redo = prev.status === 'failed'
+          || ((prev.status === 'extracted') && !articleStillHasIssue(state, prev));
+        if (!redo) { existing += 1; continue; }
+        resetArticleForRetry(prev, now);
+        if (t.kind === 'text') {
+          prev.contentKind = 'text';
+          prev.content = t.text;
+          prev.sourceName = '粘贴正文';
+        }
+        queued += 1;
+        continue;
+      }
+      const record = {
         id,
         url: t.kind === 'text' ? '' : t.url,
         localPath: '',
@@ -238,7 +277,10 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
         fetchedAt: now,
         extractedAt: '',
         contentChars: 0,
-      });
+        producedIds: [],
+      };
+      state.articles.push(record);
+      byId.set(id, record);
       queued += 1;
     }
     return { queued, existing };
@@ -946,13 +988,17 @@ export function registerSpecialIssueRoutes(app, deps = {}) {
     const extractor = buildExtractor();
     for (const url of targets.slice(0, 5)) {
       const id = articleIdOf(url);
-      if (!state.articles.some((a) => a.id === id)) {
+      const prev = state.articles.find((a) => a.id === id);
+      if (!prev) {
         state.articles.push({
           id, url, localPath: '', title: '', publishedAt: '', digest: '',
           contentKind: 'url', sourceId: '', sourceName: '手动添加',
           status: 'pending', attempts: 0, lastError: '', fetchedAt: now.toISOString(),
-          extractedAt: '', contentChars: 0,
+          extractedAt: '', contentChars: 0, producedIds: [],
         });
+      } else if (prev.status === 'failed' || (prev.status === 'extracted' && !articleStillHasIssue(state, prev))) {
+        // 条目被删掉或上次失败时，手动补这一条就是「重新收一次」的意思，别静默跳过
+        resetArticleForRetry(prev, now.toISOString());
       }
     }
     writeState(state);

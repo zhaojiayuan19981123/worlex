@@ -126,6 +126,9 @@ export function createSpecialIssueState(value = {}) {
       fetchedAt: str(a.fetchedAt),
       extractedAt: str(a.extractedAt),
       contentChars: Number(a.contentChars) || 0,
+      // 这篇文章上次抽出了哪些条目：用户把条目删掉后，同一篇再贴一次要能重新收回来，
+      // 不能只按文章 id 判重，否则「之前已经收过了」会永久挡住（v2.4.1 修复）。
+      producedIds: (Array.isArray(a.producedIds) ? a.producedIds : []).map((x) => str(x)).filter(Boolean).slice(0, 20),
     }))
     .slice(0, 5000);
 
@@ -296,6 +299,8 @@ export function mergeArticles(existing = [], incoming = []) {
       // 已处理完的文章不再回填订阅源全文：否则每次采集都会把几十篇全文重新塞进状态文件，
       // 而这些文章已经有卡片了，正文没有再用到的场合。
       content: done ? '' : (item.content || prev.content || ''),
+      // 采集流程不知道条目去向，别用它把「上次抽出了哪几条」抹掉
+      producedIds: (item.producedIds?.length ? item.producedIds : prev.producedIds) || [],
     });
   }
   return [...map.values()];

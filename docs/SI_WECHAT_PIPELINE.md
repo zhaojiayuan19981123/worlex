@@ -96,6 +96,7 @@ state.ranks + issue.rank    中科院分区 / 新锐分区 / ABS / UTD24 / SSCI 
 - 响应里的 `counted: { wechat, page, text }` 给出三类各自识别到几条，前端实时显示；识别不到时按钮禁用并提示「没有识别到可处理的内容。可以粘贴公众号文章链接、出版社专刊页链接，或直接粘贴正文（400 字以上会自动识别）。」
 - 单次最多 60 篇，超出部分在响应里用 `dropped` 返回，前端提示用户下批再贴；
 - **先在请求里入队落盘再返回**，所以「收下了没有」有确定答案；全是重复内容时返回 `started:false, queued:0, existing:N`，不会白跑后台任务；
+- **判重看「条目是否还在」，不看文章记录**（v2.4.1）：删除条目只删 `issues`，`articles` 仍留着，若按文章 id 判重会导致「删了再也收不回来」。现在 `enqueueTargets` 用文章记录里的 `producedIds`（上次抽出的条目 id）判断：还有存活条目 → `existing`；条目全被删/被过期清理、或上次 `failed` → 重置为 `pending` 重跑；旧记录没有 `producedIds` 时退回按 `articleId` 反查。抽出 0 条（判非征稿，`skipped`）仍按已收过处理，避免反复粘贴反复烧模型；
 - 粘贴的整段正文不入「文章链接」表，而是作为 `contentKind: 'text'` 的文章记录，`sourceName: '粘贴正文'`，去重键为 `'art_t' + sha1(正文)` 前 16 位；
 - 抽取在后台分批（每批 6 篇）执行，每批结束落盘一次，中途关窗口或进程被杀不会丢掉已识别的结果；
 - 与「立即同步」共用同一份运行态 `runtime`，两者互斥：正在跑时再提交返回 409。
@@ -266,9 +267,9 @@ docker run -d --name wechat-mp-tools --restart unless-stopped \
 
 ## 8. 验证
 
-单测：`node --test test/special-issues-v2.test.mjs`（**40 项**：源解析、去重、时窗、微信正文提取、通用网页正文抽取与 403 报错、`detailZh` 分段与 CRLF 归一与 12000 字截断、截断 JSON 抢救、翻译提示词不概括、模型 JSON 容错、字段归一化、规则抽取、跨文章去重、`mergeIssues` 不冲掉任务与旧译文、`nearestTaskDeadline` 只算已加任务、筛选各维度、管线编排与失败隔离）；`node --test test/special-issues-collect.test.mjs`（**10 项**：链接提取、官网专刊页抓取、整段正文零网络请求、重复入库、忙碌互斥、60 条上限、加入 / 移出任务、未配模型时 `/ideas` 报错）。
+单测：`node --test test/special-issues-v2.test.mjs`（**40 项**：源解析、去重、时窗、微信正文提取、通用网页正文抽取与 403 报错、`detailZh` 分段与 CRLF 归一与 12000 字截断、截断 JSON 抢救、翻译提示词不概括、模型 JSON 容错、字段归一化、规则抽取、跨文章去重、`mergeIssues` 不冲掉任务与旧译文、`nearestTaskDeadline` 只算已加任务、筛选各维度、管线编排与失败隔离）；`node --test test/special-issues-collect.test.mjs`（**12 项**：链接提取、官网专刊页抓取、整段正文零网络请求、重复入库、忙碌互斥、60 条上限、加入 / 移出任务、未配模型时 `/ideas` 报错、删掉条目后重收、失败文章重贴即重试）。
 
-全量 `node --test` 881 项通过（Git Bash 下需前置 `TEMP="C:/Users/zjy1998/AppData/Local/Temp"`，否则 `os.tmpdir()` 指向不可写目录）。
+全量 `node --test` 883 项通过（Git Bash 下需前置 `TEMP="C:/Users/zjy1998/AppData/Local/Temp"`，否则 `os.tmpdir()` 指向不可写目录）。
 
 浏览器端到端（Playwright，1680×980，无 console / page 错误）：粘贴正文识别「1 段正文（766 字）」→ 出 1 行列表 → 抽屉详情 → 相关灵感页签 → 加入任务提示截止日 → 统计条第 4 / 5 格立即更新 → 首页四卡同排且「征稿截止」卡显示该条目 → 任务安排里带「征稿」chip → 指引卡收起后刷新仍收起；另验三种粘贴形态的计数（微信 1 篇 / 网页 1 个 / 短文本「没有识别到内容」且按钮禁用）。
 

@@ -238,6 +238,7 @@ export async function processArticles(stateInput, opts = {}) {
           extractedAt: nowIso(now),
           contentChars: res.contentChars,
           content: '',
+          producedIds: [],
         });
         continue;
       }
@@ -253,6 +254,8 @@ export async function processArticles(stateInput, opts = {}) {
         lastError: '',
         extractedAt: nowIso(now),
         contentChars: res.contentChars,
+        // 记下这篇抽出了哪几条：条目被用户删掉后，同一篇再贴一次要能重新收回来
+        producedIds: res.issues.map((i) => i.id),
         // 抽完就丢掉原文，状态文件不必背着几十篇全文；失败时保留，方便下次直接重试
         content: '',
       });
