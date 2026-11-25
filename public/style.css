@@ -3582,11 +3582,13 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 .tj-article-card h3 { margin:0; color:var(--text); font-size:17px; line-height:1.45; }
 .tj-title-translation { margin-top:5px; color:var(--primary); font-size:14px; font-weight:700; line-height:1.5; }
 .tj-meta-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px 20px; margin:13px 0 11px; padding:10px 0; border-top:1px solid var(--border-soft); border-bottom:1px solid var(--border-soft); }
-.tj-meta-grid div { display:grid; grid-template-columns:40px minmax(0,1fr); gap:7px; min-width:0; }
-.tj-meta-grid dt { color:var(--muted); font-size:12px; }
+.tj-meta-grid div { display:grid; grid-template-columns:4.2em minmax(0,1fr); gap:7px; min-width:0; }
+.tj-meta-grid dt { color:var(--muted); font-size:12px; white-space:nowrap; }
 .tj-meta-grid dd { margin:0; color:var(--text); font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
 .tj-meta-grid a { color:var(--primary); text-decoration:none; }
 .tj-abstract { margin-top:10px; padding:11px 12px; background:var(--bg); border-radius:7px; }
+/* 中文刊目录页只有标题：与其逐格写「暂缺」，不如一句说明 */
+.tj-site-note { margin:10px 0 0; color:var(--muted); font-size:12px; }
 .tj-abstract b { display:block; margin-bottom:5px; font-size:12px; color:var(--text); }
 .tj-abstract p { margin:0; color:var(--text-2); font-size:12.5px; line-height:1.72; white-space:pre-wrap; }
 .tj-translation { background: var(--green-soft); border-left:3px solid var(--primary); }
@@ -3607,16 +3609,41 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 .tj-preset:hover { border-color:var(--primary); color:var(--primary); }
 .tj-preset.secondary { background:var(--bg); }
 .tj-journal-group { padding-top:15px; margin-top:13px; border-top:1px solid var(--border-soft); }
-.tj-group-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; }
+.tj-group-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; gap:8px; }
 .tj-group-head b { color:var(--primary); font-size:13px; }
 .tj-group-head .as-link { border:0; background:transparent; color:var(--muted); cursor:pointer; font:inherit; font-size:12px; }
+.tj-group-meta { margin-left:auto; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
 .tj-journal-options { display:grid; grid-template-columns:repeat(2,minmax(260px,1fr)); gap:7px 12px; }
-.tj-journal-options label { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; min-width:0; padding:8px 9px; border:1px solid var(--border-soft); border-radius:7px; cursor:pointer; }
+.tj-journal-options label { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:8px; min-width:0; padding:8px 9px; border:1px solid var(--border-soft); border-radius:7px; cursor:pointer; }
 .tj-journal-options input { accent-color:var(--primary); }
 .tj-journal-options span { min-width:0; display:flex; align-items:baseline; gap:7px; }
-.tj-journal-options b { color:var(--text); font-size:12px; white-space:nowrap; }
+.tj-journal-options b { color:var(--text); font-size:12px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tj-journal-options small { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tj-journal-options a { color:var(--primary); text-decoration:none; font-weight:700; }
+/* 数据源标识：Crossref / 官网目录 / 待配置。中文刊靠它说明「为什么有的能自动同步、有的不能」 */
+.tj-src { font-style:normal; font-size:10px; line-height:1.6; padding:1px 6px; border-radius:9px; border:1px solid var(--border); color:var(--muted); background:var(--bg); white-space:nowrap; }
+.tj-src.is-on { color:var(--primary); border-color:color-mix(in srgb, var(--primary) 40%, var(--border)); background:color-mix(in srgb, var(--primary) 8%, transparent); }
+.tj-src.is-off { color:var(--warn, #b8860b); border-style:dashed; }
+.tj-no-link { width:14px; }
+/* 期刊分组（UTD 24 / 中国 A 类）之间用更重的分隔，避免 46 本混成一锅 */
+.tj-journal-set { margin-top:18px; padding-top:4px; }
+.tj-journal-set + .tj-journal-set { border-top:1px solid var(--border); margin-top:22px; padding-top:16px; }
+.tj-set-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.tj-set-head > div { min-width:0; display:flex; flex-direction:column; gap:3px; }
+.tj-set-head b { font-size:14px; color:var(--text); }
+.tj-set-head small { font-size:11px; color:var(--muted); line-height:1.5; }
+.tj-set-head .tj-preset { flex:none; }
+/* 中国期刊目录页设置 */
+.tj-feed-box { margin-top:20px; padding-top:14px; border-top:1px dashed var(--border); }
+.tj-feed-box summary { cursor:pointer; color:var(--text-2); font-size:12px; font-weight:600; }
+.tj-feed-box summary:hover { color:var(--primary); }
+.tj-feed-box p { margin:9px 0 11px; color:var(--muted); font-size:12px; line-height:1.75; }
+.tj-feed-rows { display:flex; flex-direction:column; gap:6px; max-height:340px; overflow:auto; }
+.tj-feed-row { display:grid; grid-template-columns:132px minmax(0,1fr) auto; align-items:center; gap:8px; }
+.tj-feed-row > span { font-size:12px; color:var(--text-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tj-feed-row input { min-width:0; padding:5px 8px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); font:inherit; font-size:12px; }
+.tj-feed-row input:focus { outline:none; border-color:var(--primary); }
+.tj-feed-row .tj-preset { padding:3px 10px; }
 .tj-calendar-card { padding:22px; max-width:740px; }
 .tj-calendar-summary { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; padding-bottom:17px; margin-bottom:16px; border-bottom:1px solid var(--border-soft); }
 .tj-calendar-summary div { display:flex; flex-direction:column; gap:4px; }
@@ -3651,7 +3678,7 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 #topJournalAnalysisBody .md th, #topJournalAnalysisBody .md td { border: 1px solid var(--border); padding: 7px; vertical-align: top; }
 @media (max-width: 560px) { .tj-bulk-toolbar span { width: 100%; margin-right: 0; } .tj-bulk-toolbar .tb-btn { flex: 1; } }
 
-@media (max-width:900px) { .top-journal-head { flex-direction:column; } .top-journal-stats { grid-template-columns:repeat(2,1fr); } .tj-manage-head { flex-direction:column; } .tj-preset-row { justify-content:flex-start; } .tj-journal-options { grid-template-columns:1fr; } }
+@media (max-width:900px) { .top-journal-head { flex-direction:column; } .top-journal-stats { grid-template-columns:repeat(2,1fr); } .tj-manage-head { flex-direction:column; } .tj-preset-row { justify-content:flex-start; } .tj-journal-options { grid-template-columns:1fr; } .tj-set-head { flex-direction:column; } .tj-feed-row { grid-template-columns:1fr auto; } .tj-feed-row > span { grid-column:1/-1; } }
 @media (max-width:560px) { .top-journal-head-actions { width:100%; } .top-journal-head-actions button { flex:1; } .tj-checkin-card { align-items:flex-start; flex-direction:column; } .tj-meta-grid { grid-template-columns:1fr; } .tj-stat { min-height:65px; } }
 
 /* ==========================================================================

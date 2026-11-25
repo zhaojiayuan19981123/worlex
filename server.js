@@ -53,7 +53,7 @@ import { readFirstPayload } from './src/streamProbe.js';
 import * as outboundProxy from './src/outboundProxy.js';
 import { proxiedFetch, probeProxy } from './src/proxiedFetch.js';
 import * as localGateway from './src/localGateway.js';
-import { UTD_JOURNALS, JOURNAL_PRESETS, createTopJournalState, syncJournals, checkInAndCreateDelivery, deliveryArticles, recentArticles, historyArticles, deliveredArticleIds, setArticleFavorite, removeFavorites, removeHistoryArticles, calendarSummary, markArticleOpened } from './src/topJournals.js';
+import { ALL_JOURNALS, JOURNAL_SETS, JOURNAL_PRESETS, catalogFor, createTopJournalState, syncJournals, checkInAndCreateDelivery, deliveryArticles, recentArticles, historyArticles, deliveredArticleIds, setArticleFavorite, removeFavorites, removeHistoryArticles, calendarSummary, markArticleOpened } from './src/topJournals.js';
 // v2.2.0 SI 征稿追踪：ABS 期刊每日抓取、easyScholar 等级、一键翻译、知识图谱推荐与领域热点
 import { registerSpecialIssueRoutes } from './src/specialIssueRoutes.js';
 
@@ -2838,7 +2838,7 @@ export function createApp({
     }
   });
 
-  // ---------- UTD 顶刊追踪 ----------
+  // ---------- 顶刊追踪（UTD 24 + 中国 NSFC 管理科学部 A 类 22 种） ----------
   // 采集的是公开书目信息、摘要、DOI 与出版社原文页；不下载或分发受版权保护的全文。
   function topJournalArticlePayload(state, article) {
     return {
@@ -2852,10 +2852,12 @@ export function createApp({
   function topJournalPayload(state) {
     const normalized = createTopJournalState(state);
     return {
-      catalog: UTD_JOURNALS,
+      catalog: catalogFor(normalized),
+      sets: JOURNAL_SETS,
       presets: JOURNAL_PRESETS,
       selectedJournalIds: normalized.selectedJournalIds,
       sync: normalized.sync,
+      feedOverrides: normalized.feedOverrides,
       preferences: normalized.preferences,
       favoriteArticleIds: Object.keys(normalized.favorites),
       summary: calendarSummary(normalized),
@@ -3026,7 +3028,20 @@ export function createApp({
   app.put('/api/top-journals/subscriptions', (req, res) => {
     const selectedJournalIds = Array.isArray(req.body?.selectedJournalIds) ? req.body.selectedJournalIds : [];
     const current = createTopJournalState(store.getTopJournals());
-    current.selectedJournalIds = [...new Set(selectedJournalIds.filter((id) => UTD_JOURNALS.some((journal) => journal.id === id)))];
+    current.selectedJournalIds = [...new Set(selectedJournalIds.filter((id) => ALL_JOURNALS.some((journal) => journal.id === id)))];
+    store.saveTopJournals(current);
+    res.json(topJournalPayload(current));
+  });
+
+  // 中文刊的当期目录地址：内置的能抓就抓，抓不到的由用户自己填（留空则恢复内置值）
+  app.put('/api/top-journals/journals/:id/feed', (req, res) => {
+    const current = createTopJournalState(store.getTopJournals());
+    const journal = ALL_JOURNALS.find((item) => item.id === req.params.id);
+    if (!journal) return res.status(404).json({ error: '期刊不存在' });
+    const raw = String(req.body?.feedUrl ?? '').trim();
+    if (raw && !/^https?:\/\/[^\s]+$/i.test(raw)) return res.status(400).json({ error: '目录页地址需要以 http:// 或 https:// 开头' });
+    if (raw) current.feedOverrides[journal.id] = raw.slice(0, 500);
+    else delete current.feedOverrides[journal.id];
     store.saveTopJournals(current);
     res.json(topJournalPayload(current));
   });
@@ -3049,7 +3064,15 @@ export function createApp({
       // 签到前刷新已订阅期刊，保证投递优先使用可获取的最新元数据；失败的刊物会在结果里明确显示。
       const sync = await syncJournals(current, current.selectedJournalIds);
       current = sync.state;
-      if (!current.articles.length) return res.status(502).json({ error: '暂未同步到可投递文章，请检查网络后点击「同步最新文章」重试' });
+      if (!current.articles.length) {
+        // 只订了中文刊时，失败原因几乎都是目录页没配好，提示要指向那一步而不是「检查网络」
+        const onlySite = current.selectedJournalIds.length > 0
+          && current.selectedJournalIds.every((id) => ALL_JOURNALS.find((journal) => journal.id === id)?.provider === 'site');
+        const hint = onlySite
+          ? '暂未同步到可投递文章：中文刊需要能读到当期目录，请在「期刊管理 → 中国期刊目录页」确认或补上地址后再同步'
+          : '暂未同步到可投递文章，请检查网络后点击「同步最新文章」重试';
+        return res.status(502).json({ error: hint });
+      }
       const result = checkInAndCreateDelivery(current);
       store.saveTopJournals(result.state);
       const delivered = deliveryArticles(result.state);

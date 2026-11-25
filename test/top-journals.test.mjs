@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   UTD_JOURNALS,
+  ALL_JOURNALS,
   JOURNAL_PRESETS,
   checkInAndCreateDelivery,
   createTopJournalState,
@@ -25,7 +26,8 @@ test('UTD 期刊目录固定为 24 本，且所有预设只引用目录中的期
   assert.equal(UTD_JOURNALS.length, 24);
   assert.equal(new Set(UTD_JOURNALS.map((journal) => journal.id)).size, 24);
   assert.equal(new Set(UTD_JOURNALS.map((journal) => journal.issn)).size, 24);
-  const known = new Set(UTD_JOURNALS.map((journal) => journal.id));
+  // 3.1.0 起目录并入中国 NSFC 管理科学部 A 类 22 种，预设的引用范围随之扩大到全集
+  const known = new Set(ALL_JOURNALS.map((journal) => journal.id));
   for (const preset of Object.values(JOURNAL_PRESETS)) {
     assert.ok(preset.journalIds.length > 0);
     assert.ok(preset.journalIds.every((id) => known.has(id)));
@@ -84,7 +86,7 @@ test('同步仅合并新元数据，并正常记录单个期刊失败信息', as
     return new Response('unavailable', { status: 503 });
   };
   const result = await syncJournals(createTopJournalState(), ['jm', 'jmr'], { fetchImpl, rows: 10 });
-  assert.deepEqual(result.synced, [{ journalId: 'jm', count: 1 }]);
+  assert.deepEqual(result.synced, [{ journalId: 'jm', count: 1, provider: 'crossref' }]);
   assert.equal(result.failed.length, 1);
   assert.equal(result.state.articles.length, 1);
   assert.equal(result.state.articles[0].journalId, 'jm');

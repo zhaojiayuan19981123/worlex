@@ -124,14 +124,16 @@
     }, 400);
   }
   // 工作台状态（首页 / 项目 / 任务 / 论文 / 研究记录 / AI 助手）
-  // UTD 顶刊追踪：本地缓存来自 /api/top-journals；投递记录由后端保证同一文章不重复。
-  let topJournalData = { catalog: [], presets: {}, selectedJournalIds: [], sync: {}, summary: {}, articles: [], favoriteArticleIds: [] };
+  // 顶刊追踪（UTD 24 + 中国 NSFC A 类 22 种）：本地缓存来自 /api/top-journals；投递记录由后端保证同一文章不重复。
+  let topJournalData = { catalog: [], sets: [], presets: {}, selectedJournalIds: [], sync: {}, summary: {}, articles: [], favoriteArticleIds: [] };
   let topJournalDelivery = null;
   let topJournalLibrary = [];
   let topJournalFavorites = [];
   const topJournalSelection = new Set();
   let topJournalTab = 'today';
   let topJournalLoaded = false;
+  // 「中国期刊目录页」折叠面板的开合状态：保存地址后要重绘，重绘时不能把它关上
+  let tjFeedOpen = false;
   let view = 'home';
   let profile = {};
   let projects = [];
@@ -11815,7 +11817,7 @@
     ['dragleave', 'drop'].forEach((type) => view.addEventListener(type, (e) => { if (type === 'drop') { e.preventDefault(); e.stopPropagation(); uploadReviewFile(e.dataTransfer.files?.[0]); } view.classList.remove('review-view-dragging'); }));
   }
 
-  // ---------- UTD 顶刊追踪 ----------
+  // ---------- 顶刊追踪（UTD 24 + 中国 A 类 22 种） ----------
   function tjJournal(id) { return topJournalData.catalog.find((journal) => journal.id === id) || null; }
   function tjExternalUrl(value) {
     try {
@@ -11838,18 +11840,28 @@
     const affiliations = Array.isArray(article.affiliations) && article.affiliations.length ? article.affiliations.join('；') : '单位信息暂未由数据源提供';
     const sourceLine = [article.volume && `Vol. ${esc(article.volume)}`, article.issue && `No. ${esc(article.issue)}`, article.pages && `pp. ${esc(article.pages)}`].filter(Boolean).join(' · ');
     const favorite = article.favorite || tjFavoriteIds().has(article.id);
+    // 中文刊的目录页只给标题：作者/单位/DOI 一律没有，逐格写「暂缺」会把卡片撑满噪声，改成一句说明
+    const titleOnly = article.source === '期刊官网' && !article.abstract;
+    const metaCells = titleOnly
+      ? [
+        `<div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`,
+        `<div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>`,
+      ]
+      : [
+        `<div><dt>作者</dt><dd>${esc(authors)}</dd></div>`,
+        `<div><dt>单位</dt><dd>${esc(affiliations)}</dd></div>`,
+        `<div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`,
+        `<div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>`,
+        `<div><dt>DOI</dt><dd>${article.doi ? `<a href="https://doi.org/${encodeURIComponent(article.doi)}" target="_blank" rel="noopener noreferrer">${esc(article.doi)}</a>` : '暂缺'}</dd></div>`,
+      ];
     return `<article class="tj-article-card${selectable ? ' selectable' : ''}" data-tj-card="${esc(article.id)}">
-      <div class="tj-article-top">${selectable ? `<label class="tj-select-label"><input type="checkbox" data-tj-select="${esc(article.id)}" ${topJournalSelection.has(article.id) ? 'checked' : ''}><span>选择</span></label>` : ''}<span class="tj-journal-pill">${esc(journal?.shortTitle || article.journal || 'UTD')}</span><span class="tj-pub-date">${tjDate(article.publishedAt)}</span></div>
+      <div class="tj-article-top">${selectable ? `<label class="tj-select-label"><input type="checkbox" data-tj-select="${esc(article.id)}" ${topJournalSelection.has(article.id) ? 'checked' : ''}><span>选择</span></label>` : ''}<span class="tj-journal-pill">${esc(journal?.shortTitle || article.journal || '期刊')}</span><span class="tj-pub-date">${tjDate(article.publishedAt)}</span></div>
       <h3>${esc(article.title || '未命名文章')}</h3>
       ${translated.title ? `<div class="tj-title-translation">${esc(translated.title)}</div>` : ''}
-      <dl class="tj-meta-grid">
-        <div><dt>作者</dt><dd>${esc(authors)}</dd></div>
-        <div><dt>单位</dt><dd>${esc(affiliations)}</dd></div>
-        <div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>
-        <div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>
-        <div><dt>DOI</dt><dd>${article.doi ? `<a href="https://doi.org/${encodeURIComponent(article.doi)}" target="_blank" rel="noopener noreferrer">${esc(article.doi)}</a>` : '暂缺'}</dd></div>
-      </dl>
-      <div class="tj-abstract"><b>摘要</b><p>${esc(article.abstract || '该文章的公开元数据未包含摘要；可点击原文链接查看出版社页面。')}</p></div>
+      <dl class="tj-meta-grid">${metaCells.join('')}</dl>
+      ${titleOnly
+        ? '<p class="tj-site-note">中文刊目录页只提供标题；作者、摘要与 DOI 请点「原文链接」查看。</p>'
+        : `<div class="tj-abstract"><b>摘要</b><p>${esc(article.abstract || '该文章的公开元数据未包含摘要；可点击原文链接查看出版社页面。')}</p></div>`}
       ${translated.abstract ? `<div class="tj-abstract tj-translation"><b>中文翻译</b><p>${esc(translated.abstract)}</p></div>` : ''}
       <div class="tj-card-actions">
         <button class="tb-btn" data-tj-favorite="${esc(article.id)}" data-tj-favorite-value="${favorite ? 'false' : 'true'}">${favorite ? '★ 已收藏' : '☆ 收藏'}</button>
@@ -11867,7 +11879,7 @@
     const selected = Number(summary.selectedCount || topJournalData.selectedJournalIds.length || 0);
     const todayCount = topJournalDelivery?.articles?.length || 0;
     $('topJournalStats').innerHTML = `
-      <div class="tj-stat"><span>已订阅期刊</span><b>${selected}<small> / 24</small></b></div>
+      <div class="tj-stat"><span>已订阅期刊</span><b>${selected}<small> / ${(topJournalData.catalog||[]).length || 24}</small></b></div>
       <div class="tj-stat"><span>今日状态</span><b>${summary.todayCheckedIn ? `已领取 ${todayCount || ''}` : '待签到'}</b></div>
       <div class="tj-stat"><span>连续签到</span><b>${Number(summary.streak || 0)}<small> 天</small></b></div>
       <div class="tj-stat"><span>历史记录</span><b>${Number(summary.libraryCount || 0)}<small> 篇</small></b></div>`;
@@ -11896,14 +11908,19 @@
   }
   function renderTopJournalToday() {
     if (!topJournalData.selectedJournalIds.length) {
-      return tjEmpty('', '先选择要追踪的 UTD 期刊', '进入“期刊管理”勾选期刊或一键应用研究方向预设。');
+      return tjEmpty('', '先选择要追踪的期刊', '进入“期刊管理”勾选期刊或一键应用研究方向预设。');
     }
     if (!topJournalDelivery?.delivery) {
       return `<div class="tj-checkin-card"><div><span class="tj-checkin-icon">✓</span><h3>今日文章尚未领取</h3><p>点击右上角“签到并领取今日文章”。系统将先刷新已订阅期刊，再为每本期刊分配最多 5 篇你从未收到过的文章。</p></div><button class="tb-btn accent" data-tj-checkin>签到并领取</button></div>`;
     }
     const { delivery, articles } = topJournalDelivery;
-    const shortage = (delivery.shortages || []).map((item) => `${esc(tjJournal(item.journalId)?.shortTitle || item.journalId)}：${item.available}/${item.requested}`).join('，');
-    return `<div class="tj-delivery-note"><b>✓ ${esc(delivery.date)} 已领取 ${articles.length} 篇文章</b>${shortage ? `<span>部分期刊可投递新文章不足 5 篇：${shortage}。系统不会重复凑数。</span>` : '<span>已按“最新一期 / Online First 优先、个人历史不重复”生成。</span>'}</div><div class="tj-article-list">${articles.length ? articles.map((article) => tjArticleCard(article, { delivered: true })).join('') : tjEmpty('', '当前没有可投递的未重复文章', '请稍后同步，或在“最新文章”中查看已采集内容。')}</div>`;
+    // 中文刊里常有十几本暂时抓不到目录，全列出来会把提示条撑成一大段；只报前 3 本 + 总数
+    const shortages = delivery.shortages || [];
+    const shortage = shortages.length
+      ? `${shortages.slice(0, 3).map((item) => `${esc(tjJournal(item.journalId)?.shortTitle || item.journalId)}：${item.available}/${item.requested}`).join('，')}${shortages.length > 3 ? `，等 ${shortages.length} 本` : ''}`
+      : '';
+    const siteShortage = shortages.some((item) => tjJournal(item.journalId)?.provider === 'site');
+    return `<div class="tj-delivery-note"><b>✓ ${esc(delivery.date)} 已领取 ${articles.length} 篇文章</b>${shortage ? `<span>部分期刊可投递新文章不足 5 篇：${shortage}。系统不会重复凑数。${siteShortage ? '中文刊抓不到目录时，可在「期刊管理 → 中国期刊目录页」补上地址。' : ''}</span>` : '<span>已按“最新一期 / Online First 优先、个人历史不重复”生成。</span>'}</div><div class="tj-article-list">${articles.length ? articles.map((article) => tjArticleCard(article, { delivered: true })).join('') : tjEmpty('', '当前没有可投递的未重复文章', '请稍后同步，或在“最新文章”中查看已采集内容。')}</div>`;
   }
   function renderTopJournalLatest() {
     const articles = topJournalData.articles || [];
@@ -11953,14 +11970,46 @@
     }).join('');
     return `<div class="tj-calendar-card"><div class="tj-calendar-summary"><div><b>${Number(topJournalData.summary?.streak || 0)} 天</b><span>当前连续签到</span></div><div><b>${checked.size} 天</b><span>本月已签到</span></div><div><b>${Number(topJournalData.summary?.libraryCount || 0)} 篇</b><span>历史记录</span></div></div><h3>${year} 年 ${month + 1} 月</h3><div class="tj-calendar-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="tj-calendar-grid">${blanks}${cells}</div><p>未签到不会消耗文章队列；下次签到时，系统仍会从你未收到过的文章中优先选择最新内容。</p></div>`;
   }
+  /**
+   * 期刊的数据源标识。
+   * Crossref 的刊自动带摘要；中文刊只能抓官网目录，抓不到时同步会写 lastError，
+   * 这里把错误挂到 title 上，用户不用去别处找原因。
+   */
+  function tjJournalTag(journal) {
+    const error = topJournalData.sync?.[journal.id]?.error || '';
+    if (journal.provider !== 'site') return `<em class="tj-src">Crossref</em>`;
+    if (journal.feedUrl) {
+      return error
+        ? `<em class="tj-src is-off" title="${esc(error)}">官网目录 · 上次失败</em>`
+        : '<em class="tj-src is-on" title="抓取该刊官网当期目录">官网目录</em>';
+    }
+    return `<em class="tj-src is-off" title="${esc(error || '未内置已验证的目录页：同步时会先试着从官网首页解析，失败可在下方填当期目录地址')}">待验证</em>`;
+  }
   function renderTopJournalManage() {
     const selected = new Set(topJournalData.selectedJournalIds || []);
-    const groups = [...new Set(topJournalData.catalog.map((journal) => journal.category))];
+    const catalog = topJournalData.catalog || [];
+    const sets = Array.isArray(topJournalData.sets) && topJournalData.sets.length
+      ? topJournalData.sets
+      : [{ id: 'all', label: '全部期刊', note: '', journalIds: catalog.map((journal) => journal.id) }];
     const presets = Object.entries(topJournalData.presets || {}).map(([id, preset]) => `<button class="tj-preset" data-tj-preset="${esc(id)}">${esc(preset.label)}</button>`).join('');
-    return `<div class="tj-manage-card"><div class="tj-manage-head"><div><h3>选择追踪期刊</h3><p>已选择 ${selected.size} / 24 本。预设会替换当前选择；之后可继续手动多选。</p></div><div class="tj-preset-row"><span>研究方向预设</span>${presets}<button class="tj-preset secondary" data-tj-select-all>全选 24 本</button><button class="tj-preset secondary" data-tj-clear>清空</button></div></div>${groups.map((group) => {
-      const journals = topJournalData.catalog.filter((journal) => journal.category === group);
-      return `<section class="tj-journal-group"><div class="tj-group-head"><b>${esc(group)}</b><button class="as-link" data-tj-category="${esc(group)}">全选此类</button></div><div class="tj-journal-options">${journals.map((journal) => `<label><input type="checkbox" data-tj-journal="${esc(journal.id)}" ${selected.has(journal.id) ? 'checked' : ''}><span><b>${esc(journal.shortTitle)}</b><small>${esc(journal.title)}</small></span><a href="${esc(tjExternalUrl(journal.publisherUrl))}" target="_blank" rel="noopener noreferrer" title="打开期刊主页">${ico('external')}</a></label>`).join('')}</div></section>`;
-    }).join('')}</div>`;
+    const sections = sets.map((set) => {
+      const journals = catalog.filter((journal) => set.journalIds.includes(journal.id));
+      const chosen = journals.filter((journal) => selected.has(journal.id)).length;
+      const groups = [...new Set(journals.map((journal) => journal.category))].map((group) => {
+        const list = journals.filter((journal) => journal.category === group);
+        const picked = list.filter((journal) => selected.has(journal.id)).length;
+        return `<section class="tj-journal-group"><div class="tj-group-head"><b>${esc(group)}</b><span class="tj-group-meta">${picked}/${list.length}</span><button class="as-link" data-tj-category="${esc(group)}">全选此类</button></div><div class="tj-journal-options">${list.map((journal) => {
+          const home = tjExternalUrl(journal.publisherUrl);
+          return `<label><input type="checkbox" data-tj-journal="${esc(journal.id)}" ${selected.has(journal.id) ? 'checked' : ''}><span><b>${esc(journal.shortTitle)}</b><small>${esc(journal.titleEn || journal.title)}</small></span>${tjJournalTag(journal)}${home ? `<a href="${esc(home)}" target="_blank" rel="noopener noreferrer" title="打开期刊主页">${ico('external')}</a>` : '<i class="tj-no-link"></i>'}</label>`;
+        }).join('')}</div></section>`;
+      }).join('');
+      return `<section class="tj-journal-set"><div class="tj-set-head"><div><b>${esc(set.label)}</b>${set.note ? `<small>${esc(set.note)}</small>` : ''}</div><button class="tj-preset secondary" data-tj-set="${esc(set.id)}">全选本组 ${chosen}/${journals.length}</button></div>${groups}</section>`;
+    }).join('');
+    const siteJournals = catalog.filter((journal) => journal.provider === 'site');
+    const feedBox = siteJournals.length
+      ? `<details class="tj-feed-box"${tjFeedOpen ? ' open' : ''}><summary>中国期刊目录页（可选，填了就能自动同步）</summary><p>这 22 种中文刊不在 Crossref，元数据只能抓各刊官网的当期目录页。默认已填好实测可用的站点；标「待验证」的刊会先按官网首页尝试，抓不到就把它的当期目录地址（列着本期文章的页面）粘进来，保存后下次同步生效。</p><div class="tj-feed-rows">${siteJournals.map((journal) => `<div class="tj-feed-row" data-feed-row="${esc(journal.id)}"><span title="${esc(journal.title)}">${esc(journal.shortTitle)}</span><input type="url" spellcheck="false" placeholder="https://… 该刊当期目录页" value="${esc(journal.feedUrl || '')}"><button class="tj-preset secondary" data-tj-feed-save="${esc(journal.id)}">保存</button></div>`).join('')}</div></details>`
+      : '';
+    return `<div class="tj-manage-card"><div class="tj-manage-head"><div><h3>选择追踪期刊</h3><p>已选择 ${selected.size} / ${catalog.length} 本。预设会替换当前选择；之后可继续手动多选。</p></div><div class="tj-preset-row"><span>研究方向预设</span>${presets}<button class="tj-preset secondary" data-tj-select-all>全选 ${catalog.length} 本</button><button class="tj-preset secondary" data-tj-clear>清空</button></div></div>${sections}${feedBox}</div>`;
   }
   async function renderTopJournals() {
     if (!topJournalLoaded) await loadTopJournals();
@@ -11981,6 +12030,24 @@
     topJournalLibrary = [];
     topJournalSelection.clear();
     renderTopJournals();
+  }
+  /** 保存某本中文刊的当期目录地址（留空则恢复内置值） */
+  async function tjSaveFeed(journalId) {
+    const row = document.querySelector(`[data-feed-row="${journalId}"]`);
+    const input = row?.querySelector('input');
+    const feedUrl = String(input?.value || '').trim();
+    try {
+      const result = await api(`/api/top-journals/journals/${encodeURIComponent(journalId)}/feed`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feedUrl }),
+      });
+      topJournalData = { ...topJournalData, ...result };
+      toast(feedUrl ? '已保存目录页，下次同步生效' : '已恢复内置目录页', 'success');
+      await renderTopJournals();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
   }
   async function topJournalSync() {
     if (!topJournalData.selectedJournalIds.length) { topJournalTab = 'manage'; await renderTopJournals(); toast('请先选择至少一本期刊', 'error'); return; }
@@ -12202,7 +12269,7 @@
     try {
       const result = await api('/api/top-journals/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(withProfileId({ articleIds }, 'topjournal')) });
       currentTopJournalAnalysisId = result.analysisId || '';
-      $('topJournalAnalysisBody').innerHTML = `<p class="tj-analysis-note">基于本次选中的 ${result.articleCount} 篇文章及本地资料生成。${result.compressed ? '本地上下文已先压缩。' : ''}结论仅代表所选样本，不代表全部 UTD24 期刊。</p><div class="md">${renderMarkdown(result.analysis)}</div>`;
+      $('topJournalAnalysisBody').innerHTML = `<p class="tj-analysis-note">基于本次选中的 ${result.articleCount} 篇文章及本地资料生成。${result.compressed ? '本地上下文已先压缩。' : ''}结论仅代表所选样本，不代表所追踪期刊的完整总体趋势。</p><div class="md">${renderMarkdown(result.analysis)}</div>`;
       $('topJournalAnalysisModal').classList.remove('hidden');
     } catch (error) { toast(error.message, 'error'); }
     finally { if (trigger) { trigger.disabled = false; trigger.textContent = original; } }
@@ -12256,6 +12323,13 @@
       const preset = event.target.closest('[data-tj-preset]'); if (preset) return saveTopJournalSubscriptions(topJournalData.presets[preset.dataset.tjPreset]?.journalIds || []);
       const all = event.target.closest('[data-tj-select-all]'); if (all) return saveTopJournalSubscriptions(topJournalData.catalog.map((journal) => journal.id));
       const clear = event.target.closest('[data-tj-clear]'); if (clear) return saveTopJournalSubscriptions([]);
+      const setBtn = event.target.closest('[data-tj-set]');
+      if (setBtn) {
+        const set = (topJournalData.sets || []).find((item) => item.id === setBtn.dataset.tjSet);
+        if (set) return saveTopJournalSubscriptions(set.journalIds);
+      }
+      const feedSave = event.target.closest('[data-tj-feed-save]');
+      if (feedSave) return tjSaveFeed(feedSave.dataset.tjFeedSave);
       const category = event.target.closest('[data-tj-category]'); if (category) {
         const ids = new Set(topJournalData.selectedJournalIds || []);
         topJournalData.catalog.filter((journal) => journal.category === category.dataset.tjCategory).forEach((journal) => ids.add(journal.id));
@@ -12279,6 +12353,10 @@
       checkbox.checked ? ids.add(checkbox.dataset.tjJournal) : ids.delete(checkbox.dataset.tjJournal);
       saveTopJournalSubscriptions([...ids]).catch((error) => toast(error.message, 'error'));
     });
+    // <details> 的 toggle 不冒泡，只能在捕获阶段记；否则保存目录页后重绘会把面板收起来
+    $('topJournalContent').addEventListener('toggle', (event) => {
+      if (event.target?.classList?.contains('tj-feed-box')) tjFeedOpen = Boolean(event.target.open);
+    }, true);
   }
   async function switchView(v) {
     view = v;

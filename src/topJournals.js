@@ -1,11 +1,20 @@
-// topJournals.js —— UTD 24 顶刊跟踪：期刊目录、Crossref 元数据同步与个人不重复投递队列
+// topJournals.js —— 顶刊跟踪：期刊目录、元数据同步与个人不重复投递队列
+//
+// 目录分两套：
+//   utd  —— UTD 24，元数据走 Crossref（稳定、带作者与摘要）。
+//   cnA  —— 国家自然科学基金委管理科学部 A 类期刊 22 种（中文）。
+//           这 22 种**完全不在 Crossref**（按 ISSN 与 DOI 前缀查 works 均为 0 条），OpenAlex 也只零星收录，
+//           所以元数据只能抓各刊官网的当期目录页，见 cnJournalFeed.js。
+//           本版本已核实可直接解析的刊物预填了 feedUrl；其余可在界面里自己补目录页地址。
 //
 // 本模块只同步公开的书目信息/摘要/DOI/出版社文章页；不抓取或分发受版权保护的 PDF 全文。
+
+import { fetchCnJournalArticles } from './cnJournalFeed.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const CROSSREF_API = 'https://api.crossref.org/journals';
 
-export const UTD_JOURNALS = [
+const UTD_BASE = [
   { id: 'tar', title: 'The Accounting Review', shortTitle: 'TAR', category: '会计', issn: '0001-4826', publisherUrl: 'https://publications.aaahq.org/accounting-review' },
   { id: 'jae', title: 'Journal of Accounting and Economics', shortTitle: 'JAE', category: '会计', issn: '0165-4101', publisherUrl: 'https://www.sciencedirect.com/journal/journal-of-accounting-and-economics' },
   { id: 'jar', title: 'Journal of Accounting Research', shortTitle: 'JAR', category: '会计', issn: '0021-8456', publisherUrl: 'https://onlinelibrary.wiley.com/journal/1475679x' },
@@ -32,6 +41,61 @@ export const UTD_JOURNALS = [
   { id: 'smj', title: 'Strategic Management Journal', shortTitle: 'SMJ', category: '综合管理与战略', issn: '0143-2095', publisherUrl: 'https://onlinelibrary.wiley.com/journal/10970266' },
 ];
 
+export const UTD_JOURNALS = UTD_BASE.map((journal) => ({ ...journal, set: 'utd', provider: 'crossref', language: 'en' }));
+
+/**
+ * 国家自然科学基金委管理科学部 A 类期刊（22 种）。
+ *
+ * 数据源说明：这 22 种刊不在 Crossref，也没有统一接口，provider 一律是 site（抓官网当期目录）。
+ * feedUrl 只填**实测能解析出文章列表**的地址（2026-11 验证）；留空的站点当前抓不到
+ * （脚本渲染、拒绝程序访问或域名变更），界面标「待验证」，用户可自行补上当期目录地址。
+ */
+export const CN_A_JOURNALS = [
+  { id: 'cn-jmsc', title: '管理科学学报', shortTitle: '管理科学学报', titleEn: 'Journal of Management Sciences in China', category: '管理科学与工程', issn: '1007-9807', publisherUrl: 'http://jmsc.tju.edu.cn', feedUrl: 'http://jmsc.tju.edu.cn' },
+  { id: 'cn-setp', title: '系统工程理论与实践', shortTitle: '系统工程理论与实践', titleEn: 'Systems Engineering — Theory & Practice', category: '管理科学与工程', issn: '1000-6788', publisherUrl: 'http://www.sysengi.com', feedUrl: '' },
+  { id: 'cn-mw', title: '管理世界', shortTitle: '管理世界', titleEn: 'Journal of Management World', category: '工商管理', issn: '1002-5502', publisherUrl: 'http://www.mwm.net.cn', feedUrl: 'http://www.mwm.net.cn' },
+  { id: 'cn-qte', title: '数量经济技术经济研究', shortTitle: '数量经济技术经济研究', titleEn: 'Journal of Quantitative & Technological Economics', category: '经济与金融', issn: '1000-3894', publisherUrl: 'https://www.jqte.net', feedUrl: 'https://www.jqte.net' },
+  { id: 'cn-ssc', title: '中国软科学', shortTitle: '中国软科学', titleEn: 'China Soft Science', category: '经济与金融', issn: '1002-9753', publisherUrl: 'https://www.cssm.com.cn', feedUrl: 'https://www.cssm.com.cn' },
+  { id: 'cn-jryj', title: '金融研究', shortTitle: '金融研究', titleEn: 'Journal of Financial Research', category: '经济与金融', issn: '1002-7246', publisherUrl: 'http://www.jryj.org.cn', feedUrl: 'http://www.jryj.org.cn/CN/1002-7246/home.shtml' },
+  { id: 'cn-zgglkx', title: '中国管理科学', shortTitle: '中国管理科学', titleEn: 'Chinese Journal of Management Science', category: '管理科学与工程', issn: '1003-207X', publisherUrl: 'http://www.zgglkx.com', feedUrl: 'https://www.zgglkx.com/CN/1003-207x/home.shtml' },
+  { id: 'cn-jse', title: '系统工程学报', shortTitle: '系统工程学报', titleEn: 'Journal of Systems Engineering', category: '管理科学与工程', issn: '1000-5781', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-kjyj', title: '会计研究', shortTitle: '会计研究', titleEn: 'Accounting Research', category: '工商管理', issn: '1003-2886', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-xtglxb', title: '系统管理学报', shortTitle: '系统管理学报', titleEn: 'Journal of Systems & Management', category: '管理科学与工程', issn: '1005-2542', publisherUrl: 'http://xtglxb.sjtu.edu.cn', feedUrl: 'https://xtglxb.sjtu.edu.cn/CN/2097-4558/home.shtml' },
+  { id: 'cn-glpl', title: '管理评论', shortTitle: '管理评论', titleEn: 'Management Review', category: '管理科学与工程', issn: '1003-1952', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-glgcxb', title: '管理工程学报', shortTitle: '管理工程学报', titleEn: 'Journal of Industrial Engineering and Engineering Management', category: '管理科学与工程', issn: '1004-6062', publisherUrl: 'http://glgcxb.zju.edu.cn', feedUrl: '' },
+  { id: 'cn-nkglpl', title: '南开管理评论', shortTitle: '南开管理评论', titleEn: 'Nankai Business Review', category: '工商管理', issn: '1008-3448', publisherUrl: 'http://nbr.nankai.edu.cn', feedUrl: '' },
+  { id: 'cn-kygl', title: '科研管理', shortTitle: '科研管理', titleEn: 'Science Research Management', category: '工商管理', issn: '1000-2995', publisherUrl: 'https://www.kygl.net.cn', feedUrl: 'https://www.kygl.net.cn/CN/1000-2995/home.shtml' },
+  { id: 'cn-qbxb', title: '情报学报', shortTitle: '情报学报', titleEn: 'Journal of the China Society for Scientific and Technical Information', category: '公共管理与情报', issn: '1000-0135', publisherUrl: 'http://qbxb.istic.ac.cn', feedUrl: '' },
+  { id: 'cn-ggglxb', title: '公共管理学报', shortTitle: '公共管理学报', titleEn: 'Journal of Public Management', category: '公共管理与情报', issn: '1672-6162', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-glkx', title: '管理科学', shortTitle: '管理科学', titleEn: 'Journal of Management Science', category: '管理科学与工程', issn: '1672-0334', publisherUrl: 'http://glkx.hit.edu.cn', feedUrl: 'http://glkx.hit.edu.cn' },
+  { id: 'cn-yc', title: '预测', shortTitle: '预测', titleEn: 'Forecasting', category: '管理科学与工程', issn: '1003-5192', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-ycygl', title: '运筹与管理', shortTitle: '运筹与管理', titleEn: 'Operations Research and Management Science', category: '管理科学与工程', issn: '1007-3221', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-kxxyj', title: '科学学研究', shortTitle: '科学学研究', titleEn: 'Studies in Science of Science', category: '公共管理与情报', issn: '1003-2053', publisherUrl: '', feedUrl: '' },
+  { id: 'cn-ciej', title: '中国工业经济', shortTitle: '中国工业经济', titleEn: 'China Industrial Economics', category: '工商管理', issn: '1006-480X', publisherUrl: 'http://ciejournal.ajcass.com', feedUrl: 'http://ciejournal.ajcass.com' },
+  { id: 'cn-ncyjwt', title: '农业经济问题', shortTitle: '农业经济问题', titleEn: 'Issues in Agricultural Economy', category: '工商管理', issn: '1000-6389', publisherUrl: '', feedUrl: '' },
+].map((journal) => ({ ...journal, set: 'cnA', provider: 'site', language: 'zh' }));
+
+export const ALL_JOURNALS = [...UTD_JOURNALS, ...CN_A_JOURNALS];
+
+export const JOURNAL_SETS = [
+  {
+    id: 'utd',
+    label: 'UTD 24 · 英文顶刊',
+    note: '元数据来自 Crossref，自动带作者与摘要',
+    journalIds: UTD_JOURNALS.map((journal) => journal.id),
+  },
+  {
+    id: 'cnA',
+    label: '中国 · 国家自然科学基金委管理科学部 A 类（22 种）',
+    note: '元数据抓各刊官网当期目录；标「待验证」的刊需自填目录页地址',
+    journalIds: CN_A_JOURNALS.map((journal) => journal.id),
+  },
+];
+
+export function journalById(id) {
+  return ALL_JOURNALS.find((journal) => journal.id === id) || null;
+}
+
 export const JOURNAL_PRESETS = {
   marketing: { label: '营销', journalIds: ['jcr', 'jm', 'jmr', 'mksc'] },
   management: { label: '企业管理', journalIds: ['amj', 'amr', 'asq', 'os', 'jibs', 'smj'] },
@@ -41,6 +105,19 @@ export const JOURNAL_PRESETS = {
   finance: { label: '金融', journalIds: ['jof', 'jfe', 'rfs'] },
   informationSystems: { label: '信息系统', journalIds: ['isr', 'ijoc', 'misq'] },
   operations: { label: '运营与供应链', journalIds: ['ms', 'or', 'jom', 'msom', 'pom'] },
+  cnAll: { label: '中国 A 类 22 本', journalIds: CN_A_JOURNALS.map((journal) => journal.id) },
+  cnManagement: {
+    label: '中国 · 管理科学与工程',
+    journalIds: CN_A_JOURNALS.filter((journal) => journal.category === '管理科学与工程').map((journal) => journal.id),
+  },
+  cnBusiness: {
+    label: '中国 · 工商管理',
+    journalIds: CN_A_JOURNALS.filter((journal) => journal.category === '工商管理').map((journal) => journal.id),
+  },
+  cnEconomics: {
+    label: '中国 · 经济金融',
+    journalIds: CN_A_JOURNALS.filter((journal) => ['经济与金融', '公共管理与情报'].includes(journal.category)).map((journal) => journal.id),
+  },
 };
 
 export function dayKey(value = new Date()) {
@@ -54,17 +131,26 @@ export function createTopJournalState(value = {}) {
   const favoriteSource = value?.favorites && typeof value.favorites === 'object' ? value.favorites : {};
   const deletedSource = value?.deletedHistoryArticleIds && typeof value.deletedHistoryArticleIds === 'object'
     ? value.deletedHistoryArticleIds : {};
+  const feedSource = value?.feedOverrides && typeof value.feedOverrides === 'object' ? value.feedOverrides : {};
   return {
     version: 2,
-    selectedJournalIds: Array.isArray(value?.selectedJournalIds) ? [...new Set(value.selectedJournalIds.filter((id) => UTD_JOURNALS.some((j) => j.id === id)))] : [],
+    selectedJournalIds: Array.isArray(value?.selectedJournalIds) ? [...new Set(value.selectedJournalIds.filter((id) => ALL_JOURNALS.some((j) => j.id === id)))] : [],
     articles: Array.isArray(value?.articles) ? value.articles : [],
     checkins: value?.checkins && typeof value.checkins === 'object' ? value.checkins : {},
     deliveries: value?.deliveries && typeof value.deliveries === 'object' ? value.deliveries : {},
     sync: value?.sync && typeof value.sync === 'object' ? value.sync : {},
     favorites: Object.fromEntries(Object.entries(favoriteSource).filter(([id]) => typeof id === 'string' && id)),
     deletedHistoryArticleIds: Object.fromEntries(Object.entries(deletedSource).filter(([id]) => typeof id === 'string' && id)),
+    // 用户自填的期刊目录页（只对中文刊有意义）：{ journalId: url }
+    feedOverrides: Object.fromEntries(Object.entries(feedSource).filter(([id, url]) => typeof id === 'string' && /^https?:\/\//i.test(String(url || '')))),
     preferences: { fillWithRecentUnseen: true, ...(value?.preferences || {}) },
   };
+}
+
+/** 应用用户自填的目录页地址后的期刊目录（界面与同步都读这一份）。 */
+export function catalogFor(stateInput) {
+  const overrides = stateInput?.feedOverrides || {};
+  return ALL_JOURNALS.map((journal) => (overrides[journal.id] ? { ...journal, feedUrl: overrides[journal.id] } : journal));
 }
 
 function htmlToText(value) {
@@ -146,18 +232,27 @@ function isValidDate(value) {
 export async function syncJournals(stateInput, journalIds, { fetchImpl = globalThis.fetch, rows = 50 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('当前运行环境不支持网络请求，无法同步期刊元数据');
   const state = createTopJournalState(stateInput);
-  const wanted = [...new Set((journalIds || []).filter((id) => UTD_JOURNALS.some((journal) => journal.id === id)))];
+  const catalog = catalogFor(state);
+  const wanted = [...new Set((journalIds || []).filter((id) => catalog.some((journal) => journal.id === id)))];
   if (!wanted.length) return { state, synced: [], failed: [] };
   const synced = [];
   const failed = [];
   const fetched = [];
-  // 限制并发为 3，既比逐刊串行快，也避免对 Crossref 造成突发请求。
+  // 限制并发为 3，既比逐刊串行快，也避免对 Crossref / 期刊官网造成突发请求。
   const queue = [...wanted];
   const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
     while (queue.length) {
       const id = queue.shift();
-      const journal = UTD_JOURNALS.find((candidate) => candidate.id === id);
+      const journal = catalog.find((candidate) => candidate.id === id);
       try {
+        // 中文刊没有 Crossref 记录，只能抓官网当期目录；两条路径的产物结构一致，所以在这里分流即可。
+        if (journal.provider === 'site') {
+          const articles = await fetchCnJournalArticles(journal, { fetchImpl });
+          fetched.push(...articles);
+          state.sync[id] = { lastSuccessAt: new Date().toISOString(), source: '期刊官网', sourceUrl: journal.feedUrl || '', count: articles.length, error: '' };
+          synced.push({ journalId: id, count: articles.length, provider: 'site' });
+          continue;
+        }
         const params = new URLSearchParams({ filter: 'type:journal-article', sort: 'published', order: 'desc', rows: String(Math.max(1, Math.min(100, rows))) });
         const response = await fetchImpl(`${CROSSREF_API}/${encodeURIComponent(journal.issn)}/works?${params}`, {
           headers: { Accept: 'application/json', 'User-Agent': 'worlex/1.9 (mailto:research@example.invalid)' },
@@ -167,11 +262,11 @@ export async function syncJournals(stateInput, journalIds, { fetchImpl = globalT
         const articles = (payload?.message?.items || []).map((item) => mapCrossrefWork(item, journal));
         fetched.push(...articles);
         state.sync[id] = { lastSuccessAt: new Date().toISOString(), source: 'Crossref', count: articles.length, error: '' };
-        synced.push({ journalId: id, count: articles.length });
+        synced.push({ journalId: id, count: articles.length, provider: 'crossref' });
       } catch (error) {
         const message = error?.message || '未知同步错误';
         state.sync[id] = { ...(state.sync[id] || {}), lastAttemptAt: new Date().toISOString(), error: message };
-        failed.push({ journalId: id, error: message });
+        failed.push({ journalId: id, error: message, provider: journal.provider });
       }
     }
   });
@@ -197,7 +292,7 @@ export function checkInAndCreateDelivery(stateInput, { date = dayKey(), perJourn
   if (!isValidDate(date)) throw new Error('签到日期格式无效');
   const state = createTopJournalState(stateInput);
   const existing = state.deliveries[date];
-  if (!state.selectedJournalIds.length && !existing) throw new Error('请先在「期刊管理」勾选至少一本 UTD 期刊');
+  if (!state.selectedJournalIds.length && !existing) throw new Error('请先在「期刊管理」勾选至少一本期刊');
 
   // 同一天再次签到不会重置旧投递；如果用户随后新增期刊（或旧期刊此前不足 5 篇），仅追加未投递文章。
   const now = new Date().toISOString();
