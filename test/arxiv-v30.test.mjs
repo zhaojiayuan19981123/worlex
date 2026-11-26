@@ -1,7 +1,6 @@
-// arxiv-v30.test.mjs —— arXiv 翻译（翻译引擎）+ 一键导入文献中心
+// arxiv-v30.test.mjs —— arXiv 翻译（翻译引擎）+ 下载 PDF 导入文献中心
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -16,6 +15,10 @@ const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1'
 const post = (base, url, body) => fetch(base + url, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 });
+const pdfFetch = (bad = false) => async () => ({
+  ok: true, status: 200,
+  arrayBuffer: async () => Buffer.from(bad ? '<html>blocked</html>' : '%PDF-1.4\n%mock arxiv pdf\n%%EOF'),
+});
 
 const entry = (id, title) => ({
   id, title, abstract: `Abstract of ${title}.`, authors: ['Ada', 'Bob'], authorLine: 'Ada，Bob',
@@ -23,28 +26,45 @@ const entry = (id, title) => ({
   doi: '', absUrl: `https://arxiv.org/abs/${id}`, pdfUrl: `https://arxiv.org/pdf/${id}`,
 });
 
-async function newApp(translateImpl) {
-  const dir = await mkdtemp(path.join(tmpdir(), 'arxiv-v30-'));
+async function newApp({ translateImpl, fetchImpl = pdfFetch() } = {}) {
+  const dir = await mkdtemp(path.join(ROOT, '.tmp-arxiv-v30-'));
+  const uploads = path.join(dir, 'uploads');
+  await (await import('node:fs/promises')).mkdir(uploads);
   store.configure({ dataDir: dir });
   const app = express();
   app.use(express.json());
   registerArxivRoutes(app, {
     store,
     makeRecord: () => ({ id: store.newId(), docType: 'empirical', collectionId: null, status: 'pending' }),
+    getUploadDir: () => uploads,
+    fetchImpl,
+    delayMs: 0,
     translateImpl,
     logger: () => {},
   });
   const server = app.listen(0, '127.0.0.1');
   const base = await listen(server);
-  return { base, dir, async cleanup() { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); await rm(dir, { recursive: true, force: true }); } };
+  return {
+    base, dir, uploads,
+    async cleanup() { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); await rm(dir, { recursive: true, force: true }); },
+  };
+}
+
+async function waitJob(base, jobId) {
+  for (let i = 0; i < 40; i += 1) {
+    const job = await (await fetch(`${base}/api/arxiv/import/job/${jobId}`)).json();
+    if (job.status !== 'running') return job;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error('导入任务超时');
 }
 
 test('翻译：走注入的翻译引擎，后台任务把标题/摘要中文写回 byId', async () => {
   const seen = [];
-  const ctx = await newApp(async (segments, opts) => {
+  const ctx = await newApp({ translateImpl: async (segments, opts) => {
     seen.push(opts.engine);
     return segments.map((s) => ({ id: s.id, translation: `中文：${s.text}`, error: '' }));
-  });
+  } });
   try {
     const started = await (await post(ctx.base, '/api/arxiv/translate', {
       items: [entry('2501.00001', 'Graph Models')], engine: 'youdaoweb',
@@ -65,7 +85,7 @@ test('翻译：走注入的翻译引擎，后台任务把标题/摘要中文写�
   } finally { await ctx.cleanup(); }
 });
 
-test('导入：按 arXiv id / 标题去重，元数据与目标文库正确', async () => {
+test('导入：PDF 真下载到 uploads，文献记录挂附件；按 arXiv id / 标题去重', async () => {
   const ctx = await newApp();
   try {
     store.saveCollections([
@@ -73,9 +93,11 @@ test('导入：按 arXiv id / 标题去重，元数据与目标文库正确', as
       { id: 'col-e', name: '实证', docType: 'empirical', createdAt: '' },
     ]);
     const items = [entry('2501.00001', 'Graph Models'), { ...entry('2501.00002', 'LLM Planning'), titleZh: '大模型规划' }];
-    const first = await (await post(ctx.base, '/api/arxiv/import', {
+    const started = await (await post(ctx.base, '/api/arxiv/import', {
       items, docType: 'algorithm', collectionId: 'col-a',
     })).json();
+    assert.equal(started.mode, 'pdf');
+    const first = await waitJob(ctx.base, started.jobId);
     assert.equal(first.imported, 2);
     assert.equal(first.docType, 'algorithm');
     assert.equal(first.collectionId, 'col-a');
@@ -85,32 +107,67 @@ test('导入：按 arXiv id / 标题去重，元数据与目标文库正确', as
     assert.equal(saved.authors, 'Ada，Bob');
     assert.equal(saved.year, 2025);
     assert.equal(saved.keywords, 'cs.AI, cs.LG');
-    const second = await (await post(ctx.base, '/api/arxiv/import', {
+    assert.ok(saved.filePath && saved.filename && saved.fileSize > 0, '文献记录应挂上真实 PDF');
+    assert.match(await readFile(saved.filePath, 'utf8'), /^%PDF-/);
+    assert.equal(saved.fileKind, 'pdf');
+
+    const secondStart = await (await post(ctx.base, '/api/arxiv/import', {
       items, docType: 'algorithm', collectionId: 'col-a',
     })).json();
+    const second = await waitJob(ctx.base, secondStart.jobId);
     assert.equal(second.imported, 0);
     assert.equal(second.skipped.length, 2);
-    // 同一篇可以再进另一个文库
-    const other = await (await post(ctx.base, '/api/arxiv/import', {
+
+    // 同一篇可以再进另一个文库（各自下载一份）
+    const otherStart = await (await post(ctx.base, '/api/arxiv/import', {
       items: [items[0]], docType: 'empirical', collectionId: 'col-e',
     })).json();
+    const other = await waitJob(ctx.base, otherStart.jobId);
     assert.equal(other.imported, 1);
   } finally { await ctx.cleanup(); }
 });
 
-test('导入：非法分类或空列表不会建记录', async () => {
+test('导入：v3.0 只有元数据的旧记录会被补上 PDF，而不是重复建条目', async () => {
   const ctx = await newApp();
   try {
-    const bad = await post(ctx.base, '/api/arxiv/import', { items: [entry('x', 'X')], docType: 'algorithm', collectionId: 'col-e' });
-    assert.equal(bad.status, 200); // 分类不属于该文库时降级为未分类，而不是塞错地方
-    assert.equal((await bad.json()).collectionId, null);
-    const empty = await post(ctx.base, '/api/arxiv/import', { items: [], docType: 'empirical' });
-    assert.equal(empty.status, 400);
-    assert.equal(store.listLiterature().length, 1);
+    const stub = {
+      id: store.newId(), title: 'Cold Start', arxivId: '2501.00009',
+      docType: 'empirical', filePath: '', filename: '', status: 'pending',
+    };
+    store.upsertLiterature(stub);
+    const before = store.listLiterature().length;
+    const started = await (await post(ctx.base, '/api/arxiv/import', {
+      items: [entry('2501.00009', 'Cold Start')], docType: 'empirical',
+    })).json();
+    const job = await waitJob(ctx.base, started.jobId);
+    assert.equal(job.imported, 1);
+    assert.equal(store.listLiterature().length, before, '不应新建重复条目');
+    const saved = store.listLiterature().find((r) => r.arxivId === '2501.00009');
+    assert.ok(saved.filePath && saved.fileSize > 0);
   } finally { await ctx.cleanup(); }
 });
 
-test('前端 / 后端接线：翻译与导入按钮、引擎下拉、路由都齐全', async () => {
+test('导入：非 PDF 响应记为失败，非法分类降级、空列表不建记录', async () => {
+  const ctx = await newApp({ fetchImpl: pdfFetch(true) });
+  try {
+    const bad = await post(ctx.base, '/api/arxiv/import', { items: [entry('x', 'X')], docType: 'algorithm', collectionId: 'col-e' });
+    assert.equal(bad.status, 200);
+    assert.equal((await bad.json()).collectionId, null);
+    const empty = await post(ctx.base, '/api/arxiv/import', { items: [], docType: 'empirical' });
+    assert.equal(empty.status, 400);
+
+    const started = await (await post(ctx.base, '/api/arxiv/import', {
+      items: [entry('2501.00003', 'Blocked Paper')], docType: 'empirical',
+    })).json();
+    const job = await waitJob(ctx.base, started.jobId);
+    assert.equal(job.imported, 0);
+    assert.equal(job.errors.length, 1);
+    assert.match(job.errors[0].error, /不是 PDF/);
+    assert.equal(store.listLiterature().length, 0);
+  } finally { await ctx.cleanup(); }
+});
+
+test('前端 / 后端接线：翻译与 PDF 导入按钮、进度轮询、路由都齐全', async () => {
   const js = await read('public/arxiv.js');
   const css = await read('public/arxiv.css');
   const routes = await read('src/arxivRoutes.js');
@@ -119,11 +176,15 @@ test('前端 / 后端接线：翻译与导入按钮、引擎下拉、路由都�
   assert.match(js, /data-ax="translate-one"/);
   assert.match(js, /data-ax="import-page"/);
   assert.match(js, /data-ax="import-selected"/);
+  assert.match(js, /data-ax="cancel-import"/);
   assert.match(js, /data-ax="lib"/);
   assert.match(js, /data-ax="collection"/);
   assert.match(js, /arxiv\/translate\/job\//);
+  assert.match(js, /arxiv\/import\/job\//);
   assert.match(css, /\.ax-import-bar/);
   assert.match(routes, /app\.post\('\/api\/arxiv\/translate'/);
   assert.match(routes, /app\.post\('\/api\/arxiv\/import'/);
-  assert.match(server, /\/api\/translate\/engines/);
+  assert.match(routes, /app\.get\('\/api\/arxiv\/import\/job\/:jobId'/);
+  assert.match(routes, /%PDF-/);
+  assert.match(server, /getUploadDir: \(\) => currentUploadDir/);
 });

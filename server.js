@@ -5587,6 +5587,8 @@ export function createApp({
     fetchImpl: modelFetch,
     store,
     makeRecord: blankRecord,
+    // PDF 必须落到当前数据目录的 uploads：换数据目录后导入的附件要跟着走
+    getUploadDir: () => currentUploadDir,
     logger: (msg) => console.log(msg),
   });
 

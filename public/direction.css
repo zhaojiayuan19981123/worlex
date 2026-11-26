@@ -238,10 +238,38 @@
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
   padding: 6px; overflow: hidden;
 }
-.dir-viz-svg { display: block; width: 100%; height: auto; max-height: 380px; }
+/* 保持 viewBox 比例：只限宽不限高，否则 SVG 会被压扁、文字被裁 */
+.dir-viz-svg { display: block; width: 100%; max-width: 780px; height: auto; margin: 0 auto; }
 .dir-viz-note { margin: 6px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-3); }
 .dir-viz-empty { padding: 40px 12px; text-align: center; font-size: 12px; color: var(--text-3); }
 .dir-translate-engine { max-width: 190px; }
+
+/* ===== v3.1：专业背景输入 + 更详细的报告区块 ===== */
+.dir-context-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2); font-size: 12px; color: var(--text-2);
+}
+.dir-context-row label { font-weight: 600; color: var(--text); white-space: nowrap; }
+.dir-major-input {
+  flex: 1 1 260px; min-width: 180px; max-width: 420px;
+  padding: 5px 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 12px;
+}
+.dir-major-input:focus { outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 0; }
+.dir-context-row > span { color: var(--text-3); font-size: 11px; }
+.dir-kv-wide { grid-template-columns: 74px minmax(0, 1fr); gap: 8px 12px; }
+.dir-sublist { margin: 8px 0 0; padding-left: 20px; font-size: 12px; line-height: 1.8; color: var(--text-2); }
+.dir-steps { list-style: decimal; }
+.dir-hyp { margin: 8px 0 0; font-size: 12.5px; line-height: 1.75; color: var(--text-2); }
+.dir-hyp b { color: var(--primary); margin-right: 6px; }
+.dir-focus { display: block; margin-left: 4px; font-size: 11.5px; color: var(--text-3); }
+.dir-agenda { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.dir-phase { padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--surface); font-size: 12px; color: var(--text-2); }
+.dir-phase b { color: var(--text); }
+.dir-phase p { margin: 6px 0; line-height: 1.7; }
+.dir-phase ul { margin: 4px 0; padding-left: 18px; line-height: 1.75; }
+.dir-phase em { font-style: normal; font-size: 11px; color: var(--primary); }
 
 /* ===== 窄屏：侧栏落到上方 ===== */
 @media (max-width: 1080px) {

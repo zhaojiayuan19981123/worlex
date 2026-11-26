@@ -1,3 +1,47 @@
+## v3.1.0：报告更细 + 专业视角 + 可视化改由大模型基于摘要生成 + arXiv 真下载 PDF 入库（2026-11-27）
+
+### 需求
+1. 方向分析报告要更详细；2. 词云与主题关系图**不要有中文**，改为**基于摘要**、由**大模型**分析产出；
+3. 让用户填写**自己的专业**，大模型结合专业分析；4. arXiv 的「导入」要**把 PDF 下载后导入文献中心**，不是只写一个字段。
+
+### 一、报告更详细
+
+`src/directionAnalyze.js` 的提示词与 `normalizeAnalysis()` 一起扩了字段：
+
+| 区块 | 新增字段 |
+| --- | --- |
+| 研究格局 `landscape` | `evolution` 脉络 / `consensus` 共识 / `debates` 分歧 / `methodTrends` 方法趋势 |
+| 研究空白 `gaps` | `type` 类型 / `rootCause` 成因 / `impact` 价值 / `check` 如何核查 / `openQuestions` 待解问题 |
+| 研究方向 `directions` | `hypothesis` 可检验假设 / `steps` 分步计划 / `evaluation` 评价方式 / `resources` 必要条件 / `timeline` 阶段安排 |
+| 执行路线图 `agenda` | `phase` 阶段 / `goal` 目标 / `tasks` 任务 / `deliverable` 交付物 |
+| 阅读顺序 `readingOrder` | `focus` 重点看什么 |
+
+- `max_tokens` 4200 → **7000**（50 篇 + 详细字段需要更多输出空间），提示词明确要求「宁可少写，不要空话」。
+- `public/direction.js` 的 `renderReport()` 相应新增「研究格局」「执行路线图」区块，方向卡片补上假设 / 步骤 / 评价 / 必要条件 / 阶段安排，空白卡片补上类型 / 成因 / 价值 / 核查 / 待解问题。
+- Markdown 导出（`src/directionRoutes.js`）同步输出新字段，导出内容与页面一致。
+
+### 二、词云与主题关系图：大模型 + 摘要 + 纯英文
+
+- 提示词新增 `visualization: { keywords: [{text, weight}], nodes: [{id, label, type, summary}], edges: [{source, target, weight, label}] }`，并**硬性要求全部英文、必须来自文献摘要**（`TEXT_RULE` 里明确「visualization 字段禁止中文」）。
+- `public/direction-viz.js` 重写：删掉本地中文分词与从标题提词的逻辑，只读 `analysis.visualization`；渲染前再过滤一次非英文（`cleanEn`），中文条目直接丢弃；模型没给数据时显示「请重新分析」，不拿旧报告文字硬凑。
+- 布局修正：词云放不下时按 1 / 0.82 / 0.68 / 0.56 逐级缩字号，缩到 10px 仍挤不进就丢弃（不再出现半截词）；关系图节点斥力加大、标签自动在上下左右四个位置里选不压节点不压别的标签的位置，并给文字描边，避免标签压住连线。
+- 导出 SVG 时按 `viewBox` 比例缩放（`.dir-viz-svg` 去掉 `max-height`，改 `max-width`），不再被压扁。
+
+### 三、「我的专业」进入提示词
+
+- `public/direction.js` 新增「我的专业」输入框（`#dir-major`），输入即 PATCH 到会话（`PATCH /api/direction/session/:id` 的 `major` 字段），换主题、切会话都还在。
+- `POST /api/direction/analyze` 支持 `major`，落到报告记录的 `major` 上；报告头部显示「专业：xxx」。
+- 提示词收到专业后追加一段约束：结合该专业的**理论视角、常用方法、数据条件、发表语境**解释空白、细化方向，且明确「不要把专业背景当成一篇文献引用」。
+
+### 四、arXiv 导入 = 下载 PDF 入库
+
+- `src/arxivRoutes.js` 的 `POST /api/arxiv/import` 改为后台任务（`jobId` + 轮询 + 取消）：
+  - 逐篇取 `pdfUrl` 下载 PDF（`proxiedFetch` → `arrayBuffer`），校验 `%PDF-` 魔数与大小上限，写入 `data/uploads`，文件名按标题清洗并去重。
+  - 用 `makeRecord()` 建文献记录：`filePath` 指向刚下载的 PDF、`fileName` / `fileSize` 一并写入，元数据（标题 / 中文标题 / 作者 / 摘要 / 年份 / DOI / arXiv 编号 / 链接 / 分类）照旧带过去，`docType` 与 `collectionId` 按用户所选。
+  - 去重顺序 **arXiv 编号 → DOI → 标题**，范围限定目标文库；命中旧记录时，若该记录**还没有 PDF**，就把这次的 PDF 补挂上去（v3.0 只存元数据的记录会被修好），已入库且已有 PDF 的才跳过。
+  - 单篇失败只记进 `errors`，不影响其余（arXiv 有频率限制，逐篇之间留 `delayMs` 间隔）。
+- 前端 `public/arxiv.js`：按钮改为「**下载PDF并导入**」「下载导入勾选」，实时进度「已下载 x/y」，结束后提示成功 / 跳过重复 / 失败篇数；卡片显示「PDF 已入库」徽标。
+
 ## v3.0.0：方向分析扩到 50 篇 + 报告可视化 + 翻译引擎化 + arXiv 翻译与导入（2026-11-26）
 
 ### 需求

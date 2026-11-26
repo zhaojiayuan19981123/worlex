@@ -148,8 +148,8 @@ test('阅读顺序的编号越界直接丢弃，合法编号保留', () => {
 
 test('超长字段被截断，不把整段话塞进卡片', () => {
   const out = normalizeAnalysis({ overview: 'x'.repeat(5000), directions: [{ title: 'D', question: 'q', approach: 'y'.repeat(3000) }] }, { paperCount: 1 });
-  assert.ok(out.overview.length <= 1601);
-  assert.ok(out.directions[0].approach.length <= 481);
+  assert.ok(out.overview.length <= 2401);
+  assert.ok(out.directions[0].approach.length <= 801);
 });
 
 test('模型换了字段名（summary / method / papers）也能落到标准结构', () => {

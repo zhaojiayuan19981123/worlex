@@ -1,157 +1,184 @@
 /* direction-viz.js —— 分析报告可视化：词云 + 主题关系图（纯 SVG，无第三方依赖）
  *
- * 数据全部来自报告本身：overview / gaps / directions / clusters / cautions，
- * 以及参与分析的文献标题。中文没有分词库，这里用 2~4 gram + 停用词做轻量提取，
- * 足够呈现「这批文献在反复讨论什么」，不追求语言学意义上的精确分词。
+ * v3.1 起数据**只来自大模型**：分析提示词要求模型基于所选英文摘要输出
+ * analysis.visualization = { keywords, nodes, edges }，且所有文字必须是英文。
+ * 这里不再做任何本地中文分词 / 从标题提词，避免词云里混进中文或脱离摘要。
+ * 模型没给数据时显示「请重新分析」的提示，而不是拿旧报告的文字硬凑。
  */
 (() => {
   'use strict';
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const EN_STOP = new Set('the a an and or of in on for to with by from as is are was were be been being this that these those it its into at our we their they can may using use used based new via about between within across have has had do does not no more most such than then also which what when where how why all any each other some only both through over under while however therefore thus study studies paper papers research results result method methods approach model models data analysis show shows shown find finds found propose proposed'.split(/\s+/));
-  const ZH_STOP = ['研究', '方法', '本文', '我们', '提出', '一种', '基于', '通过', '可以', '进行', '分析', '结果', '表明', '发现', '本文提出', '这些', '这个', '以及', '并且', '对于', '由于', '因此', '但是', '如果', '其他', '不同', '问题', '文献', '论文', '实验', '模型', '数据', '领域'];
+  const CJK = /[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af\uf900-\ufaff]/;
+  const cleanEn = (v) => String(v == null ? '' : v)
+    .replace(CJK, ' ')
+    .replace(/[^\x20-\x7e]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  function add(counts, word, weight) {
-    const w = String(word || '').trim();
-    if (!w) return;
-    if (/^[a-zA-Z][\w-]{2,}$/.test(w)) {
-      const k = w.toLowerCase();
-      if (EN_STOP.has(k) || k.length < 3) return;
-      counts.set(k, (counts.get(k) || 0) + weight);
-      return;
+  /** 供前端/测试读取：模型给出的英文关键词（已再做一次纯英文过滤） */
+  function extractTerms(analysis) {
+    const seen = new Set();
+    const out = [];
+    for (const item of (analysis?.visualization?.keywords || [])) {
+      const text = cleanEn(item?.text || item);
+      if (!text || !/[a-z]{2}/i.test(text)) continue;
+      const key = text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ word: text, weight: Number(item?.weight) > 0 ? Number(item.weight) : 2 });
+      if (out.length >= 40) break;
     }
-    if (!/[\u4e00-\u9fa5]/.test(w)) return;
-    for (const n of [2, 3]) {
-      for (let i = 0; i + n <= w.length; i += 1) {
-        const g = w.slice(i, i + n);
-        if (ZH_STOP.includes(g)) continue;
-        counts.set(g, (counts.get(g) || 0) + weight / n);
-      }
-    }
+    return out.sort((a, b) => b.weight - a.weight);
   }
 
-  /** 报告文本 → [{text, weight}]：簇名 / 空白标题 / 方向标题权重更高 */
-  function extractTerms(analysis, papers) {
-    const counts = new Map();
-    const a = analysis || {};
-    const push = (text, weight) => {
-      String(text || '').split(/[\s,，。；;：:（）()\[\]【】"'’“”·、/\\|]+/).forEach((w) => add(counts, w, weight));
-    };
-    (a.clusters || []).forEach((c) => push(c.name, 5));
-    (a.gaps || []).forEach((g) => push(`${g.title} ${g.statement || ''}`, 3));
-    (a.directions || []).forEach((d) => push(`${d.title} ${d.question || ''}`, 3));
-    push(a.overview, 2);
-    (a.cautions || []).forEach((c) => push(c, 1));
-    (papers || []).slice(0, 50).forEach((p) => push(p.titleZh || p.title || '', 1));
-    // 去掉被更长词完全包含且频次接近的碎片（如「图神 / 神经网 / 网络」留下「神经网络」）
-    const sorted = [...counts.entries()].filter(([w, n]) => n >= 1.5).sort((x, y) => y[1] - x[1]);
-    const kept = [];
-    for (const [word, weight] of sorted) {
-      if (kept.length >= 45) break;
-      const shadowed = kept.some((k) => k.weight >= weight * 0.9 && k.word.includes(word) && k.word.length > word.length);
-      if (!shadowed) kept.push({ word, weight });
-    }
-    return kept.slice(0, 40);
-  }
-
-  function wordCloudSvg(analysis, papers) {
-    const terms = extractTerms(analysis, papers);
-    const W = 720, H = 320, cx = W / 2, cy = H / 2;
-    if (!terms.length) return '<div class="dir-viz-empty">报告文本太短，提不出足够的关键词</div>';
+  function wordCloudSvg(analysis) {
+    const terms = extractTerms(analysis);
+    const W = 720, H = 330, cx = W / 2, cy = H / 2;
+    if (!terms.length) return '<div class="dir-viz-empty">这份报告没有模型生成的英文关键词，请重新点「开始分析」。</div>';
     const max = terms[0].weight;
     const placed = [];
     const colors = ['var(--primary)', 'var(--accent-coral)', 'var(--accent-gold)', 'var(--text-2)', 'var(--primary)'];
     for (let i = 0; i < terms.length; i += 1) {
       const t = terms[i];
-      const size = Math.round(13 + 25 * Math.sqrt(t.weight / max));
-      const cjk = /[\u4e00-\u9fa5]/.test(t.word);
-      const width = t.word.length * size * (cjk ? 1.02 : 0.58);
-      const height = size * 1.25;
-      let put = null;
-      for (let step = 0; step < 260 && !put; step += 1) {
-        const angle = i * 2.39996 + step * 0.16;
-        const radius = (i === 0 ? 0 : 18 + Math.sqrt(i) * 17) + step * 1.3;
-        const x = cx + Math.cos(angle) * radius * 1.5;
-        const y = cy + Math.sin(angle) * radius * 0.78;
-        if (x - width / 2 < 6 || x + width / 2 > W - 6 || y - height / 2 < 6 || y + height / 2 > H - 6) continue;
-        const hit = placed.some((p) => Math.abs(x - p.x) < (width + p.w) / 2 + 4 && Math.abs(y - p.y) < (height + p.h) / 2 + 3);
-        if (!hit) put = { x, y };
+      const baseSize = Math.round(12 + 22 * Math.sqrt(t.weight / max));
+      // 放不下就逐级缩小字号，缩到 10px 仍挤不进就丢弃，避免文字被裁掉半截
+      for (const scale of [1, 0.82, 0.68, 0.56]) {
+        if (t._xy) break;
+        const size = Math.max(10, Math.round(baseSize * scale));
+        const width = t.word.length * size * 0.58;
+        const height = size * 1.2;
+        for (let step = 0; step < 360 && !t._xy; step += 1) {
+          const angle = i * 2.39996 + step * 0.16;
+          const radius = (i === 0 ? 0 : 16 + Math.sqrt(i) * 16) + step * 1.2;
+          const x = cx + Math.cos(angle) * radius * 1.5;
+          const y = cy + Math.sin(angle) * radius * 0.74;
+          if (x - width / 2 < 10 || x + width / 2 > W - 10 || y - height / 2 < 10 || y + height / 2 > H - 10) continue;
+          const hit = placed.some((p) => Math.abs(x - p.x) < (width + p.w) / 2 + 6 && Math.abs(y - p.y) < (height + p.h) / 2 + 4);
+          if (!hit) t._xy = { x, y }, t._size = size;
+        }
       }
-      if (!put) continue;
-      placed.push({ ...put, w: width, h: height });
-      t._xy = put; t._size = size;
+      if (!t._xy) continue;
+      placed.push({ ...t._xy, w: t.word.length * t._size * 0.58, h: t._size * 1.2 });
     }
     const nodes = terms.filter((t) => t._xy).map((t, i) => `
       <text x="${t._xy.x.toFixed(1)}" y="${t._xy.y.toFixed(1)}" text-anchor="middle" dominant-baseline="central"
-        font-size="${t._size}" font-weight="${t._size > 26 ? 700 : 600}" fill="${colors[i % colors.length]}"
+        font-size="${t._size}" font-weight="${t._size > 24 ? 700 : 600}" fill="${colors[i % colors.length]}"
         style="fill:${colors[i % colors.length]}">${esc(t.word)}</text>`).join('');
-    return `<svg class="dir-viz-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="报告关键词词云">${nodes}</svg>`;
+    return `<svg class="dir-viz-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Abstract keyword cloud">${nodes}</svg>`;
   }
 
-  function graphSvg(analysis, papers) {
-    const a = analysis || {};
+  function graphSvg(analysis) {
+    const viz = analysis?.visualization || {};
+    const ids = new Set();
     const nodes = [];
-    (a.clusters || []).slice(0, 8).forEach((c, i) => nodes.push({ id: `c${i}`, label: c.name || `主题 ${i + 1}`, type: 'cluster', papers: new Set(c.papers || []) }));
-    (a.gaps || []).slice(0, 6).forEach((g, i) => nodes.push({ id: `g${i}`, label: g.title || `空白 ${i + 1}`, type: 'gap', papers: new Set(g.evidence || []) }));
-    (a.directions || []).slice(0, 6).forEach((d, i) => nodes.push({ id: `d${i}`, label: d.title || `方向 ${i + 1}`, type: 'direction', papers: new Set(d.evidence || []) }));
-    if (!nodes.length) return '<div class="dir-viz-empty">报告没有可绘制的主题 / 空白 / 方向节点</div>';
+    for (const item of (viz.nodes || []).slice(0, 10)) {
+      const label = cleanEn(item?.label);
+      if (!label || !/[a-z]{2}/i.test(label)) continue;
+      let id = cleanEn(item?.id).replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!id) id = `n${nodes.length + 1}`;
+      while (ids.has(id)) id = `${id}_${nodes.length + 1}`;
+      ids.add(id);
+      const type = ['theme', 'gap', 'direction'].includes(item?.type) ? item.type : 'theme';
+      nodes.push({
+        id, label, type,
+        summary: cleanEn(item?.summary),
+        papers: new Set(Array.isArray(item?.papers) ? item.papers : []),
+        x: 0, y: 0, vx: 0, vy: 0,
+      });
+    }
+    if (!nodes.length) return '<div class="dir-viz-empty">这份报告没有模型生成的主题关系数据，请重新点「开始分析」。</div>';
 
+    // 模型给的语义边优先；同向关系/共同证据都可以画线，线宽表示强度。
     const edges = [];
-    const overlap = (x, y) => [...x].filter((n) => y.has(n)).length;
-    for (let i = 0; i < nodes.length; i += 1) {
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const w = overlap(nodes[i].papers, nodes[j].papers);
-        if (w > 0) edges.push({ a: nodes[i].id, b: nodes[j].id, w });
-      }
+    const seen = new Set();
+    for (const item of (viz.edges || []).slice(0, 20)) {
+      const a = cleanEn(item?.source).replace(/[^a-zA-Z0-9_-]/g, '');
+      const b = cleanEn(item?.target).replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!ids.has(a) || !ids.has(b) || a === b) continue;
+      const key = [a, b].sort().join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push({ a, b, w: Math.max(1, Math.min(5, Number(item?.weight) || 1)), label: cleanEn(item?.label) });
     }
 
-    // 简单力导向：斥力 + 边引力 + 回中力；节点数 ≤20，固定迭代足够稳定
-    const W = 720, H = 360, cx = W / 2, cy = H / 2;
+    // 简单力导向：斥力 + 边引力 + 回中力；节点数 ≤10，固定迭代足够稳定
+    const W = 720, H = 400, cx = W / 2, cy = H / 2;
+    const radiusOf = (n) => (n.type === 'theme' ? 19 : n.type === 'gap' ? 15 : 13);
     nodes.forEach((n, i) => {
       const angle = (i / nodes.length) * Math.PI * 2;
-      n.x = cx + Math.cos(angle) * 150 + (i % 3) * 6;
-      n.y = cy + Math.sin(angle) * 120 + (i % 2) * 8;
-      n.vx = 0; n.vy = 0;
+      n.x = cx + Math.cos(angle) * 165 + (i % 3) * 6;
+      n.y = cy + Math.sin(angle) * 125 + (i % 2) * 8;
     });
     const at = new Map(nodes.map((n) => [n.id, n]));
-    for (let iter = 0; iter < 170; iter += 1) {
+    for (let iter = 0; iter < 220; iter += 1) {
       for (const n of nodes) {
-        let fx = (cx - n.x) * 0.006, fy = (cy - n.y) * 0.006;
+        let fx = (cx - n.x) * 0.008, fy = (cy - n.y) * 0.008;
         for (const m of nodes) {
           if (m === n) continue;
           const dx = n.x - m.x, dy = n.y - m.y;
           const d2 = Math.max(100, dx * dx + dy * dy);
-          const f = 5200 / d2;
+          // 斥力按各自半径放大，避免圆和下方标签压到一起
+          const f = 12000 / d2;
           fx += dx * f / Math.sqrt(d2); fy += dy * f / Math.sqrt(d2);
         }
-        n.vx = (n.vx + fx) * 0.78; n.vy = (n.vy + fy) * 0.78;
+        n.vx = (n.vx + fx) * 0.76; n.vy = (n.vy + fy) * 0.76;
       }
       for (const e of edges) {
         const a1 = at.get(e.a), b1 = at.get(e.b);
         const dx = b1.x - a1.x, dy = b1.y - a1.y;
         const d = Math.max(1, Math.hypot(dx, dy));
-        const f = Math.min(0.9, (d - 110) * 0.008 * Math.min(2, e.w));
+        const f = Math.min(0.9, (d - 165) * 0.008 * Math.min(2, e.w));
         a1.vx += dx / d * f; a1.vy += dy / d * f;
         b1.vx -= dx / d * f; b1.vy -= dy / d * f;
       }
       for (const n of nodes) {
-        n.x = Math.max(62, Math.min(W - 62, n.x + n.vx));
-        n.y = Math.max(30, Math.min(H - 30, n.y + n.vy));
+        n.x = Math.max(80, Math.min(W - 80, n.x + n.vx));
+        n.y = Math.max(36, Math.min(H - 56, n.y + n.vy));
       }
     }
-    const tone = { cluster: 'var(--primary)', gap: 'var(--accent-coral)', direction: 'var(--accent-gold)' };
+
+    // 标签落位：默认贴节点下方，若与别的节点 / 已放标签冲突就翻到上方或左右错开
+    const labelW = (n) => (Math.min(n.label.length, 22)) * 6.1 + 8;
+    const boxes = [];
+    const boxOf = (c, lw) => {
+      const left = c.anchor === 'middle' ? c.x - lw / 2 : c.anchor === 'start' ? c.x : c.x - lw;
+      return { l: left, r: left + lw, t: c.y - 7.5, b: c.y + 7.5 };
+    };
+    for (const n of nodes) {
+      const lw = labelW(n), r = radiusOf(n);
+      const candidates = [
+        { x: n.x, y: n.y + r + 13, anchor: 'middle' },
+        { x: n.x, y: n.y - r - 8, anchor: 'middle' },
+        { x: n.x + r + 6, y: n.y + 4, anchor: 'start' },
+        { x: n.x - r - 6, y: n.y + 4, anchor: 'end' },
+      ];
+      let chosen = candidates[0];
+      let chosenBox = boxOf(chosen, lw);
+      for (const c of candidates) {
+        const box = boxOf(c, lw);
+        const inside = box.l > 4 && box.r < W - 4 && box.t > 12 && box.b < H - 4;
+        const hitNode = nodes.some((m) => m !== n && Math.hypot(m.x - c.x, m.y - c.y) < radiusOf(m) + 7);
+        const hitLabel = boxes.some((b2) => !(box.r < b2.l - 2 || box.l > b2.r + 2 || box.b < b2.t - 2 || box.t > b2.b + 2));
+        if (inside && !hitNode && !hitLabel) { chosen = c; chosenBox = box; break; }
+      }
+      boxes.push(chosenBox);
+      n._label = chosen;
+    }
+    const tone = { theme: 'var(--primary)', gap: 'var(--accent-coral)', direction: 'var(--accent-gold)' };
     const lines = edges.map((e) => {
       const a1 = at.get(e.a), b1 = at.get(e.b);
-      return `<line x1="${a1.x.toFixed(1)}" y1="${a1.y.toFixed(1)}" x2="${b1.x.toFixed(1)}" y2="${b1.y.toFixed(1)}" stroke="var(--border)" stroke-width="${Math.min(3, 1 + e.w)}" opacity="0.85"/>`;
+      return `<line x1="${a1.x.toFixed(1)}" y1="${a1.y.toFixed(1)}" x2="${b1.x.toFixed(1)}" y2="${b1.y.toFixed(1)}" stroke="var(--border)" stroke-width="${Math.min(3.5, 0.9 + e.w * 0.5)}" opacity="0.9"/>`;
     }).join('');
     const dots = nodes.map((n) => {
-      const base = n.type === 'cluster' ? 19 : n.type === 'gap' ? 15 : 13;
-      const label = String(n.label).length > 14 ? String(n.label).slice(0, 13) + '…' : n.label;
+      const base = radiusOf(n);
+      const label = n.label.length > 22 ? `${n.label.slice(0, 21)}…` : n.label;
       return `<g><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${base}" fill="var(--surface)" stroke="${tone[n.type]}" stroke-width="2"/>
-        <text x="${n.x.toFixed(1)}" y="${(n.y + base + 15).toFixed(1)}" text-anchor="middle" font-size="11" fill="var(--text-2)" style="fill:var(--text-2)">${esc(label)}</text></g>`;
+        <text x="${n._label.x.toFixed(1)}" y="${n._label.y.toFixed(1)}" text-anchor="${n._label.anchor}" font-size="11"
+          fill="var(--text-2)" style="fill:var(--text-2)" stroke="var(--surface)" stroke-width="3" paint-order="stroke">${esc(label)}</text></g>`;
     }).join('');
-    const note = edges.length ? '' : '<text x="360" y="22" text-anchor="middle" font-size="11" fill="var(--text-3)" style="fill:var(--text-3)">节点间没有共同证据文献，按独立主题展示</text>';
-    return `<svg class="dir-viz-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="报告主题关系图">${note}${lines}${dots}</svg>`;
+    const note = edges.length ? '' : '<text x="360" y="22" text-anchor="middle" font-size="11" fill="var(--text-3)" style="fill:var(--text-3)">No relations returned by the model</text>';
+    return `<svg class="dir-viz-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Topic relation graph">${note}${lines}${dots}</svg>`;
   }
 
   window.DirectionViz = { wordCloudSvg, graphSvg, extractTerms };

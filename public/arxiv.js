@@ -40,7 +40,7 @@
     translating: false, translateJobId: '', translateTimer: null,
     collections: [], docType: localStorage.getItem(DOC_TYPE_KEY) || 'empirical',
     collectionId: localStorage.getItem(COLLECTION_KEY) || '',
-    importing: false,
+    importing: false, importJobId: '', importTimer: null, importDone: 0, importTotal: 0,
   };
   if (!LIB_TYPES.includes(S.docType)) S.docType = 'empirical';
   const $ = (sel) => S.root?.querySelector(sel);
@@ -56,8 +56,9 @@
     }
     refreshMeta();
     if (S.translateJobId && S.translating) pollTranslate(S.translateJobId);
+    if (S.importJobId && S.importing) pollImport(S.importJobId);
   }
-  function close() { /* 保留列表与翻译状态，翻译任务靠轮询自然结束 */ }
+  function close() { /* 保留列表与任务状态；切走页面后轮询自然结束 */ }
 
   function skeleton() {
     return `
@@ -84,8 +85,9 @@
               ${LIB_TYPES.map((t) => `<option value="${t}">${LIB_NAMES[t]}</option>`).join('')}
             </select>
             <select class="tb-select ax-collection" data-ax="collection" title="分类（可选）"><option value="">未分类</option></select>
-            <button class="btn btn-sm" data-ax="import-selected">导入勾选</button>
-            <button class="btn btn-sm btn-primary" data-ax="import-page">一键导入本页</button>
+            <button class="btn btn-sm" data-ax="import-selected" title="下载 PDF 并导入上方选中的文库">下载导入勾选</button>
+            <button class="btn btn-sm btn-primary" data-ax="import-page" title="逐篇下载 PDF 并导入文献中心">一键下载本页</button>
+            <button class="btn btn-sm hidden" data-ax="cancel-import">取消导入</button>
           </div>
           <div class="ax-banner hidden" data-ax-banner></div>
           <div class="ax-head" data-ax-head></div>
@@ -116,6 +118,7 @@
       if (name === 'import-one') { importItems([id]); return; }
       if (name === 'import-selected') { importItems([...S.selected]); return; }
       if (name === 'import-page') { importItems(S.entries.map((it) => it.id)); return; }
+      if (name === 'cancel-import') { cancelImport(); return; }
       if (name === 'select-page') {
         const all = S.entries.every((it) => S.selected.has(it.id));
         S.selected = all ? new Set() : new Set(S.entries.map((it) => it.id));
@@ -259,9 +262,17 @@
     const cancel = $('[data-ax="cancel-translate"]');
     if (cancel) cancel.classList.toggle('hidden', !S.translating);
     const importBtn = $('[data-ax="import-selected"]');
-    if (importBtn) importBtn.disabled = S.importing || !S.selected.size;
+    if (importBtn) {
+      importBtn.disabled = S.importing || !S.selected.size;
+      importBtn.textContent = S.importing ? '下载导入中…' : '下载导入勾选';
+    }
     const pageBtn = $('[data-ax="import-page"]');
-    if (pageBtn) pageBtn.disabled = S.importing || !S.entries.length;
+    if (pageBtn) {
+      pageBtn.disabled = S.importing || !S.entries.length;
+      pageBtn.textContent = S.importing ? '下载导入中…' : '一键下载本页';
+    }
+    const cancelImportBtn = $('[data-ax="cancel-import"]');
+    if (cancelImportBtn) cancelImportBtn.classList.toggle('hidden', !S.importing);
   }
 
   function catLabel(id) {
@@ -287,7 +298,7 @@
             <label class="ax-check"><input type="checkbox" data-ax-item ${S.selected.has(it.id) ? 'checked' : ''} aria-label="选择这篇论文"></label>
             <a class="ax-title" href="${esc(abs)}" target="_blank" rel="noopener">${esc(tr.titleZh || it.title)}</a>
             ${tr.titleZh ? '<span class="ax-zh-badge">中</span>' : ''}
-            ${S.imported.has(it.id) ? '<span class="ax-imported-badge">已导入</span>' : ''}
+            ${S.imported.has(it.id) ? '<span class="ax-imported-badge" title="PDF 已下载到文献中心">PDF 已入库</span>' : ''}
             <span class="ax-date">${esc((it.published || '').slice(0, 10))}</span>
           </div>
           ${tr.titleZh ? `<div class="ax-origin">${esc(it.title)}</div>` : ''}
@@ -406,8 +417,9 @@
       .slice(0, S.meta?.limits?.maxImport || 50);
     if (!picked.length) { toast('请先勾选要导入的论文', 'error'); return; }
     S.importing = true;
+    S.importDone = 0; S.importTotal = picked.length;
     renderHead();
-    banner(`正在导入 ${picked.length} 篇到${LIB_NAMES[S.docType]}…`, 'info', true);
+    banner(`正在下载 PDF 并导入 ${picked.length} 篇到${LIB_NAMES[S.docType]}…`, 'info', true);
     try {
       const data = await api('/api/arxiv/import', {
         method: 'POST',
@@ -417,18 +429,60 @@
           collectionId: S.collectionId || null,
         },
       });
-      data.records?.forEach((r) => S.imported.add(r.id));
-      // records 里带回 arXiv id 更可靠：用标题回查本页条目
-      for (const it of picked) if (data.records?.some((r) => r.title === it.title)) S.imported.add(it.id);
-      renderList();
-      toast(`已导入 ${data.imported} 篇${data.skipped?.length ? `，跳过重复 ${data.skipped.length} 篇` : ''}`, 'ok');
-      banner('');
+      S.importJobId = data.jobId;
+      pollImport(data.jobId);
     } catch (e) {
+      S.importing = false; S.importJobId = '';
       banner(e.message, 'error');
-    } finally {
-      S.importing = false;
       renderHead();
     }
+  }
+
+  function pollImport(jobId) {
+    clearTimeout(S.importTimer);
+    const tick = async () => {
+      if (S.importJobId !== jobId || !S.importing) return;
+      try {
+        const job = await api(`/api/arxiv/import/job/${encodeURIComponent(jobId)}`);
+        S.importDone = job.done; S.importTotal = job.total;
+        if (job.status === 'running') {
+          banner(`正在下载 PDF 并导入：${job.done}/${job.total} 篇（成功 ${job.imported}，跳过 ${job.skipped.length}，失败 ${job.errors.length}）`, 'info', true);
+          S.importTimer = setTimeout(tick, 1200);
+          return;
+        }
+        clearTimeout(S.importTimer);
+        S.importing = false; S.importJobId = '';
+        for (const rec of job.records || []) {
+          S.imported.add(rec.arxivId || rec.id);
+          const item = S.entries.find((it) => it.id === rec.arxivId);
+          if (item) S.imported.add(item.id);
+        }
+        renderList(); renderHead();
+        if (job.status === 'done') {
+          const parts = [`成功 ${job.imported} 篇`];
+          if (job.skipped.length) parts.push(`跳过重复 ${job.skipped.length} 篇`);
+          if (job.errors.length) parts.push(`失败 ${job.errors.length} 篇`);
+          toast(parts.join('，'), job.errors.length ? 'warn' : 'ok');
+          banner(job.errors.length ? `${job.errors[0].title}：${job.errors[0].error}` : `已下载 PDF 并入库 ${job.imported} 篇`, job.errors.length ? 'warn' : 'ok');
+        } else {
+          banner(job.error || '导入失败', 'error');
+        }
+        setTimeout(() => banner(''), 5000);
+      } catch (e) {
+        clearTimeout(S.importTimer);
+        S.importing = false; S.importJobId = '';
+        renderHead(); banner(e.message, 'error');
+      }
+    };
+    tick();
+  }
+
+  async function cancelImport() {
+    if (!S.importJobId) return;
+    try { await api(`/api/arxiv/import/job/${encodeURIComponent(S.importJobId)}/cancel`, { method: 'POST', body: {} }); } catch { /* ignore */ }
+    clearTimeout(S.importTimer);
+    S.importing = false; S.importJobId = '';
+    renderHead(); banner('已取消导入', 'warn');
   }
 
   window.ArxivView = { mount, close };

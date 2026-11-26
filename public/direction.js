@@ -53,6 +53,7 @@
   // 单次分析最多 50 篇：与后端 meta.limits.maxAnalyzePapers 对齐
   const MAX_SELECT = 50;
   const TRANSLATE_ENGINE_KEY = 'direction:translateEngine';
+  const MAJOR_KEY = 'direction:major';
 
   const S = {
     mounted: false,
@@ -76,6 +77,7 @@
     rankNote: '',
     translating: false,
     translateEngine: localStorage.getItem(TRANSLATE_ENGINE_KEY) || '',
+    major: localStorage.getItem(MAJOR_KEY) || '',
     translateJobId: '',
     translateTimer: null,
     engines: [],
@@ -185,6 +187,11 @@
             <button class="btn btn-primary dir-run" data-dir="analyze">开始分析</button>
             <button class="btn dir-cancel hidden" data-dir="cancel">取消</button>
           </div>
+          <div class="dir-context-row">
+            <label for="dir-major">我的专业</label>
+            <input id="dir-major" class="dir-major-input" data-dir="major" maxlength="160" placeholder="例如：管理科学与工程 / 数据挖掘 / 金融科技">
+            <span>填写后，大模型会结合你的专业背景解释研究空白、细化研究方向与执行步骤</span>
+          </div>
           <div class="dir-banner hidden" data-dir-banner></div>
           <div class="dir-pane" data-dirpane="papers"></div>
           <div class="dir-pane hidden" data-dirpane="report"></div>
@@ -293,6 +300,15 @@
 
   function onInput(event) {
     const target = event.target;
+    if (target.matches('[data-dir="major"]')) {
+      S.major = target.value.slice(0, 160);
+      localStorage.setItem(MAJOR_KEY, S.major);
+      if (S.session && S.session.major !== S.major) {
+        api(`/api/direction/session/${encodeURIComponent(S.session.id)}`, { method: 'PATCH', body: { major: S.major } })
+          .then(() => { S.session.major = S.major; }).catch(() => {});
+      }
+      return;
+    }
     const topicId = target.closest('[data-topic-id]')?.dataset.topicId;
     if (topicId && (target.matches('[data-topic-name]') || target.matches('[data-topic-kw]') || target.matches('[data-topic-exclude]'))) {
       const topic = S.topics.find((t) => t.id === topicId);
@@ -345,6 +361,10 @@
       S.topics = (data.session.topics || []).map((t, i) => ({ id: t.id || `t${i + 1}`, name: t.name || `主题 ${i + 1}`, keywords: t.keywords || '', exclude: t.exclude || '', field: t.field || 'default' }));
       if (!S.topics.length) S.topics = [blankTopic()];
       S.filters = { ...DEFAULT_FILTERS, ...(data.session.filters || {}) };
+      if (data.session.major) {
+        S.major = data.session.major;
+        localStorage.setItem(MAJOR_KEY, S.major);
+      }
       S.selection = new Set(data.session.selected || []);
       S.reportId = data.session.analyses?.[0]?.id || '';
       S.expanded.clear();
@@ -466,6 +486,7 @@
     const only = $('[data-filter="onlyWithAbstract"]'); if (only) only.checked = f.onlyWithAbstract !== false;
     const retracted = $('[data-filter="includeRetracted"]'); if (retracted) retracted.checked = Boolean(f.includeRetracted);
     const mode = $('[data-dir="mode"]'); if (mode) mode.value = S.mode || 'both';
+    const major = $('[data-dir="major"]'); if (major) major.value = S.major || '';
   }
 
   function renderHistory() {
@@ -671,6 +692,13 @@
         <header><span class="dir-no">G${i + 1}</span><h4>${esc(gap.title)}</h4><span class="dir-conf is-${esc(gap.confidence)}">${gap.confidence === 'high' ? '较可靠' : gap.confidence === 'low' ? '待验证' : '中等'}</span></header>
         ${gap.statement ? `<p>${esc(gap.statement)}</p>` : ''}
         ${gap.why ? `<p class="dir-why"><b>为什么仍是空白</b>${esc(gap.why)}</p>` : ''}
+        <dl class="dir-kv">
+          ${gap.type ? `<dt>类型</dt><dd>${esc(gap.type)}</dd>` : ''}
+          ${gap.rootCause ? `<dt>成因</dt><dd>${esc(gap.rootCause)}</dd>` : ''}
+          ${gap.impact ? `<dt>价值</dt><dd>${esc(gap.impact)}</dd>` : ''}
+          ${gap.check ? `<dt>如何核查</dt><dd>${esc(gap.check)}</dd>` : ''}
+        </dl>
+        ${(gap.openQuestions || []).length ? `<ul class="dir-sublist">${gap.openQuestions.map((q) => `<li>${esc(q)}</li>`).join('')}</ul>` : ''}
         ${gap.evidence.length ? `<div class="dir-evrow">依据 ${evidence(gap.evidence)}</div>` : ''}
       </article>`).join('');
 
@@ -678,13 +706,18 @@
       <article class="dir-card dir-dir">
         <header><span class="dir-no">D${i + 1}</span><h4>${esc(d.title)}</h4><span class="dir-diff">难度 ${esc(d.difficulty)}</span></header>
         ${d.question ? `<p class="dir-q">${esc(d.question)}</p>` : ''}
+        ${d.hypothesis ? `<p class="dir-hyp"><b>可检验假设</b>${esc(d.hypothesis)}</p>` : ''}
         <dl class="dir-kv">
           ${d.approach ? `<dt>技术路线</dt><dd>${esc(d.approach)}</dd>` : ''}
           ${d.data ? `<dt>数据 / 条件</dt><dd>${esc(d.data)}</dd>` : ''}
+          ${d.evaluation ? `<dt>评价方式</dt><dd>${esc(d.evaluation)}</dd>` : ''}
           ${d.contribution ? `<dt>预期贡献</dt><dd>${esc(d.contribution)}</dd>` : ''}
           ${d.novelty ? `<dt>新在哪里</dt><dd>${esc(d.novelty)}</dd>` : ''}
+          ${d.resources ? `<dt>必要条件</dt><dd>${esc(d.resources)}</dd>` : ''}
+          ${d.timeline ? `<dt>阶段安排</dt><dd>${esc(d.timeline)}</dd>` : ''}
           ${d.risks ? `<dt>风险</dt><dd>${esc(d.risks)}</dd>` : ''}
         </dl>
+        ${(d.steps || []).length ? `<ol class="dir-sublist dir-steps">${d.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>` : ''}
         ${d.evidence.length ? `<div class="dir-evrow">依据 ${evidence(d.evidence)}</div>` : ''}
       </article>`).join('');
 
@@ -696,12 +729,35 @@
         </div>
       </section>` : '';
 
+    const land = a.landscape || {};
+    const landscape = (land.evolution || land.consensus || land.debates || land.methodTrends) ? `
+      <section class="dir-block">
+        <h3>研究格局</h3>
+        <dl class="dir-kv dir-kv-wide">
+          ${land.evolution ? `<dt>脉络</dt><dd>${esc(land.evolution)}</dd>` : ''}
+          ${land.consensus ? `<dt>共识</dt><dd>${esc(land.consensus)}</dd>` : ''}
+          ${land.debates ? `<dt>分歧</dt><dd>${esc(land.debates)}</dd>` : ''}
+          ${land.methodTrends ? `<dt>方法趋势</dt><dd>${esc(land.methodTrends)}</dd>` : ''}
+        </dl>
+      </section>` : '';
+
+    const agenda = (a.agenda || []).length ? `
+      <section class="dir-block">
+        <h3>执行路线图</h3>
+        <div class="dir-agenda">${a.agenda.map((item, i) => `
+          <div class="dir-phase"><b>${i + 1}. ${esc(item.phase)}</b>
+            ${item.goal ? `<p>${esc(item.goal)}</p>` : ''}
+            ${(item.tasks || []).length ? `<ul>${item.tasks.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+            ${item.deliverable ? `<em>交付：${esc(item.deliverable)}</em>` : ''}
+          </div>`).join('')}</div>
+      </section>` : '';
+
     const reading = (a.readingOrder || []).length ? `
       <section class="dir-block">
         <h3>建议阅读顺序</h3>
         <ol class="dir-reading">${a.readingOrder.map((r) => {
           const p = paperAt(r.index);
-          return `<li><button class="dir-link" data-dir="open-paper" data-index="${r.index}">${esc(p ? p.title : `文献 ${r.index}`)}</button>${r.reason ? ` —— ${esc(r.reason)}` : ''}</li>`;
+          return `<li><button class="dir-link" data-dir="open-paper" data-index="${r.index}">${esc(p ? p.title : `文献 ${r.index}`)}</button>${r.reason ? ` —— ${esc(r.reason)}` : ''}${r.focus ? `<span class="dir-focus">重点看：${esc(r.focus)}</span>` : ''}</li>`;
         }).join('')}</ol>
       </section>` : '';
 
@@ -717,8 +773,7 @@
         ${analyses.map((r) => `<button class="dir-link${r.id === active.id ? ' is-active' : ''}" data-dir="switch-report" data-record-id="${esc(r.id)}">${esc(new Date(r.createdAt).toLocaleString('zh-CN'))} · ${r.paperCount} 篇</button>`).join('')}
       </div>` : '';
 
-    // 可视化只依赖报告文本与本次送进模型的文献，重绘很快，没必要另存一份数据
-    const vizPapers = order.map((id) => S.session?.papers.find((p) => p.id === id)).filter(Boolean);
+    // 词云 / 关系图只读大模型基于摘要生成的英文数据，不再从中文标题或报告文字里提词
     const viz = window.DirectionViz ? `
       <section class="dir-block dir-viz">
         <h3>报告可视化
@@ -730,11 +785,11 @@
           <button class="dir-link" data-dir="download-svg" title="把当前图另存为 SVG">下载 SVG</button>
         </h3>
         <div class="dir-viz-body">${S.vizTab === 'graph'
-          ? window.DirectionViz.graphSvg(a, vizPapers)
-          : window.DirectionViz.wordCloudSvg(a, vizPapers)}</div>
+          ? window.DirectionViz.graphSvg(a)
+          : window.DirectionViz.wordCloudSvg(a)}</div>
         <p class="dir-viz-note">${S.vizTab === 'graph'
-          ? '节点 = 主题簇 / 研究空白 / 研究方向；连线表示两者引用了同一篇证据文献，线越粗重合越多。'
-          : '字号 = 词在报告与所选文献标题里的重要程度；中文按 2~4 字短语提取，便于快速看出反复出现的概念。'}</p>
+          ? '节点与连线全部由大模型依据所选英文摘要生成，标签为英文；线越粗表示关系越强。'
+          : '关键词全部由大模型依据所选英文摘要生成（英文）；字号代表模型给出的重要程度。'}</p>
       </section>` : '';
 
     pane.innerHTML = `
@@ -743,6 +798,7 @@
           ${esc((active.mode === 'gap' ? '只找空白' : active.mode === 'direction' ? '只给方向' : '空白 + 方向'))}
           · ${active.paperCount || order.length} 篇 · ${esc(active.model || '模型未记录')}
           · ${esc(new Date(active.createdAt).toLocaleString('zh-CN'))}
+          ${esc(active.major || S.session?.major || '') ? ` · 专业：${esc(active.major || S.session.major)}` : ''}
         </div>
         <div class="dir-report-actions">
           <button class="btn btn-sm" data-dir="copy-md">复制 Markdown</button>
@@ -751,10 +807,11 @@
       </div>
       ${history}
       ${a.overview ? `<section class="dir-block dir-overview"><h3>这批文献在做什么</h3><p>${esc(a.overview)}</p></section>` : ''}
+      ${landscape}
       ${viz}
       ${gaps ? `<section class="dir-block"><h3>研究空白 <span class="dir-n">${(a.gaps || []).length}</span></h3><div class="dir-cards">${gaps}</div></section>` : ''}
       ${directions ? `<section class="dir-block"><h3>研究方向 <span class="dir-n">${(a.directions || []).length}</span></h3><div class="dir-cards">${directions}</div></section>` : ''}
-      ${clusters}${reading}${cautions}
+      ${clusters}${agenda}${reading}${cautions}
       <p class="dir-foot">本报告只依据所选文献的摘要生成，未阅读全文；引用前请核对原文，尤其是涉及具体数字与结论的部分。</p>`;
   }
 
@@ -965,6 +1022,7 @@
           sessionId: S.session.id,
           paperIds: picked,
           mode: $('[data-dir="mode"]')?.value || 'both',
+          major: $('[data-dir="major"]')?.value?.trim()?.slice(0, 160) || '',
           profileId,
         },
       });

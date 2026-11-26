@@ -101,6 +101,8 @@ function normalizeSession(raw) {
     analyses: (Array.isArray(raw?.analyses) ? raw.analyses : []).slice(0, MAX_ANALYSES),
     stats: raw?.stats && typeof raw.stats === 'object' ? raw.stats : {},
     model: clean(raw?.model),
+    // 用户专业背景：跟随会话保存，换主题也不用重新填
+    major: clean(raw?.major).slice(0, 160),
   };
 }
 
@@ -117,6 +119,7 @@ function sessionSummary(session) {
     topics: session.topics.map((t) => ({ id: t.id, name: t.name, keywords: t.keywords })),
     latestMode: latest?.mode || '',
     latestAt: latest?.createdAt || '',
+    major: session.major || '',
     gapCount: latest?.analysis?.gaps?.length || 0,
     directionCount: latest?.analysis?.directions?.length || 0,
   };
@@ -133,24 +136,45 @@ export function analysisToMarkdown(session, record) {
     return `[${n}] ${paper ? clean(paper.title).slice(0, 80) : '（文献已移除）'}`;
   }).join('；');
   const lines = [`# 方向分析：${session.title}`, '', `主题：${session.topics.map((t) => clean(t.name) || t.keywords).join('；')}`, `文献样本：${record?.paperCount || session.selected.length} 篇｜模型：${record?.model || '未记录'}｜生成时间：${record?.createdAt || ''}`, ''];
+  const major = clean(record?.major || session.major);
+  if (major) lines.push(`分析视角：结合用户专业「${major}」定制`, '');
   if (a.overview) lines.push('## 综述', '', a.overview, '');
+  const land = a.landscape || {};
+  if (land.evolution || land.consensus || land.debates || land.methodTrends) {
+    lines.push('## 研究格局');
+    if (land.evolution) lines.push('', `**脉络**：${land.evolution}`);
+    if (land.consensus) lines.push('', `**共识**：${land.consensus}`);
+    if (land.debates) lines.push('', `**分歧**：${land.debates}`);
+    if (land.methodTrends) lines.push('', `**方法趋势**：${land.methodTrends}`);
+    lines.push('');
+  }
   if ((a.gaps || []).length) {
     lines.push('## 研究空白', '');
     a.gaps.forEach((gap, i) => {
       lines.push(`### ${i + 1}. ${gap.title}`, '', gap.statement || '');
-      if (gap.why) lines.push('', `**为什么仍是空白**：${gap.why}`, '');
-      lines.push(`置信度：${gap.confidence}｜证据：${cite(gap.evidence)}`, '');
+      if (gap.why) lines.push('', `**为什么仍是空白**：${gap.why}`);
+      if (gap.type) lines.push(`**空白类型**：${gap.type}`);
+      if (gap.rootCause) lines.push(`**成因**：${gap.rootCause}`);
+      if (gap.impact) lines.push(`**价值**：${gap.impact}`);
+      if ((gap.openQuestions || []).length) lines.push('', '**仍未回答的问题**：', ...gap.openQuestions.map((q) => `- ${q}`));
+      if (gap.check) lines.push(`**如何核查**：${gap.check}`);
+      lines.push('', `置信度：${gap.confidence}｜证据：${cite(gap.evidence)}`, '');
     });
   }
   if ((a.directions || []).length) {
     lines.push('## 研究方向', '');
     a.directions.forEach((d, i) => {
-      lines.push(`### ${i + 1}. ${d.title}`, '', `**研究问题**：${d.question || '—'}`, '');
-      if (d.approach) lines.push(`**技术路线**：${d.approach}`, '');
-      if (d.data) lines.push(`**数据 / 条件**：${d.data}`, '');
-      if (d.contribution) lines.push(`**预期贡献**：${d.contribution}`, '');
-      if (d.novelty) lines.push(`**新在哪里**：${d.novelty}`, '');
-      lines.push(`难度：${d.difficulty}${d.risks ? `｜风险：${d.risks}` : ''}`, '', `证据：${cite(d.evidence)}`, '');
+      lines.push(`### ${i + 1}. ${d.title}`, '', `**研究问题**：${d.question || '—'}`);
+      if (d.hypothesis) lines.push('', `**可检验假设**：${d.hypothesis}`);
+      if (d.approach) lines.push('', `**技术路线**：${d.approach}`);
+      if ((d.steps || []).length) lines.push('', '**分步计划**：', ...d.steps.map((s, n) => `${n + 1}. ${s}`));
+      if (d.data) lines.push('', `**数据 / 条件**：${d.data}`);
+      if (d.evaluation) lines.push(`**评价方式**：${d.evaluation}`);
+      if (d.contribution) lines.push(`**预期贡献**：${d.contribution}`);
+      if (d.novelty) lines.push(`**新在哪里**：${d.novelty}`);
+      if (d.resources) lines.push(`**必要条件**：${d.resources}`);
+      if (d.timeline) lines.push(`**阶段安排**：${d.timeline}`);
+      lines.push('', `难度：${d.difficulty}${d.risks ? `｜风险：${d.risks}` : ''}`, '', `证据：${cite(d.evidence)}`, '');
     });
   }
   if ((a.clusters || []).length) {
@@ -158,13 +182,26 @@ export function analysisToMarkdown(session, record) {
     a.clusters.forEach((c) => lines.push(`- **${c.name}**：${c.summary || ''}${c.papers.length ? `（文献 ${c.papers.join('、')}）` : ''}`));
     lines.push('');
   }
+  if ((a.agenda || []).length) {
+    lines.push('## 执行路线图', '');
+    a.agenda.forEach((item) => {
+      lines.push(`### ${item.phase}`);
+      if (item.goal) lines.push('', `**目标**：${item.goal}`);
+      if ((item.tasks || []).length) lines.push('', ...item.tasks.map((t) => `- ${t}`));
+      if (item.deliverable) lines.push('', `**交付**：${item.deliverable}`);
+      lines.push('');
+    });
+  }
   if ((a.readingOrder || []).length) {
     lines.push('## 建议阅读顺序', '');
     a.readingOrder.forEach((r) => {
       const paper = paperAt(r.index);
-      lines.push(`${r.index}. ${paper ? clean(paper.title) : `文献 ${r.index}`}${r.reason ? ` —— ${r.reason}` : ''}`);
+      lines.push(`${r.index}. ${paper ? clean(paper.title) : `文献 ${r.index}`}${r.reason ? ` —— ${r.reason}` : ''}${r.focus ? `（重点看：${r.focus}）` : ''}`);
     });
     lines.push('');
+  }
+  if ((a.visualization?.keywords || []).length) {
+    lines.push('## 摘要关键词（英文）', '', a.visualization.keywords.map((k) => k.text).join(' · '), '');
   }
   if ((a.cautions || []).length) {
     lines.push('## 使用边界', '');
@@ -262,6 +299,7 @@ export function registerDirectionRoutes(app, {
     const session = findSession(state, req.params.id);
     if (!session) return res.status(404).json({ error: '这次检索记录已不存在' });
     if (typeof req.body?.title === 'string' && clean(req.body.title)) session.title = clean(req.body.title).slice(0, 60);
+    if (typeof req.body?.major === 'string') session.major = clean(req.body.major).slice(0, 160);
     if (Array.isArray(req.body?.selected)) {
       const ids = new Set(session.papers.map((p) => p.id));
       session.selected = [...new Set(req.body.selected.filter((id) => ids.has(id)))];
@@ -507,10 +545,13 @@ export function registerDirectionRoutes(app, {
     if (running) return res.status(409).json({ error: '这一次检索正在分析中，等它跑完再开新的', jobId: running.id });
 
     const mode = normalizeMode(req.body?.mode);
+    // 专业背景以本次输入为准；没带就用会话里存的，前端也会在输入时自动保存。
+    const major = clean(req.body?.major ?? session.major).slice(0, 160);
     const job = {
       id: `job-${randomUUID().slice(0, 8)}`,
       sessionId: session.id,
       mode,
+      major,
       status: 'running',
       text: '',
       error: '',
@@ -531,6 +572,7 @@ export function registerDirectionRoutes(app, {
 
     session.selected = papers.map((p) => p.id);
     session.model = job.model;
+    session.major = major;
     touch(session);
     state.activeSessionId = session.id;
     writeState(state);
@@ -538,12 +580,14 @@ export function registerDirectionRoutes(app, {
     runAnalysis({
       job, session, papers, mode,
       focus: clean(req.body?.focus),
+      major,
       profile,
       fetchModelCompletion, readLLMResponse, log,
       onDone: (analysis) => {
         const record = {
           id: `rep-${randomUUID().slice(0, 8)}`,
           mode,
+          major: job.major,
           model: job.model,
           createdAt: new Date().toISOString(),
           elapsedMs: job.finishedAt - job.startedAt,
@@ -569,7 +613,7 @@ export function registerDirectionRoutes(app, {
       log(`[方向分析] 分析失败：${job.error}`);
     });
 
-    res.json({ jobId: job.id, paperCount: papers.length, mode, model: job.model });
+    res.json({ jobId: job.id, paperCount: papers.length, mode, model: job.model, major });
   });
 
   app.get('/api/direction/job/:jobId', (req, res) => {
@@ -636,15 +680,16 @@ export function registerDirectionRoutes(app, {
 
 /** 真正跑模型的那一段：与路由分开，方便单测直接喂假模型 */
 async function runAnalysis({
-  job, session, papers, mode, focus, profile,
+  job, session, papers, mode, focus, major, profile,
   fetchModelCompletion, readLLMResponse, onDone, log = () => {},
 }) {
-  const messages = buildAnalysisMessages({ topics: session.topics, papers, mode, focus });
+  const messages = buildAnalysisMessages({ topics: session.topics, papers, mode, focus, major });
   const request = await fetchModelCompletion(profile, {
     model: profile.model,
     messages,
     temperature: 0.35,
-    max_tokens: 4200,
+    // 详细报告多了脉络/假设/分步计划/路线图/可视化字段，旧 4200 token 会被截断
+    max_tokens: 9000,
   }, { stream: true });
   job.cancel = () => { try { request.cancel(); } catch { /* 忽略 */ } };
   try {
