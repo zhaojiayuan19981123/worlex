@@ -2858,6 +2858,7 @@ export function createApp({
       selectedJournalIds: normalized.selectedJournalIds,
       sync: normalized.sync,
       feedOverrides: normalized.feedOverrides,
+      sourcePrefs: normalized.sourcePrefs,
       preferences: normalized.preferences,
       favoriteArticleIds: Object.keys(normalized.favorites),
       summary: calendarSummary(normalized),
@@ -3034,6 +3035,20 @@ export function createApp({
   });
 
   // 中文刊的当期目录地址：内置的能抓就抓，抓不到的由用户自己填（留空则恢复内置值）
+  // 按刊切换数据源：知网 RSS / 期刊官网。传空值表示回到默认（有知网代码就用知网）。
+  app.put('/api/top-journals/journals/:id/source', (req, res) => {
+    const current = createTopJournalState(store.getTopJournals());
+    const journal = ALL_JOURNALS.find((item) => item.id === req.params.id);
+    if (!journal) return res.status(404).json({ error: '期刊不存在' });
+    if (journal.set !== 'cnA') return res.status(400).json({ error: '只有中文期刊可以切换数据源' });
+    const raw = String(req.body?.source ?? '').trim();
+    if (raw && raw !== 'cnki' && raw !== 'site') return res.status(400).json({ error: '数据源只能是 cnki 或 site' });
+    if (raw) current.sourcePrefs[journal.id] = raw;
+    else delete current.sourcePrefs[journal.id];
+    store.saveTopJournals(current);
+    res.json(topJournalPayload(current));
+  });
+
   app.put('/api/top-journals/journals/:id/feed', (req, res) => {
     const current = createTopJournalState(store.getTopJournals());
     const journal = ALL_JOURNALS.find((item) => item.id === req.params.id);
@@ -3065,11 +3080,11 @@ export function createApp({
       const sync = await syncJournals(current, current.selectedJournalIds);
       current = sync.state;
       if (!current.articles.length) {
-        // 只订了中文刊时，失败原因几乎都是目录页没配好，提示要指向那一步而不是「检查网络」
-        const onlySite = current.selectedJournalIds.length > 0
-          && current.selectedJournalIds.every((id) => ALL_JOURNALS.find((journal) => journal.id === id)?.provider === 'site');
-        const hint = onlySite
-          ? '暂未同步到可投递文章：中文刊需要能读到当期目录，请在「期刊管理 → 中国期刊目录页」确认或补上地址后再同步'
+        // 只订了中文刊时，失败原因几乎都是数据源没配好（知网 RSS 不通 / 目录页没填），提示要指向那一步
+        const onlyChinese = current.selectedJournalIds.length > 0
+          && current.selectedJournalIds.every((id) => ALL_JOURNALS.find((journal) => journal.id === id)?.set === 'cnA');
+        const hint = onlyChinese
+          ? '暂未同步到可投递文章：中文刊需要能取到当期文章，请到「期刊管理 → 中国期刊数据源」确认数据源（知网 RSS 或官网当期目录）后再同步'
           : '暂未同步到可投递文章，请检查网络后点击「同步最新文章」重试';
         return res.status(502).json({ error: hint });
       }

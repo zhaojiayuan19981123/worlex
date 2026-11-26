@@ -11840,20 +11840,28 @@
     const affiliations = Array.isArray(article.affiliations) && article.affiliations.length ? article.affiliations.join('；') : '单位信息暂未由数据源提供';
     const sourceLine = [article.volume && `Vol. ${esc(article.volume)}`, article.issue && `No. ${esc(article.issue)}`, article.pages && `pp. ${esc(article.pages)}`].filter(Boolean).join(' · ');
     const favorite = article.favorite || tjFavoriteIds().has(article.id);
-    // 中文刊的目录页只给标题：作者/单位/DOI 一律没有，逐格写「暂缺」会把卡片撑满噪声，改成一句说明
+    // 中文刊的两条取数路径给的字段不一样：目录页只有标题，知网 RSS 有作者+摘要节选但没有单位与 DOI。
+    // 逐格写「暂缺 / 单位信息暂未由数据源提供」会把卡片撑满噪声，所以按数据源裁剪。
     const titleOnly = article.source === '期刊官网' && !article.abstract;
+    const isCn = journal?.language === 'zh' || article.source === '知网 RSS' || article.source === '期刊官网';
+    const journalCell = `<div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`;
+    const dateCell = `<div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>`;
     const metaCells = titleOnly
-      ? [
-        `<div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`,
-        `<div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>`,
-      ]
-      : [
-        `<div><dt>作者</dt><dd>${esc(authors)}</dd></div>`,
-        `<div><dt>单位</dt><dd>${esc(affiliations)}</dd></div>`,
-        `<div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`,
-        `<div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>`,
-        `<div><dt>DOI</dt><dd>${article.doi ? `<a href="https://doi.org/${encodeURIComponent(article.doi)}" target="_blank" rel="noopener noreferrer">${esc(article.doi)}</a>` : '暂缺'}</dd></div>`,
-      ];
+      ? [journalCell, dateCell]
+      : isCn
+        ? [
+          `<div><dt>作者</dt><dd>${esc(authors)}</dd></div>`,
+          journalCell,
+          dateCell,
+          ...(article.doi ? [`<div><dt>DOI</dt><dd><a href="https://doi.org/${encodeURIComponent(article.doi)}" target="_blank" rel="noopener noreferrer">${esc(article.doi)}</a></dd></div>`] : []),
+        ]
+        : [
+          `<div><dt>作者</dt><dd>${esc(authors)}</dd></div>`,
+          `<div><dt>单位</dt><dd>${esc(affiliations)}</dd></div>`,
+          journalCell,
+          dateCell,
+          `<div><dt>DOI</dt><dd>${article.doi ? `<a href="https://doi.org/${encodeURIComponent(article.doi)}" target="_blank" rel="noopener noreferrer">${esc(article.doi)}</a>` : '暂缺'}</dd></div>`,
+        ];
     return `<article class="tj-article-card${selectable ? ' selectable' : ''}" data-tj-card="${esc(article.id)}">
       <div class="tj-article-top">${selectable ? `<label class="tj-select-label"><input type="checkbox" data-tj-select="${esc(article.id)}" ${topJournalSelection.has(article.id) ? 'checked' : ''}><span>选择</span></label>` : ''}<span class="tj-journal-pill">${esc(journal?.shortTitle || article.journal || '期刊')}</span><span class="tj-pub-date">${tjDate(article.publishedAt)}</span></div>
       <h3>${esc(article.title || '未命名文章')}</h3>
@@ -11861,7 +11869,7 @@
       <dl class="tj-meta-grid">${metaCells.join('')}</dl>
       ${titleOnly
         ? '<p class="tj-site-note">中文刊目录页只提供标题；作者、摘要与 DOI 请点「原文链接」查看。</p>'
-        : `<div class="tj-abstract"><b>摘要</b><p>${esc(article.abstract || '该文章的公开元数据未包含摘要；可点击原文链接查看出版社页面。')}</p></div>`}
+        : `<div class="tj-abstract"><b>${article.abstractExcerpt ? '摘要（知网 RSS 节选）' : '摘要'}</b><p>${esc(article.abstract || '该文章的公开元数据未包含摘要；可点击原文链接查看出版社页面。')}</p></div>`}
       ${translated.abstract ? `<div class="tj-abstract tj-translation"><b>中文翻译</b><p>${esc(translated.abstract)}</p></div>` : ''}
       <div class="tj-card-actions">
         <button class="tb-btn" data-tj-favorite="${esc(article.id)}" data-tj-favorite-value="${favorite ? 'false' : 'true'}">${favorite ? '★ 已收藏' : '☆ 收藏'}</button>
@@ -11919,8 +11927,11 @@
     const shortage = shortages.length
       ? `${shortages.slice(0, 3).map((item) => `${esc(tjJournal(item.journalId)?.shortTitle || item.journalId)}：${item.available}/${item.requested}`).join('，')}${shortages.length > 3 ? `，等 ${shortages.length} 本` : ''}`
       : '';
-    const siteShortage = shortages.some((item) => tjJournal(item.journalId)?.provider === 'site');
-    return `<div class="tj-delivery-note"><b>✓ ${esc(delivery.date)} 已领取 ${articles.length} 篇文章</b>${shortage ? `<span>部分期刊可投递新文章不足 5 篇：${shortage}。系统不会重复凑数。${siteShortage ? '中文刊抓不到目录时，可在「期刊管理 → 中国期刊目录页」补上地址。' : ''}</span>` : '<span>已按“最新一期 / Online First 优先、个人历史不重复”生成。</span>'}</div><div class="tj-article-list">${articles.length ? articles.map((article) => tjArticleCard(article, { delivered: true })).join('') : tjEmpty('', '当前没有可投递的未重复文章', '请稍后同步，或在“最新文章”中查看已采集内容。')}</div>`;
+    const cnShortage = shortages.some((item) => {
+      const journal = tjJournal(item.journalId);
+      return journal?.set === 'cnA';
+    });
+    return `<div class="tj-delivery-note"><b>✓ ${esc(delivery.date)} 已领取 ${articles.length} 篇文章</b>${shortage ? `<span>部分期刊可投递新文章不足 5 篇：${shortage}。系统不会重复凑数。${cnShortage ? '中文刊先在「期刊管理 → 中国期刊数据源」确认数据源，知网 RSS 抓不到时可切换或补上官网当期目录地址。' : ''}</span>` : '<span>已按“最新一期 / Online First 优先、个人历史不重复”生成。</span>'}</div><div class="tj-article-list">${articles.length ? articles.map((article) => tjArticleCard(article, { delivered: true })).join('') : tjEmpty('', '当前没有可投递的未重复文章', '请稍后同步，或在“最新文章”中查看已采集内容。')}</div>`;
   }
   function renderTopJournalLatest() {
     const articles = topJournalData.articles || [];
@@ -11976,14 +11987,25 @@
    * 这里把错误挂到 title 上，用户不用去别处找原因。
    */
   function tjJournalTag(journal) {
-    const error = topJournalData.sync?.[journal.id]?.error || '';
-    if (journal.provider !== 'site') return `<em class="tj-src">Crossref</em>`;
+    const sync = topJournalData.sync?.[journal.id] || {};
+    const error = sync.error || '';
+    if (journal.set !== 'cnA') return '<em class="tj-src">Crossref</em>';
+    // sourceId 是后端按「用户选择 → 该刊可用性」算好的实际数据源
+    const sourceId = journal.sourceId || journal.provider;
+    if (sourceId === 'cnki') {
+      const tip = error
+        ? `知网 RSS 上期同步失败：${error}（会自动退到期刊官网目录）`
+        : `抓取该刊的知网期刊 RSS（代码 ${journal.cnkiCode}），带标题、作者与摘要节选`;
+      return error
+        ? `<em class="tj-src is-off" title="${esc(tip)}">知网 RSS · 上次失败</em>`
+        : `<em class="tj-src is-on" title="${esc(tip)}">知网 RSS</em>`;
+    }
     if (journal.feedUrl) {
       return error
         ? `<em class="tj-src is-off" title="${esc(error)}">官网目录 · 上次失败</em>`
         : '<em class="tj-src is-on" title="抓取该刊官网当期目录">官网目录</em>';
     }
-    return `<em class="tj-src is-off" title="${esc(error || '未内置已验证的目录页：同步时会先试着从官网首页解析，失败可在下方填当期目录地址')}">待验证</em>`;
+    return `<em class="tj-src is-off" title="${esc(error || '该刊既没有可用的知网 RSS，也没有内置目录页：同步时会先试官网首页，抓不到可在下方填当期目录地址')}">待验证</em>`;
   }
   function renderTopJournalManage() {
     const selected = new Set(topJournalData.selectedJournalIds || []);
@@ -12005,9 +12027,17 @@
       }).join('');
       return `<section class="tj-journal-set"><div class="tj-set-head"><div><b>${esc(set.label)}</b>${set.note ? `<small>${esc(set.note)}</small>` : ''}</div><button class="tj-preset secondary" data-tj-set="${esc(set.id)}">全选本组 ${chosen}/${journals.length}</button></div>${groups}</section>`;
     }).join('');
-    const siteJournals = catalog.filter((journal) => journal.provider === 'site');
-    const feedBox = siteJournals.length
-      ? `<details class="tj-feed-box"${tjFeedOpen ? ' open' : ''}><summary>中国期刊目录页（可选，填了就能自动同步）</summary><p>这 22 种中文刊不在 Crossref，元数据只能抓各刊官网的当期目录页。默认已填好实测可用的站点；标「待验证」的刊会先按官网首页尝试，抓不到就把它的当期目录地址（列着本期文章的页面）粘进来，保存后下次同步生效。</p><div class="tj-feed-rows">${siteJournals.map((journal) => `<div class="tj-feed-row" data-feed-row="${esc(journal.id)}"><span title="${esc(journal.title)}">${esc(journal.shortTitle)}</span><input type="url" spellcheck="false" placeholder="https://… 该刊当期目录页" value="${esc(journal.feedUrl || '')}"><button class="tj-preset secondary" data-tj-feed-save="${esc(journal.id)}">保存</button></div>`).join('')}</div></details>`
+    // 中文刊的数据源：知网 RSS 为默认，官网目录作为备选/兜底，可按刊切换
+    const cnJournals = catalog.filter((journal) => journal.set === 'cnA');
+    const cnkiCount = cnJournals.filter((journal) => journal.cnkiCode).length;
+    const feedBox = cnJournals.length
+      ? `<details class="tj-feed-box"${tjFeedOpen ? ' open' : ''}><summary>中国期刊数据源（知网 RSS / 官网目录，可按刊切换）</summary><p>${cnkiCount} / ${cnJournals.length} 本默认从<b>知网期刊 RSS</b>取最新文章，带标题、作者与摘要节选；知网没有 RSS 的刊（或你更信官网目录）可以切到<b>官网当期目录</b>。选定后如果那个源抓不到，会自动退到另一个源，不用手动来回切。</p><div class="tj-feed-rows">${cnJournals.map((journal) => {
+        const pref = journal.sourcePref || '';
+        const fallback = journal.cnkiCode ? '知网 RSS' : '官网目录';
+        // 「官网目录」始终可选：即使没内置地址，用户也可以切过来再填目录页
+        const siteOption = `<option value="site"${pref === 'site' ? ' selected' : ''}>官网目录${journal.feedUrl ? '' : '（需填地址）'}</option>`;
+        return `<div class="tj-feed-row" data-feed-row="${esc(journal.id)}"><span title="${esc(journal.title)}">${esc(journal.shortTitle)}</span><select data-tj-source="${esc(journal.id)}" title="该刊的取数方式"><option value=""${pref ? '' : ' selected'}>默认（${esc(fallback)}）</option>${journal.cnkiCode ? `<option value="cnki"${pref === 'cnki' ? ' selected' : ''}>知网 RSS</option>` : ''}${siteOption}</select><input type="url" spellcheck="false" placeholder="https://… 该刊当期目录页（切换官网目录时用）" value="${esc(journal.feedUrl || '')}"><button class="tj-preset secondary" data-tj-feed-save="${esc(journal.id)}">保存</button></div>`;
+      }).join('')}</div></details>`
       : '';
     return `<div class="tj-manage-card"><div class="tj-manage-head"><div><h3>选择追踪期刊</h3><p>已选择 ${selected.size} / ${catalog.length} 本。预设会替换当前选择；之后可继续手动多选。</p></div><div class="tj-preset-row"><span>研究方向预设</span>${presets}<button class="tj-preset secondary" data-tj-select-all>全选 ${catalog.length} 本</button><button class="tj-preset secondary" data-tj-clear>清空</button></div></div>${sections}${feedBox}</div>`;
   }
@@ -12044,6 +12074,29 @@
       });
       topJournalData = { ...topJournalData, ...result };
       toast(feedUrl ? '已保存目录页，下次同步生效' : '已恢复内置目录页', 'success');
+      await renderTopJournals();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  /** 按刊切换数据源：知网 RSS ↔ 官网目录。空值回到默认（有知网代码就用知网）。 */
+  async function tjSaveSource(journalId, source) {
+    try {
+      const result = await api(`/api/top-journals/journals/${encodeURIComponent(journalId)}/source`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      });
+      topJournalData = { ...topJournalData, ...result };
+      const journal = (topJournalData.catalog || []).find((item) => item.id === journalId);
+      const label = journal?.sourceId === 'cnki' ? '知网 RSS' : '期刊官网目录';
+      // 选了但该源不可用（没知网代码 / 没目录页地址）时，后端会回落到另一个源，这里要说清楚
+      if (source && journal && journal.sourceId !== source) {
+        toast(`该刊${source === 'site' ? '还没有目录页地址' : '没有可用的知网代码'}，目前仍走${label}`, 'info');
+      } else {
+        toast(`已切换为${label}，下次同步生效`, 'success');
+      }
       await renderTopJournals();
     } catch (error) {
       toast(error.message, 'error');
@@ -12337,6 +12390,8 @@
       }
     });
     $('topJournalContent').addEventListener('change', (event) => {
+      const sourceSelect = event.target.closest('[data-tj-source]');
+      if (sourceSelect) return tjSaveSource(sourceSelect.dataset.tjSource, sourceSelect.value);
       const select = event.target.closest('[data-tj-select]');
       if (select) {
         select.checked ? topJournalSelection.add(select.dataset.tjSelect) : topJournalSelection.delete(select.dataset.tjSelect);

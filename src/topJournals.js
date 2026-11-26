@@ -3,13 +3,17 @@
 // 目录分两套：
 //   utd  —— UTD 24，元数据走 Crossref（稳定、带作者与摘要）。
 //   cnA  —— 国家自然科学基金委管理科学部 A 类期刊 22 种（中文）。
-//           这 22 种**完全不在 Crossref**（按 ISSN 与 DOI 前缀查 works 均为 0 条），OpenAlex 也只零星收录，
-//           所以元数据只能抓各刊官网的当期目录页，见 cnJournalFeed.js。
-//           本版本已核实可直接解析的刊物预填了 feedUrl；其余可在界面里自己补目录页地址。
+//           这 22 种**完全不在 Crossref**（按 ISSN 与 DOI 前缀查 works 均为 0 条），OpenAlex 也只零星收录。
+//           数据源两个，按刊择优：
+//             · 知网期刊 RSS（见 cnkiRss.js）—— 21 种有代码，带标题/作者/摘要节选，首选；
+//             · 官网当期目录（见 cnJournalFeed.js）—— 《管理科学》等知网没 RSS 的刊，或用户主动切换。
+//           每个刊的 `sourceId` 表示「这次用哪个源」，用户可在界面按刊切换；
+//           首选源抓失败会自动退到另一个源，不会因为一次 503 就整天没文章。
 //
 // 本模块只同步公开的书目信息/摘要/DOI/出版社文章页；不抓取或分发受版权保护的 PDF 全文。
 
 import { fetchCnJournalArticles } from './cnJournalFeed.js';
+import { fetchCnkiJournalArticles, CNKI_CODES } from './cnkiRss.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const CROSSREF_API = 'https://api.crossref.org/journals';
@@ -46,8 +50,11 @@ export const UTD_JOURNALS = UTD_BASE.map((journal) => ({ ...journal, set: 'utd',
 /**
  * 国家自然科学基金委管理科学部 A 类期刊（22 种）。
  *
- * 数据源说明：这 22 种刊不在 Crossref，也没有统一接口，provider 一律是 site（抓官网当期目录）。
- * feedUrl 只填**实测能解析出文章列表**的地址（2026-11 验证）；留空的站点当前抓不到
+ * 数据源：这 22 种刊不在 Crossref，有两条可选路径——
+ *   1. 知网期刊 RSS（rss.cnki.net）：一次给最新 20 条，带标题/作者/摘要节选/发布时间，稳定且可统一解析；
+ *   2. 官网当期目录：知网没有 RSS 的刊（目前只有《管理科学》）或用户主动切换时使用。
+ * cnkiCode 为知网内部刊代码（逐个实测核对过 channel title），见 cnkiRss.js 的 CNKI_CODES。
+ * feedUrl 只填**实测能解析出文章列表**的地址（2026-11 验证）；留空的站点抓不到
  * （脚本渲染、拒绝程序访问或域名变更），界面标「待验证」，用户可自行补上当期目录地址。
  */
 export const CN_A_JOURNALS = [
@@ -73,7 +80,17 @@ export const CN_A_JOURNALS = [
   { id: 'cn-kxxyj', title: '科学学研究', shortTitle: '科学学研究', titleEn: 'Studies in Science of Science', category: '公共管理与情报', issn: '1003-2053', publisherUrl: '', feedUrl: '' },
   { id: 'cn-ciej', title: '中国工业经济', shortTitle: '中国工业经济', titleEn: 'China Industrial Economics', category: '工商管理', issn: '1006-480X', publisherUrl: 'http://ciejournal.ajcass.com', feedUrl: 'http://ciejournal.ajcass.com' },
   { id: 'cn-ncyjwt', title: '农业经济问题', shortTitle: '农业经济问题', titleEn: 'Issues in Agricultural Economy', category: '工商管理', issn: '1000-6389', publisherUrl: '', feedUrl: '' },
-].map((journal) => ({ ...journal, set: 'cnA', provider: 'site', language: 'zh' }));
+].map((journal) => {
+  const cnkiCode = CNKI_CODES[journal.id] || '';
+  return {
+    ...journal,
+    set: 'cnA',
+    cnkiCode,
+    // 默认数据源：有知网代码就走知网 RSS，没有就退回官网目录
+    provider: cnkiCode ? 'cnki' : 'site',
+    language: 'zh',
+  };
+});
 
 export const ALL_JOURNALS = [...UTD_JOURNALS, ...CN_A_JOURNALS];
 
@@ -87,7 +104,7 @@ export const JOURNAL_SETS = [
   {
     id: 'cnA',
     label: '中国 · 国家自然科学基金委管理科学部 A 类（22 种）',
-    note: '元数据抓各刊官网当期目录；标「待验证」的刊需自填目录页地址',
+    note: '21 种走知网期刊 RSS（带作者与摘要节选），其余抓官网当期目录；可按刊切换',
     journalIds: CN_A_JOURNALS.map((journal) => journal.id),
   },
 ];
@@ -132,6 +149,7 @@ export function createTopJournalState(value = {}) {
   const deletedSource = value?.deletedHistoryArticleIds && typeof value.deletedHistoryArticleIds === 'object'
     ? value.deletedHistoryArticleIds : {};
   const feedSource = value?.feedOverrides && typeof value.feedOverrides === 'object' ? value.feedOverrides : {};
+  const prefSource = value?.sourcePrefs && typeof value.sourcePrefs === 'object' ? value.sourcePrefs : {};
   return {
     version: 2,
     selectedJournalIds: Array.isArray(value?.selectedJournalIds) ? [...new Set(value.selectedJournalIds.filter((id) => ALL_JOURNALS.some((j) => j.id === id)))] : [],
@@ -143,14 +161,29 @@ export function createTopJournalState(value = {}) {
     deletedHistoryArticleIds: Object.fromEntries(Object.entries(deletedSource).filter(([id]) => typeof id === 'string' && id)),
     // 用户自填的期刊目录页（只对中文刊有意义）：{ journalId: url }
     feedOverrides: Object.fromEntries(Object.entries(feedSource).filter(([id, url]) => typeof id === 'string' && /^https?:\/\//i.test(String(url || '')))),
+    // 用户按刊选的数据源：{ journalId: 'cnki' | 'site' }；缺省按刊自身 provider（有知网代码优先知网）
+    sourcePrefs: Object.fromEntries(Object.entries(prefSource).filter(([id, v]) => typeof id === 'string' && (v === 'cnki' || v === 'site'))),
     preferences: { fillWithRecentUnseen: true, ...(value?.preferences || {}) },
   };
 }
 
-/** 应用用户自填的目录页地址后的期刊目录（界面与同步都读这一份）。 */
+/**
+ * 应用用户偏好后的期刊目录（界面与同步都读这一份）。
+ * sourceId = 实际会用的源；用户选了但该源不可用（如选了知网但该刊没代码）时自动换另一个，
+ * 避免界面显示「知网 RSS」而实际总是同步失败。
+ */
 export function catalogFor(stateInput) {
   const overrides = stateInput?.feedOverrides || {};
-  return ALL_JOURNALS.map((journal) => (overrides[journal.id] ? { ...journal, feedUrl: overrides[journal.id] } : journal));
+  const prefs = stateInput?.sourcePrefs || {};
+  return ALL_JOURNALS.map((journal) => {
+    const merged = overrides[journal.id] ? { ...journal, feedUrl: overrides[journal.id] } : journal;
+    if (merged.set !== 'cnA') return merged;
+    const wanted = prefs[journal.id] === 'cnki' || prefs[journal.id] === 'site' ? prefs[journal.id] : merged.provider;
+    let sourceId = wanted;
+    if (sourceId === 'cnki' && !merged.cnkiCode) sourceId = 'site';
+    if (sourceId === 'site' && !merged.feedUrl && merged.cnkiCode) sourceId = 'cnki';
+    return { ...merged, sourceId, sourcePref: prefs[journal.id] || '' };
+  });
 }
 
 function htmlToText(value) {
@@ -229,6 +262,30 @@ function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
 }
 
+const SOURCE_LABEL = { crossref: 'Crossref', cnki: '知网 RSS', site: '期刊官网' };
+
+/** 一个刊这次要依次尝试的数据源：首选在前，失败自动退到备选 */
+function sourceAttempts(journal) {
+  if (journal.set !== 'cnA') return ['crossref'];
+  const primary = journal.sourceId || journal.provider;
+  const order = primary === 'site' ? ['site', 'cnki'] : ['cnki', 'site'];
+  const usable = order.filter((source) => (source === 'cnki' ? Boolean(journal.cnkiCode) : Boolean(journal.feedUrl)));
+  // 两个源都没配好时也给一个明确的报错，而不是静默 0 条
+  return usable.length ? usable : [primary];
+}
+
+async function fetchFromSource(sourceId, journal, { fetchImpl, rows }) {
+  if (sourceId === 'cnki') return fetchCnkiJournalArticles(journal, { fetchImpl });
+  if (sourceId === 'site') return fetchCnJournalArticles(journal, { fetchImpl });
+  const params = new URLSearchParams({ filter: 'type:journal-article', sort: 'published', order: 'desc', rows: String(Math.max(1, Math.min(100, rows))) });
+  const response = await fetchImpl(`${CROSSREF_API}/${encodeURIComponent(journal.issn)}/works?${params}`, {
+    headers: { Accept: 'application/json', 'User-Agent': 'worlex/1.9 (mailto:research@example.invalid)' },
+  });
+  if (!response.ok) throw new Error(`Crossref ${response.status}`);
+  const payload = await response.json();
+  return (payload?.message?.items || []).map((item) => mapCrossrefWork(item, journal));
+}
+
 export async function syncJournals(stateInput, journalIds, { fetchImpl = globalThis.fetch, rows = 50 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('当前运行环境不支持网络请求，无法同步期刊元数据');
   const state = createTopJournalState(stateInput);
@@ -238,35 +295,37 @@ export async function syncJournals(stateInput, journalIds, { fetchImpl = globalT
   const synced = [];
   const failed = [];
   const fetched = [];
-  // 限制并发为 3，既比逐刊串行快，也避免对 Crossref / 期刊官网造成突发请求。
+  // 限制并发为 3，既比逐刊串行快，也避免对 Crossref / 知网 / 期刊官网造成突发请求。
   const queue = [...wanted];
   const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
     while (queue.length) {
       const id = queue.shift();
       const journal = catalog.find((candidate) => candidate.id === id);
-      try {
-        // 中文刊没有 Crossref 记录，只能抓官网当期目录；两条路径的产物结构一致，所以在这里分流即可。
-        if (journal.provider === 'site') {
-          const articles = await fetchCnJournalArticles(journal, { fetchImpl });
+      const attempts = sourceAttempts(journal);
+      const errors = [];
+      let done = false;
+      for (const sourceId of attempts) {
+        try {
+          const articles = await fetchFromSource(sourceId, journal, { fetchImpl, rows });
           fetched.push(...articles);
-          state.sync[id] = { lastSuccessAt: new Date().toISOString(), source: '期刊官网', sourceUrl: journal.feedUrl || '', count: articles.length, error: '' };
-          synced.push({ journalId: id, count: articles.length, provider: 'site' });
-          continue;
+          state.sync[id] = {
+            lastSuccessAt: new Date().toISOString(),
+            sourceId,
+            source: SOURCE_LABEL[sourceId],
+            sourceUrl: sourceId === 'cnki' ? `https://rss.cnki.net/knavi/rss/${journal.cnkiCode}` : sourceId === 'site' ? (journal.feedUrl || '') : '',
+            count: articles.length,
+            error: '',
+          };
+          synced.push({ journalId: id, count: articles.length, provider: sourceId });
+          done = true;
+          break;
+        } catch (error) {
+          errors.push(attempts.length > 1 ? `${SOURCE_LABEL[sourceId]}：${error?.message || '未知错误'}` : (error?.message || '未知同步错误'));
         }
-        const params = new URLSearchParams({ filter: 'type:journal-article', sort: 'published', order: 'desc', rows: String(Math.max(1, Math.min(100, rows))) });
-        const response = await fetchImpl(`${CROSSREF_API}/${encodeURIComponent(journal.issn)}/works?${params}`, {
-          headers: { Accept: 'application/json', 'User-Agent': 'worlex/1.9 (mailto:research@example.invalid)' },
-        });
-        if (!response.ok) throw new Error(`Crossref ${response.status}`);
-        const payload = await response.json();
-        const articles = (payload?.message?.items || []).map((item) => mapCrossrefWork(item, journal));
-        fetched.push(...articles);
-        state.sync[id] = { lastSuccessAt: new Date().toISOString(), source: 'Crossref', count: articles.length, error: '' };
-        synced.push({ journalId: id, count: articles.length, provider: 'crossref' });
-      } catch (error) {
-        const message = error?.message || '未知同步错误';
-        state.sync[id] = { ...(state.sync[id] || {}), lastAttemptAt: new Date().toISOString(), error: message };
-        failed.push({ journalId: id, error: message, provider: journal.provider });
+      }
+      if (!done) {
+        state.sync[id] = { ...(state.sync[id] || {}), lastAttemptAt: new Date().toISOString(), error: errors.join('；') };
+        failed.push({ journalId: id, error: errors.join('；'), provider: journal.sourceId || journal.provider, tried: attempts });
       }
     }
   });
@@ -288,6 +347,30 @@ function deliveredIdsFor(state, journalId) {
   return ids;
 }
 
+/**
+ * 同一篇论文在不同数据源里的主键不同（官网目录用链接哈希 `cn:`、知网 RSS 用「期刊+标题」`cnk:`），
+ * 用户切换数据源后旧记录仍留在投递历史里，只按 id 判重会把同一篇再投一次。
+ * 所以投递时再按「期刊 + 规范化标题」判一次重。
+ */
+function titleKeyOf(article) {
+  return String(article?.title || '')
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[“”"‘’'']/g, '')
+    .toLowerCase();
+}
+
+function deliveredTitleKeys(state) {
+  const keys = new Set();
+  const byId = new Map(state.articles.map((article) => [article.id, article]));
+  for (const batch of Object.values(state.deliveries)) {
+    for (const entry of batch?.items || []) {
+      const article = byId.get(entry.articleId);
+      if (article?.title) keys.add(`${entry.journalId}|${titleKeyOf(article)}`);
+    }
+  }
+  return keys;
+}
+
 export function checkInAndCreateDelivery(stateInput, { date = dayKey(), perJournal = 5 } = {}) {
   if (!isValidDate(date)) throw new Error('签到日期格式无效');
   const state = createTopJournalState(stateInput);
@@ -302,12 +385,15 @@ export function checkInAndCreateDelivery(stateInput, { date = dayKey(), perJourn
     : { date, createdAt: now, items: [], shortages: [] };
   const addedEntries = [];
   const shortages = [];
+  const deliveredTitles = deliveredTitleKeys(state);
   for (const journalId of state.selectedJournalIds) {
     const currentCount = delivery.items.filter((item) => item.journalId === journalId).length;
     const missing = Math.max(0, limit - currentCount);
     const previouslyDelivered = deliveredIdsFor(state, journalId);
     const candidates = state.articles
       .filter((article) => article.journalId === journalId && !previouslyDelivered.has(article.id))
+      // 换数据源后同一篇会换 id，按标题再挡一层（见 deliveredTitleKeys 的说明）
+      .filter((article) => !deliveredTitles.has(`${journalId}|${titleKeyOf(article)}`))
       .sort((a, b) => articleDateMillis(b) - articleDateMillis(a) || String(b.discoveredAt || '').localeCompare(String(a.discoveredAt || '')));
     const chosen = candidates.slice(0, missing);
     for (const article of chosen) {
