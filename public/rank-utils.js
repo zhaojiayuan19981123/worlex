@@ -26,6 +26,8 @@
  *   fms          "T1"、"T2"、"T3"（部分数据集给字母写法）
  *   cssci        "CSSCI" / "CSSCI扩展版"
  *   utd24        "UTD24" / "是" / "否"
+ *   pku          "北大核心" / "是" / "否"
+ *   ccf          "A" / "B" / "C" / "A类"
  */
 (() => {
   'use strict';
@@ -100,6 +102,17 @@
       case '新锐分区': {
         const t = tierOf(raw);
         return t >= 1 && t <= 4 ? TIER_TONES[t - 1] : 'gray';
+      }
+      // 北大核心是「在不在目录里」的二值，没有档次之分 → 统一用粉色，别和 CSSCI 的正红混
+      case '北大核心':
+        return 'pink';
+      // 中国计算机学会推荐等级：A 最高（红），B 次之（粉），C 再次（黄）
+      case 'CCF': {
+        const letter = raw.replace(/类|级/g, '').trim().toUpperCase().charAt(0);
+        if (letter === 'A') return 'red';
+        if (letter === 'B') return 'pink';
+        if (letter === 'C') return 'yellow';
+        return 'gray';
       }
       default:
         return 'gray';

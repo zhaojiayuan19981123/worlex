@@ -3420,6 +3420,7 @@
   const pr = {
     open: false, doc: null, docUrl: null, scale: 1.4, pageNum: 1, totalPages: 1,
     recordId: null, highlightColor: 'yellow', currentSelection: null,
+    noLayout: false, // 中文文献：不做版面识别（见 autoCmpPipeline 的 ①.5）
     pageSizes: [],   // [{w,h,rotation}] 每页默认旋转下 scale=1 尺寸
     pageRotations: new Map(), // page -> 相对 PDF 原始方向的显示旋转（仅当前阅读会话）
     lastJoinedSelectionKey: '',
@@ -6278,6 +6279,7 @@
     if (ep.on) destroyEpub();
     pr.source = source;
     pr.fileKind = fileKind === 'epub' ? 'epub' : 'pdf';
+    pr.noLayout = false;
     // 换篇时阅读模式必须整个重置：结构树是按文档缓存的，串台会读到上一篇的正文
     exitReadingMode({ silent: true });
     pr.reading.doc = null;
@@ -6389,7 +6391,7 @@
     show($('prEpubHost'), epub);
     show($('prToggleNote'), lit && !epub);
     // 对照精读：依赖版面解析结果（只存在于文献中心）与 PDF 版面 → 与「版面」按钮同一组条件
-    show($('prToggleCmp'), lit && !epub);
+    show($('prToggleCmp'), lit && !epub && !pr.noLayout);
     show($('prToggleMd'), !epub);
     // 版面解析针对 PDF 版式，而且结果要写进文献记录（成果附件没有记录）→ 两处都要满足
     // v2.1.0：打开文献即自动解析版面、自动翻译为中文，两个手动入口都不再出现
@@ -6517,9 +6519,25 @@
     window.PrBlocks.bind();
   }
 
+  /**
+   * 中文文献：不打版面、不进对照精读（v2.7.0）。
+   * 版面识别的产物是「译文填回原版面」所需的坐标与裁图，中文文献不需要翻译，
+   * 却要占 67MB 模型与每页约 1.6 秒推理 —— 直接把两个入口收掉，也别在后台偷偷跑。
+   */
+  function markNoLayout() {
+    pr.noLayout = true;
+    pr.layoutFor = null;
+    const layoutBtn = $('prLayoutBtn');
+    if (layoutBtn) layoutBtn.classList.add('hidden');
+    const cmpBtn = $('prToggleCmp');
+    if (cmpBtn) cmpBtn.classList.add('hidden');
+    if (window.PrBlocks) window.PrBlocks.clear();
+  }
+
   /** 装载某篇文献已经解析好的版面结果；没有则清空（切篇时用） */
   async function loadLayoutFor(recordId) {
     if (!window.PrBlocks) return;
+    if (pr.noLayout) { pr.layoutFor = null; window.PrBlocks.clear(); setLayoutBtn('idle'); return; }
     if (!recordId || pr.fileKind === 'epub') {
       pr.layoutFor = null;
       window.PrBlocks.clear();
@@ -6605,6 +6623,7 @@
   async function startLayoutParse({ force = false } = {}) {
     const id = pr.recordId;
     if (!id || pr.fileKind === 'epub') { toast('当前文档不支持版面解析', 'error'); return; }
+    if (pr.noLayout) { toast('中文文献不做版面识别，可直接阅读原文（划词翻译照常可用）', 'error'); return; }
     if (pr.layoutBusy) return;
     pr.layoutBusy = true;
     setLayoutBtn('busy', '解析中…');
@@ -8663,23 +8682,13 @@
     // ①.5 中文文献：整篇翻译没有收益（目标语言就是中文），自动管线到这里就收手 ——
     //     不自动跑版面识别、更不自动起翻译作业，只提示一句，用户想看结构可以自己点。
     if ((await docLangOf(recordId)) === 'zh') {
-      // v2.1.0：中文文献照样自动解析版面并进入对照视图（不必把中文再翻成中文），
-      // 不再一打开就停在普通阅读。
+      // v2.7.0：中文文献**不做版面识别**，也不进对照视图。
+      //   版面识别是为「英文双栏 PDF → 译文填回原版面」服务的：中文文献不需要翻译，
+      //   却要为它付出 67MB 模型 + 每页 ~1.6s 的推理，收益远小于代价。
+      //   直接按原 PDF 阅读（划词翻译、笔记、AI 对话都照常可用）更贴合中文期刊的读法。
       if (pr.recordId !== recordId) return;
-      setCmpAutoChip('busy', '中文文献 · 正在整理版面');
-      if (pr.layoutFor !== recordId && !pr.layoutBusy) {
-        await waitReaderIdle();
-        if (pr.recordId !== recordId) return;
-        try { await startLayoutParse(); } catch (_) {
-          setCmpAutoChip('fail', '版面解析启动失败'); return;
-        }
-      }
-      const ok = await waitLayoutDone(recordId);
-      if (pr.recordId !== recordId) return;
-      if (ok) {
-        setCmpAutoChip('done', '中文文献 · 已自动整理');
-        try { await loadCmpAlign({ silent: true }); await openCmpMode(); } catch (_) {}
-      } else setCmpAutoChip('done', '中文文献，无需整篇翻译');
+      markNoLayout();
+      setCmpAutoChip('done', '中文文献 · 已跳过版面识别');
       return;
     }
     // ② 已有在跑的翻译作业（上次没等完就关了阅读器）→ 跟踪它而不是再起一篇
@@ -9086,6 +9095,9 @@
   async function maybeUpgradeReadingWithLayout() {
     if (!pr.reading.on || pr.fileKind !== 'pdf') return;
     if (!pr.recordId) return;                      // 成果附件没有版面解析能力
+    if (pr.noLayout) return;                       // 中文文献：不做版面识别
+    // 自动管线还没跑到「判断语言」这一步就进了阅读模式：这里补一次，别抢跑解析
+    if ((await docLangOf(pr.recordId)) === 'zh') { markNoLayout(); return; }
     if (pr.reading.doc?.layout) return;            // 这篇已经是按版面结果建的
     if (pr.layoutBusy) return;                     // 正在解析：watch 的回调会接上
     if (pr.layoutFor === pr.recordId) {            // 已有结果但这一份稿是旧的 → 直接重建
@@ -11844,11 +11856,21 @@
     // 逐格写「暂缺 / 单位信息暂未由数据源提供」会把卡片撑满噪声，所以按数据源裁剪。
     const titleOnly = article.source === '期刊官网' && !article.abstract;
     const isCn = journal?.language === 'zh' || article.source === '知网 RSS' || article.source === '期刊官网';
-    const journalCell = `<div><dt>期刊</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`;
+    // 会议论文：没有卷期（PMLR 卷号写进 volume），日期是「办会月份 1 号」，字段口径与期刊不同
+    const isConf = journal?.kind === 'conference' || article.articleType === 'conference-paper';
+    const journalCell = `<div><dt>${isConf ? '会议' : '期刊'}</dt><dd>${esc(article.journal || journal?.title || '')}${sourceLine ? ` · ${sourceLine}` : ''}</dd></div>`;
     const dateCell = `<div><dt>发表日期</dt><dd>${tjDate(article.publishedAt)}</dd></div>`;
     const metaCells = titleOnly
       ? [journalCell, dateCell]
-      : isCn
+      : isConf
+        // 会议官网目录不给单位、也常常不给 DOI：只列真实存在的信息，别用「暂缺」占两格
+        ? [
+          `<div><dt>作者</dt><dd>${esc(authors)}</dd></div>`,
+          journalCell,
+          dateCell,
+          ...(article.doi ? [`<div><dt>DOI</dt><dd><a href="https://doi.org/${encodeURIComponent(article.doi)}" target="_blank" rel="noopener noreferrer">${esc(article.doi)}</a></dd></div>`] : []),
+        ]
+        : isCn
         ? [
           `<div><dt>作者</dt><dd>${esc(authors)}</dd></div>`,
           journalCell,
@@ -11869,7 +11891,9 @@
       <dl class="tj-meta-grid">${metaCells.join('')}</dl>
       ${titleOnly
         ? '<p class="tj-site-note">中文刊目录页只提供标题；作者、摘要与 DOI 请点「原文链接」查看。</p>'
-        : `<div class="tj-abstract"><b>${article.abstractExcerpt ? '摘要（知网 RSS 节选）' : '摘要'}</b><p>${esc(article.abstract || '该文章的公开元数据未包含摘要；可点击原文链接查看出版社页面。')}</p></div>`}
+        : `<div class="tj-abstract"><b>${article.abstractExcerpt ? '摘要（知网 RSS 节选）' : '摘要'}</b><p>${esc(article.abstract || (isConf
+          ? '会议官网目录页只提供标题与作者；摘要请点「原文链接」查看论文页。'
+          : '该文章的公开元数据未包含摘要；可点击原文链接查看出版社页面。'))}</p></div>`}
       ${translated.abstract ? `<div class="tj-abstract tj-translation"><b>中文翻译</b><p>${esc(translated.abstract)}</p></div>` : ''}
       <div class="tj-card-actions">
         <button class="tb-btn" data-tj-favorite="${esc(article.id)}" data-tj-favorite-value="${favorite ? 'false' : 'true'}">${favorite ? '★ 已收藏' : '☆ 收藏'}</button>
@@ -11887,7 +11911,7 @@
     const selected = Number(summary.selectedCount || topJournalData.selectedJournalIds.length || 0);
     const todayCount = topJournalDelivery?.articles?.length || 0;
     $('topJournalStats').innerHTML = `
-      <div class="tj-stat"><span>已订阅期刊</span><b>${selected}<small> / ${(topJournalData.catalog||[]).length || 24}</small></b></div>
+      <div class="tj-stat"><span>已订阅期刊 / 会议</span><b>${selected}<small> / ${(topJournalData.catalog||[]).length || 24}</small></b></div>
       <div class="tj-stat"><span>今日状态</span><b>${summary.todayCheckedIn ? `已领取 ${todayCount || ''}` : '待签到'}</b></div>
       <div class="tj-stat"><span>连续签到</span><b>${Number(summary.streak || 0)}<small> 天</small></b></div>
       <div class="tj-stat"><span>历史记录</span><b>${Number(summary.libraryCount || 0)}<small> 篇</small></b></div>`;
@@ -11982,30 +12006,69 @@
     return `<div class="tj-calendar-card"><div class="tj-calendar-summary"><div><b>${Number(topJournalData.summary?.streak || 0)} 天</b><span>当前连续签到</span></div><div><b>${checked.size} 天</b><span>本月已签到</span></div><div><b>${Number(topJournalData.summary?.libraryCount || 0)} 篇</b><span>历史记录</span></div></div><h3>${year} 年 ${month + 1} 月</h3><div class="tj-calendar-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="tj-calendar-grid">${blanks}${cells}</div><p>未签到不会消耗文章队列；下次签到时，系统仍会从你未收到过的文章中优先选择最新内容。</p></div>`;
   }
   /**
+   * CCF 等级徽标。中文刊的等级来自《计算领域高质量科技期刊分级目录》的 T1 / T2，
+   * 按惯例映射成 A / B，但必须把「中文 T1」写在徽标里——否则会被读成国际 A 类期刊。
+   */
+  function tjCcfBadge(journal) {
+    if (!journal.ccf) return '';
+    const note = journal.ccfNote ? `（${journal.ccfNote}）` : '';
+    const tip = `CCF ${journal.ccf} 类${note}`;
+    return `<em class="tj-ccf is-${esc(String(journal.ccf).toLowerCase())}" title="${esc(tip)}">CCF-${esc(journal.ccf)}${journal.ccfNote ? `<i>${esc(journal.ccfNote)}</i>` : ''}</em>`;
+  }
+
+  /**
+   * 期刊 / 会议 类型徽标。只给**会议**加：一行里还要塞等级与数据源两枚徽标，
+   * 再给期刊也挂一枚「期刊」会把刊名挤成省略号（实测「计算机研究…」「N…」），
+   * 而会议的标识本身就是最需要的信息（期刊行没有这枚徽标）。
+   */
+  function tjKindBadge(journal) {
+    if (journal.kind === 'conference') return '<em class="tj-kind is-conf">会议</em>';
+    return '';
+  }
+
+  /**
    * 期刊的数据源标识。
-   * Crossref 的刊自动带摘要；中文刊只能抓官网目录，抓不到时同步会写 lastError，
+   * Crossref 的刊自动带摘要；中文刊抓知网 RSS 或官网目录，抓不到时同步会写 lastError，
    * 这里把错误挂到 title 上，用户不用去别处找原因。
    */
   function tjJournalTag(journal) {
     const sync = topJournalData.sync?.[journal.id] || {};
     const error = sync.error || '';
-    if (journal.set !== 'cnA') return '<em class="tj-src">Crossref</em>';
+    const badges = [tjCcfBadge(journal), tjKindBadge(journal)];
+    if (journal.kind === 'conference') {
+      const edition = sync.edition ? ` ${sync.edition}` : '';
+      badges.push(error
+        ? `<em class="tj-src is-off" title="${esc(`会议官网上次同步失败：${error}`)}">会议官网 · 上次失败</em>`
+        : `<em class="tj-src is-on" title="抓取该会议官网的当届论文集目录${sync.edition ? `（${esc(sync.edition)} 年）` : ''}">会议官网${esc(edition)}</em>`);
+      return badges.join('');
+    }
+    if (journal.provider === 'rss') {
+      badges.push(error
+        ? `<em class="tj-src is-off" title="${esc(`官网 RSS 上次同步失败：${error}`)}">官网 RSS · 上次失败</em>`
+        : '<em class="tj-src is-on" title="读取该刊官网自带的 RSS">官网 RSS</em>');
+      return badges.join('');
+    }
+    const switchable = journal.set === 'cnA' || (journal.set === 'ccf' && journal.language === 'zh');
+    if (!switchable) { badges.push('<em class="tj-src">Crossref</em>'); return badges.join(''); }
     // sourceId 是后端按「用户选择 → 该刊可用性」算好的实际数据源
     const sourceId = journal.sourceId || journal.provider;
     if (sourceId === 'cnki') {
       const tip = error
         ? `知网 RSS 上期同步失败：${error}（会自动退到期刊官网目录）`
         : `抓取该刊的知网期刊 RSS（代码 ${journal.cnkiCode}），带标题、作者与摘要节选`;
-      return error
+      badges.push(error
         ? `<em class="tj-src is-off" title="${esc(tip)}">知网 RSS · 上次失败</em>`
-        : `<em class="tj-src is-on" title="${esc(tip)}">知网 RSS</em>`;
+        : `<em class="tj-src is-on" title="${esc(tip)}">知网 RSS</em>`);
+      return badges.join('');
     }
     if (journal.feedUrl) {
-      return error
+      badges.push(error
         ? `<em class="tj-src is-off" title="${esc(error)}">官网目录 · 上次失败</em>`
-        : '<em class="tj-src is-on" title="抓取该刊官网当期目录">官网目录</em>';
+        : '<em class="tj-src is-on" title="抓取该刊官网当期目录">官网目录</em>');
+      return badges.join('');
     }
-    return `<em class="tj-src is-off" title="${esc(error || '该刊既没有可用的知网 RSS，也没有内置目录页：同步时会先试官网首页，抓不到可在下方填当期目录地址')}">待验证</em>`;
+    badges.push(`<em class="tj-src is-off" title="${esc(error || '该刊既没有可用的知网 RSS，也没有内置目录页：同步时会先试官网首页，抓不到可在下方填当期目录地址')}">待验证</em>`);
+    return badges.join('');
   }
   function renderTopJournalManage() {
     const selected = new Set(topJournalData.selectedJournalIds || []);
@@ -12022,13 +12085,25 @@
         const picked = list.filter((journal) => selected.has(journal.id)).length;
         return `<section class="tj-journal-group"><div class="tj-group-head"><b>${esc(group)}</b><span class="tj-group-meta">${picked}/${list.length}</span><button class="as-link" data-tj-category="${esc(group)}">全选此类</button></div><div class="tj-journal-options">${list.map((journal) => {
           const home = tjExternalUrl(journal.publisherUrl);
-          return `<label><input type="checkbox" data-tj-journal="${esc(journal.id)}" ${selected.has(journal.id) ? 'checked' : ''}><span><b>${esc(journal.shortTitle)}</b><small>${esc(journal.titleEn || journal.title)}</small></span>${tjJournalTag(journal)}${home ? `<a href="${esc(home)}" target="_blank" rel="noopener noreferrer" title="打开期刊主页">${ico('external')}</a>` : '<i class="tj-no-link"></i>'}</label>`;
+          // 徽标统一放进 .tj-badges：CCF 组一行可能同时有「等级 / 类型 / 数据源」三枚，
+          // 直接铺成 grid 子项会挤到第二行，行高参差不齐
+          return `<label><input type="checkbox" data-tj-journal="${esc(journal.id)}" ${selected.has(journal.id) ? 'checked' : ''}><span><b>${esc(journal.shortTitle)}</b><small>${esc(journal.titleEn || journal.title)}</small></span><span class="tj-badges">${tjJournalTag(journal)}</span>${home ? `<a href="${esc(home)}" target="_blank" rel="noopener noreferrer" title="打开期刊 / 会议主页">${ico('external')}</a>` : '<i class="tj-no-link"></i>'}</label>`;
         }).join('')}</div></section>`;
       }).join('');
-      return `<section class="tj-journal-set"><div class="tj-set-head"><div><b>${esc(set.label)}</b>${set.note ? `<small>${esc(set.note)}</small>` : ''}</div><button class="tj-preset secondary" data-tj-set="${esc(set.id)}">全选本组 ${chosen}/${journals.length}</button></div>${groups}</section>`;
+      const head = set.collapsible
+        // 折叠组的标题已经在 summary 上，这里只留「全选本组」，避免同一行标题出现两次
+        ? `<div class="tj-set-head tj-set-head-slim"><button class="tj-preset secondary" data-tj-set="${esc(set.id)}">全选本组 ${chosen}/${journals.length}</button></div>`
+        : `<div class="tj-set-head"><div><b>${esc(set.label)}</b>${set.note ? `<small>${esc(set.note)}</small>` : ''}</div><button class="tj-preset secondary" data-tj-set="${esc(set.id)}">全选本组 ${chosen}/${journals.length}</button></div>`;
+      // CCF 两组加起来近 80 个场馆，默认展开会把整个「期刊管理」拉成几屏，折叠起来更好找
+      if (set.collapsible) {
+        return `<details class="tj-journal-set tj-set-fold is-rich"${chosen ? ' open' : ''} data-tj-setbox="${esc(set.id)}"><summary><div><b>${esc(set.label)}</b><small>${esc(set.note || '')}</small></div><span class="tj-group-meta">已选 ${chosen}/${journals.length}</span></summary>${head}${groups}</details>`;
+      }
+      return `<section class="tj-journal-set">${head}${groups}</section>`;
     }).join('');
     // 中文刊的数据源：知网 RSS 为默认，官网目录作为备选/兜底，可按刊切换
-    const cnJournals = catalog.filter((journal) => journal.set === 'cnA');
+    // （NSFC A 类 22 种 + CCF 中文刊，两者的取数逻辑完全一致）
+    const cnJournals = catalog.filter((journal) => journal.kind !== 'conference'
+      && (journal.set === 'cnA' || (journal.set === 'ccf' && journal.language === 'zh')));
     const cnkiCount = cnJournals.filter((journal) => journal.cnkiCode).length;
     const feedBox = cnJournals.length
       ? `<details class="tj-feed-box"${tjFeedOpen ? ' open' : ''}><summary>中国期刊数据源（知网 RSS / 官网目录，可按刊切换）</summary><p>${cnkiCount} / ${cnJournals.length} 本默认从<b>知网期刊 RSS</b>取最新文章，带标题、作者与摘要节选；知网没有 RSS 的刊（或你更信官网目录）可以切到<b>官网当期目录</b>。选定后如果那个源抓不到，会自动退到另一个源，不用手动来回切。</p><div class="tj-feed-rows">${cnJournals.map((journal) => {

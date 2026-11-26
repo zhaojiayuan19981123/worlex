@@ -42,7 +42,9 @@ test('功能区精简：阅读模式/版面/导出/两下拉隐藏，整篇翻�
   assert.match(app, /show\(\$\('prLayoutBtn'\), false\)/);
   assert.match(app, /show\(\$\('prReadingBtn'\), false\)/);
   assert.match(app, /setPairMode\?\.\('para'\)/);
-  assert.match(app, /自动整理/);
+  // v2.7.0：中文文献不再做版面识别（原来这里是「正在整理版面 / 已自动整理」）
+  assert.match(app, /markNoLayout\(\)/);
+  assert.match(app, /跳过版面识别/);
 });
 
 test('划词高亮：按行合并模块已接入选区与批注绘制', () => {

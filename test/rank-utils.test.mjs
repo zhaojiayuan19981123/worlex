@@ -78,8 +78,19 @@ test('UTD24 走正红；取值为否定写法时按灰处理', () => {
   assert.equal(rankSystemTone('CSSCI', '否'), 'gray');
 });
 
+test('北大核心与 CCF 的配色（算法类文献最常看这两档）', () => {
+  assert.equal(rankSystemTone('北大核心', '是'), 'pink');
+  assert.equal(rankSystemTone('北大核心', '北大核心'), 'pink');
+  assert.equal(rankSystemTone('北大核心', '否'), 'gray');
+  assert.equal(rankSystemTone('CCF', 'A'), 'red');
+  assert.equal(rankSystemTone('CCF', 'A类'), 'red');
+  assert.equal(rankSystemTone('CCF', 'B'), 'pink');
+  assert.equal(rankSystemTone('CCF', 'C'), 'yellow');
+  assert.equal(rankSystemTone('CCF', '未收录'), 'gray');
+});
+
 test('认不出的体系 / 认不出的取值 / 空值一律灰（兜底不报错）', () => {
-  assert.equal(rankSystemTone('北大核心', '是'), 'gray');
+  assert.equal(rankSystemTone('未知体系', '是'), 'gray');
   assert.equal(rankSystemTone('中科院分区', '未收录'), 'gray');
   assert.equal(rankSystemTone('SSCI', 'Q9'), 'gray');
   assert.equal(rankSystemTone('SSCI', ''), 'gray');
@@ -88,7 +99,7 @@ test('认不出的体系 / 认不出的取值 / 空值一律灰（兜底不报�
 });
 
 test('返回值恒为白名单内的色档（要拼进 class 名，不能有异常字符）', () => {
-  const labels = ['中科院分区', '新锐分区', 'ABS', 'UTD24', 'SSCI', 'FMS', 'CSSCI', '未知体系'];
+  const labels = ['中科院分区', '新锐分区', 'ABS', 'UTD24', 'SSCI', 'FMS', 'CSSCI', '北大核心', 'CCF', '未知体系'];
   const values = ['Q1', '1区', '4*', 'T2', 'A+', 'CSSCI', 'Top', '否', '', '<img>', '1区" onload=x'];
   for (const label of labels) {
     for (const value of values) {

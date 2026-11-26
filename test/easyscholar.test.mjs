@@ -1,9 +1,9 @@
 // easyscholar.test.mjs —— 期刊等级筛选（formatRank）纯函数测试
 //
 // 覆盖点：
-//   1) 七类等级（中科院分区 / 新锐分区 / ABS / UTD24 / SSCI / FMS / CSSCI）都能保留
-//   2) 新增的 FMS、CSSCI 确实进入结果（本次需求）
-//   3) 白名单外的等级（北大核心、CCF、影响因子等）一律丢弃
+//   1) 九类等级（中科院分区 / 新锐分区 / ABS / UTD24 / SSCI / FMS / CSSCI / 北大核心 / CCF）都能保留
+//   2) 新增的 FMS、CSSCI、北大核心、CCF 确实进入结果
+//   3) 白名单外的等级（影响因子、CSCD 等）一律丢弃
 //   4) xrTop 优先于 xr，不会出现两个「新锐分区」
 //   5) 空值跳过；全空时返回含七类的占位文案
 //   6) 结构异常（data 缺失 / officialRank 缺失）不抛错
@@ -16,7 +16,7 @@ function payload(all) {
   return { officialRank: { all } };
 }
 
-test('七类等级齐全时按固定顺序全部保留', () => {
+test('九类等级齐全时按固定顺序全部保留', () => {
   const f = formatRank(payload({
     sciUp: '经济学4区',
     xrTop: 'A+',
@@ -25,6 +25,8 @@ test('七类等级齐全时按固定顺序全部保留', () => {
     ssci: 'Q3',
     fms: 'C',
     cssci: 'CSSCI',
+    pku: '北大核心',
+    ccf: 'A',
   }));
   assert.deepEqual(f.items, [
     { label: '中科院分区', value: '经济学4区' },
@@ -34,7 +36,18 @@ test('七类等级齐全时按固定顺序全部保留', () => {
     { label: 'SSCI', value: 'Q3' },
     { label: 'FMS', value: 'C' },
     { label: 'CSSCI', value: 'CSSCI' },
+    { label: '北大核心', value: '北大核心' },
+    { label: 'CCF', value: 'A' },
   ]);
+});
+
+test('北大核心与 CCF 单独出现时也要保留（算法类文献最常看这两档）', () => {
+  const f = formatRank(payload({ pku: '是', ccf: 'A类' }));
+  assert.deepEqual(f.items, [
+    { label: '北大核心', value: '是' },
+    { label: 'CCF', value: 'A' },
+  ]);
+  assert.equal(f.summary, '北大核心 是  ·  CCF A');
 });
 
 test('新增的 FMS 与 CSSCI 能单独进入结果', () => {
@@ -46,9 +59,9 @@ test('新增的 FMS 与 CSSCI 能单独进入结果', () => {
   assert.equal(f.summary, 'FMS A  ·  CSSCI CSSCI扩展版');
 });
 
-test('白名单外的等级被丢弃（北大核心 / CCF / 影响因子 / CSCD 等）', () => {
+test('白名单外的等级被丢弃（影响因子 / CSCD / JCI 等）', () => {
   const f = formatRank(payload({
-    pku: '是', ccf: 'A', sciif: '3.21', sciif5: '4.02', cscd: '是', jci: '0.63',
+    sciif: '3.21', sciif5: '4.02', cscd: '是', jci: '0.63',
     fms: 'B',
   }));
   assert.deepEqual(f.items, [{ label: 'FMS', value: 'B' }]);
@@ -84,10 +97,10 @@ test('summary 用 · 分隔各等级', () => {
   assert.equal(f.summary, '中科院分区 1区  ·  FMS C');
 });
 
-test('全无收录时返回含七类的占位文案（非空，避免被当成「未查询」重复请求）', () => {
-  const f = formatRank(payload({ pku: '是', ccf: 'A' }));
+test('全无收录时返回占位文案（非空，避免被当成「未查询」重复请求）', () => {
+  const f = formatRank(payload({ sciif: '3.21' }));
   assert.equal(f.items.length, 0);
-  assert.equal(f.summary, '未收录于中科院/新锐/ABS/UTD24/SSCI/FMS/CSSCI 分区');
+  assert.equal(f.summary, '未收录于中科院/新锐/ABS/UTD24/SSCI/FMS/CSSCI/北大核心/CCF');
 });
 
 test('data 为 undefined / officialRank 缺失时不抛错', () => {

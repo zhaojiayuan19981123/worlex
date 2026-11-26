@@ -14,6 +14,7 @@ import {
   journalById,
   syncJournals,
 } from '../src/topJournals.js';
+import { CCF_VENUES } from '../src/ccfVenues.js';
 import {
   dateFromArticleUrl,
   decodeHtml,
@@ -82,8 +83,9 @@ function fakeResponse(body, { status = 200, url = 'http://www.jryj.org.cn/CN/100
 test('中国 A 类 22 本全部在目录内，id 与 ISSN 不重复，分组覆盖全集', () => {
   assert.equal(CN_A_JOURNALS.length, 22);
   assert.equal(UTD_JOURNALS.length, 24);
-  assert.equal(ALL_JOURNALS.length, 46);
-  assert.equal(new Set(ALL_JOURNALS.map((journal) => journal.id)).size, 46);
+  // v2.7.0 起目录里还有 CCF A/B 的期刊与会议，总数按实际目录长度算
+  assert.equal(ALL_JOURNALS.length, 46 + CCF_VENUES.length);
+  assert.equal(new Set(ALL_JOURNALS.map((journal) => journal.id)).size, ALL_JOURNALS.length);
   const issns = ALL_JOURNALS.map((journal) => journal.issn).filter(Boolean);
   assert.equal(new Set(issns).size, issns.length, 'ISSN 不应重复');
   // 中国刊必须都有中文标题与四段式 ISSN；数据源按「有没有知网代码」决定（有代码走知网 RSS）
@@ -99,7 +101,7 @@ test('中国 A 类 22 本全部在目录内，id 与 ISSN 不重复，分组覆�
   assert.equal(withCnki.filter((journal) => journal.provider === 'cnki').length, 21);
   assert.equal(new Set(withCnki.map((journal) => journal.cnkiCode)).size, 21, '知网代码不应重复');
   const covered = new Set(JOURNAL_SETS.flatMap((set) => set.journalIds));
-  assert.equal(covered.size, 46, '分组应覆盖全部期刊');
+  assert.equal(covered.size, ALL_JOURNALS.length, '分组应覆盖全部期刊');
   assert.equal(journalById('cn-mw').title, '管理世界');
   assert.equal(journalById('nope'), null);
 });

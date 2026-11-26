@@ -1,3 +1,82 @@
+## v2.7.0：顶刊追踪加入计算机 CCF-A / CCF-B 期刊与会议；中文文献不做版面识别；期刊等级补北大核心与 CCF（2026-11-26）
+
+### 需求
+1. 顶刊追踪新增计算机 CCF 类期刊与会议，A、B 两类都要收；中文继续知网 RSS，英文抓官网。
+2. 文献阅读中，中文期刊不再做版面识别。
+3. 期刊等级标签补上「北大核心」与「中国计算机学会（CCF）」。
+
+### 一、CCF 目录（src/ccfVenues.js）
+
+**等级口径分开写，避免把中文 T1 说成国际 A 类：**
+
+- 国际期刊 / 会议：CCF《推荐国际学术会议和期刊目录》(2022)。A 类 25 本英文刊 + 11 个会议，B 类 21 本 + 6 个。
+- 中文刊：CCF《计算领域高质量科技期刊分级目录》(2025) 的 T1 / T2，按惯例映射 A / B，`ccfNote` 写明「中文 T1 / T2」，
+  界面徽标显示成 `CCF-A 中文T1`。T1 收了 10 本（软件学报、计算机学报、计算机研究与发展、中国科学:信息科学、
+  电子学报、电子与信息学报、自动化学报、通信学报、中文信息学报、计算机辅助设计与图形学学报），T2 收了 7 本。
+
+**为什么会议只收 17 个**：KDD / SIGMOD / VLDB / ICSE / FSE / ASE / ISSTA / CCS / S&P / CHI / SIGGRAPH / STOC / FOCS
+等由 ACM DL 或 IEEE Xplore 托管，两者实测分别是 Cloudflare 403 与 202 挑战页，抓不到就当不进去，
+免得目录里常驻一条「上次失败」。DBLP 也有 Anubis 反爬（返回挑战页），OpenReview 的 API 同样挡（403）。
+
+**中文刊的知网代码**逐个实测核对 channel title：计算机学报 `JSJX`、软件学报 `RJXB`、电子学报 `DZXU`、
+自动化学报 `MOTO`、通信学报 `TXXB`、电子与信息学报 `DZYX`、中文信息学报 `MESS`、中国科学:信息科学 `PZKX`、
+CAD&CG 学报 `JSJF`、模式识别与人工智能 `MSSB`、计算机应用 `JSJY`、计算机工程 `JSJC`、小型微型计算机系统 `XXWX`、
+计算机系统应用 `XTYY`。三本试遍候选代码都没有 RSS，走官网当期目录并且实测能解析出标题：
+计算机研究与发展（`crad.ict.ac.cn/CN/1000-1239/home.shtml`）、计算机科学（`jsjkx.com`）、
+中国图象图形学报（`cjig.cn`，该站不给日期，卡片显示「日期待补充」）。
+
+### 二、会议官网抓取（src/confFeed.js）
+
+七个适配器，对应七个模板：`nips`（papers.nips.cc 的 `li.conference`）、`pmlr`（`div.paper`，卷号从
+`proceedings.mlr.press` 总目录里按会议名找最近一卷，缓存 6 小时）、`cvf`（`dt.ptitle` + `dd` 里的
+`query_author` 隐藏域）、`acl`（`strong > a` + 紧跟的 abstract 折叠块）、`ijcai`（`paper_wrapper`）、
+`usenix`（`article.node-paper`）、`ecva`（整页按年份分块，只取当届）。
+
+处理掉的坑：
+1. **卷首语不是论文**：ACL 的 event 页第一条是 "Proceedings of the 64th Annual Meeting…"，
+   作者是四位大会主席——直接投递会让用户以为今天第一篇是会议前言。统一按 `FRONT_MATTER` 过滤
+   （Proceedings of / Front Matter / Preface / Editors' Note / Table of Contents …）。
+2. **ACL 标题被拆开**：`<span class=acl-fixed-case>A</span>ssociation` 经 htmlText 会变成「A ssociation」，
+   解析前先剥掉这层 span；同一条目的 `O cto T ools` 也是这个原因。
+3. **USENIX 的 keynote**：technical-sessions 页里混着 keynote / panel，链接形如 `/presentation/keynote`，
+   按 slug 过滤；2026 起作者字段从 `field-presented-by` 改成 `field-paper-people-text`，两个都认。
+4. **作者串里的单位与 and**：USENIX 是「A, <em>单位;</em> B」、PMLR 是 `,&nbsp;`，
+   先去 `<em>` 再去 `and` / 星号，否则「Meta」「and Christos Kozyrakis」会被当成作者。
+5. **年份要探**：办会月份 +2 个月还没到就直接从去年试起（NeurIPS 12 月，11 月时今年还没论文集）；
+   目录页 404 / 解析不出论文就退上一年。超时则不再往更早的年份试——那是网络问题，再试只是多等一页 10 MB。
+6. **一页动辄几千篇**：CVPR 全量 7.4 MB、ACL 10.7 MB，按等距抽样压到 150 篇入库（签到每天每会 5 篇，够一个月），
+   否则本地 JSON 会被撑爆。
+7. **签到别重复下载**：单个会议 3 小时内同步过就不再抓（`syncJournals` 的新鲜度检查），
+   手动点「同步最新文章」时传 `force: true` 强制刷新。
+
+### 三、JMLR 走官网 RSS（src/rssFeed.js）
+
+JMLR 是 CCF-A 人工智能期刊，但不注册 DOI（Crossref `total-results = 0`），按 ISSN 查一条都拿不到。
+它官网 `jmlr.org/jmlr.xml` 是标准 RSS：标题、作者、摘要、文章页都在。于是做了一层通用 RSS 2.0 适配，
+`<pubDate>` 只给年份时记成该年 1 月 1 日；摘要同样是双重转义的，反复解实体+去标签。
+
+### 四、文献阅读：中文文献不做版面识别
+
+v2.1.0 起中文文献也会自动跑版面解析并进对照视图。但版面识别的产物是「译文填回原版面」所需的坐标与裁图，
+中文文献不需要翻译，却要占 67 MB 模型 + 每页约 1.6 秒推理。v2.7.0：
+- `autoCmpPipeline` 判断语种为 `zh` 时直接 `markNoLayout()` 收手，徽标提示「中文文献 · 已跳过版面识别」；
+- 版面按钮与「对照精读」入口一并隐藏；`loadLayoutFor` / `startLayoutParse` 加守卫，阅读模式升级（`maybeUpgradeReadingWithLayout`）
+  也会先查一次语种，避免抢跑；划词翻译、笔记、AI 对话照常可用。
+
+### 五、期刊等级：补北大核心与 CCF
+
+`formatRank` 的保留列表加了 `pku`（北大核心）与 `ccf`（中国计算机学会），CCF 的取值统一成 A / B / C
+（数据源里偶有「A类」写法）。配色：CCF A 正红、B 粉、C 黄；北大核心是二值，用粉色与 CSSCI 的正红区分。
+已有记录不会自动重查（避免一次性打满 easyScholar 的 2 次/秒限流），在「文献中心」用「更新期刊等级」重刷即可。
+
+### 六、验证
+
+- 单测新增 31 条（conf-feed 16 / ccf-venues 10 / rss-feed 5），并更新受影响的 3 个旧测试；全量 **935 条通过**。
+- 真实抓取：NeurIPS 150 篇、CVPR 150 篇、IJCAI 150 篇、ACL 149 篇、ECCV 150 篇、OSDI 136 篇、ICML 150 篇（PMLR v306）；
+  TPAMI 50 篇（Crossref）、JMLR 244 篇（RSS）、软件学报 19 篇（知网）、计算机研究与发展 12 篇（官网）。
+- 通过 HTTP 走了一遍真实同步：4 个场馆 17 秒（含 CVPR 7 MB + NeurIPS 3 MB 两个大目录页）。
+- 浏览器验证期刊管理页：CCF-A / CCF-B 两组折叠、46 + 34 行、等级与数据源徽标右对齐、无截断；会议论文卡片按「作者 / 会议 / 日期」裁剪。
+
 ## v2.6.0：中文刊改用知网期刊 RSS 取数，官网目录降为备选（2026-11-26）
 
 ### 背景

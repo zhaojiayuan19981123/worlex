@@ -21,7 +21,8 @@ const RANK_LABELS = {
 
 // 只保留这几类期刊等级（用户要求）
 // sciUp→中科院分区, xrTop/xr→新锐分区, ajg→ABS分区, utd24→UTD24分区,
-// ssci→SSCI分区, fms→FMS分区, cssci→CSSCI（官方数据集里叫「南大核心」）
+// ssci→SSCI分区, fms→FMS分区, cssci→CSSCI（官方数据集里叫「南大核心」）,
+// pku→北大核心（中文刊最常用的一档）, ccf→中国计算机学会推荐等级（A/B/C）
 const KEEP_RANKS = [
   { key: 'sciUp', label: '中科院分区' },
   { key: 'xrTop', label: '新锐分区' },
@@ -31,7 +32,19 @@ const KEEP_RANKS = [
   { key: 'ssci', label: 'SSCI' },
   { key: 'fms', label: 'FMS' },
   { key: 'cssci', label: 'CSSCI' },
+  { key: 'pku', label: '北大核心' },
+  { key: 'ccf', label: 'CCF' },
 ];
+
+/**
+ * 个别数据集的写法带后缀（「A类」「B类」「T1类」），统一成 A/B/C，
+ * 否则标签会和「中科院 1 区」混在一起看不出档次，配色也匹配不上。
+ */
+function cleanRankValue(key, value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (key === 'ccf') return raw.replace(/\s*(类|级)\s*$/g, '').replace(/^CCF[-\s]?/i, '').trim();
+  return raw;
+}
 
 const RANK_LEVEL_KEYS = ['', 'oneRankText', 'twoRankText', 'threeRankText', 'fourRankText', 'fiveRankText'];
 
@@ -100,12 +113,12 @@ export function formatRank(data) {
     if (items.some((i) => i.label === label)) continue; // xrTop 优先于 xr，避免重复
     const val = all[key];
     if (val == null || val === '') continue;
-    items.push({ label, value: String(val) });
+    items.push({ label, value: cleanRankValue(key, val) });
   }
 
   // 若这些等级均无数据，返回明确占位，避免 summary 为空字符串被前端/后端误判为「未查询」而反复请求
   if (!items.length) {
-    return { summary: '未收录于中科院/新锐/ABS/UTD24/SSCI/FMS/CSSCI 分区', items: [] };
+    return { summary: '未收录于中科院/新锐/ABS/UTD24/SSCI/FMS/CSSCI/北大核心/CCF', items: [] };
   }
 
   return {

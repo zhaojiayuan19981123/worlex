@@ -1,4 +1,63 @@
-## 本版本主要更新（v2.6.0）
+## 本版本主要更新（v2.7.0）
+
+**顶刊追踪接入计算机 CCF 目录：CCF-A 46 个、CCF-B 34 个场馆，会议直接抓官网论文集；顺带修掉中文文献的版面识别、期刊等级补上北大核心与 CCF。**
+
+### 新增两套目录：CCF-A / CCF-B
+
+在原来的 UTD 24 与中国 A 类 22 种之外，「期刊管理」里多了两个可折叠的分组：
+
+| 分组 | 场馆数 | 构成 |
+| --- | --- | --- |
+| **计算机 CCF-A** | 46 | 25 本英文刊 + 10 本中文刊 + 11 个会议 |
+| **计算机 CCF-B** | 34 | 21 本英文刊 + 7 本中文刊 + 6 个会议 |
+
+每行右侧最多三枚徽标：`CCF-A`（或 `CCF-B`）、`中文 T1`（或 `中文 T2`）、`会议`。英文刊/会议按 CCF《推荐国际学术会议和期刊目录》(2022)，中文刊按《计算领域高质量科技期刊分级目录》(2025) 的 T1/T2 折算成 A/B，所以中文刊的徽标会同时出现「CCF-A」和「中文 T1」，鼠标悬停能看到口径说明。
+
+预设也一起给了：`CCF-A 全部`、`CCF-B 全部`、`CCF 人工智能`、`CCF 系统`、`CCF 软件工程`、`CCF 顶会优先`。
+
+### 会议不查数据库，直接读论文集
+
+会议论文在 Crossref 里几乎查不到（CVPR、NeurIPS 这类要么没有 DOI，要么只在出版方站点），所以这一版写了**七个会议官网适配器**，从论文集目录页直取标题、作者、详情链接：
+
+| 适配器 | 覆盖 | 取数页 |
+| --- | --- | --- |
+| `nips` | NeurIPS | `papers.nips.cc/paper_files/paper/<年>` |
+| `pmlr` | ICML / AISTATS / COLT / UAI | `proceedings.mlr.press/v<卷号>/` |
+| `cvf` | CVPR / ICCV / ECCV 之外的 CVF 会议 | `openaccess.thecvf.com/<会议><年>` |
+| `acl` | ACL / EMNLP / NAACL | `aclanthology.org/events/<会议>-<年>/` |
+| `ijcai` | IJCAI | `ijcai.org/proceedings/<年>` |
+| `usenix` | OSDI / NSDI / ATC / Security | `usenix.org/conference/<会议><年>/technical-sessions` |
+| `ecva` | ECCV | `ecva.net/papers.php` |
+
+实测每届能取到 130~250 篇（NeurIPS 150、CVPR 150、ICML 150、ACL 149、ECCV 150、OSDI 136、IJCAI 150）。JMLR 没有会议论文集，改走官网 RSS（一次 244 篇，带摘要）。
+
+顺手处理掉的七个坑：
+
+- **卷首语不是论文**：论文集首页混着 `Proceedings of...`、`Front Matter`、`Preface`、`Editors' Note`、`Author Index`，按标题前缀过滤掉，否则它们会占掉你每天的 5 篇名额。
+- **USENIX 的 keynote 混在 technical-sessions 里**：按链接里的 `/presentation/keynote|panel|award|bof|lunch|opening|closing` 排除。
+- **ACL 的标题被拆成 `<span>`**：`<span class="acl-fixed-case">A</span>ssociation` 直接取文本会变成「ssociation」，解析前先剥掉 span。
+- **USENIX 2026 起改了作者字段名**：`field-name-field-paper-people-text` 换成 `presented-by`，两个都认。
+- **年份要探测**：当年论文集常常还没上线（NeurIPS 2025 目录页只有 53 KB、无论文），会往前退一届；但**超时不再往更早年份重试**，否则一次超时会连带重试三届、卡两分钟。
+- **一页几百篇太长**：统一等距抽样到 150 篇，保证列表不炸、又不至于只看到前几十篇。
+- **会议不用天天爬**：论文集一年才更新一次，同步会议时走 3 小时新鲜度缓存，重复点「立即同步」不会重复抓。
+
+**没收录的场馆**（都实测过，不是漏了）：ACM DL（Cloudflare 403）、IEEE Xplore（202 挑战页）、DBLP（挑战页）、AAAI 的 OJS（反爬）、OpenReview API（403）。这些场馆目前没有稳定的公开取数入口，等有可用页面再补。
+
+### 中文文献不再做版面识别
+
+文献阅读里对中文期刊文章自动跳过版面识别：不请求版面接口、不显示「版面识别」按钮、也不进对照阅读。原因是现有版面模型基本只认英文双栏排版，中文刊跑出来的是错行拼接，既费时又容易把原文弄乱。中文文章仍可正常阅读、高亮、记笔记、AI 分析。
+
+### 期刊等级补上「北大核心」和「CCF」
+
+算法类文库的等级徽标以前只看中科院分区/新锐/ABS/UTD24/SSCI/FMS/CSSCI，国内计算机刊往往一个都对不上、显示「未收录」。现在 EasyScholar 返回的 `pku`（北大核心）与 `ccf`（中国计算机学会）也进白名单，各有独立配色（北大核心粉色，CCF 的 A 红、B 粉、C 黄），`A类` 这类写法统一归一成 `A`。
+
+### 升级说明
+
+- 从 v2.6.0 升级：订阅、收藏、历史、投递记录、文献库全部保留，无需迁移。
+- 只订阅了 UTD / 中国 A 类的用户行为不变；勾选 CCF 组后第一次同步会多花十几秒到一分钟（每个会议一次论文集请求）。
+- 会议文章的卡片少显示「单位 / DOI」，改为显示「作者 / 会议 / 发表日期」，摘要暂不抓取（论文集页面上没有），需要摘要请点原文链接。
+
+## v2.6.0 主要更新（历史）
 
 **中文刊改用中国知网的期刊 RSS 取数：作者、摘要、发布时间都有了；22 本里 21 本接上，官网目录降为备选。**
 

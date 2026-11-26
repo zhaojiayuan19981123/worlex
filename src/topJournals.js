@@ -1,6 +1,6 @@
 // topJournals.js —— 顶刊跟踪：期刊目录、元数据同步与个人不重复投递队列
 //
-// 目录分两套：
+// 目录分四套：
 //   utd  —— UTD 24，元数据走 Crossref（稳定、带作者与摘要）。
 //   cnA  —— 国家自然科学基金委管理科学部 A 类期刊 22 种（中文）。
 //           这 22 种**完全不在 Crossref**（按 ISSN 与 DOI 前缀查 works 均为 0 条），OpenAlex 也只零星收录。
@@ -9,11 +9,19 @@
 //             · 官网当期目录（见 cnJournalFeed.js）—— 《管理科学》等知网没 RSS 的刊，或用户主动切换。
 //           每个刊的 `sourceId` 表示「这次用哪个源」，用户可在界面按刊切换；
 //           首选源抓失败会自动退到另一个源，不会因为一次 503 就整天没文章。
+//   ccfA / ccfB —— 计算机领域的 CCF A / B 类（期刊 + 会议，见 ccfVenues.js）。取数按场馆类型分流：
+//             · 英文期刊 → Crossref（出版社上报的 DOI 元数据；IEEE/ACM/Elsevier 官网都挡程序访问）；
+//             · 中文期刊 → 知网 RSS，没有 RSS 的走官网当期目录；
+//             · 期刊官网自带 RSS（JMLR）→ 直接读 RSS；
+//             · 会议 → 抓官网论文集目录（见 confFeed.js），NeurIPS/ICML/CVPR/ACL/IJCAI/USENIX/ECCV。
 //
 // 本模块只同步公开的书目信息/摘要/DOI/出版社文章页；不抓取或分发受版权保护的 PDF 全文。
 
 import { fetchCnJournalArticles } from './cnJournalFeed.js';
 import { fetchCnkiJournalArticles, CNKI_CODES } from './cnkiRss.js';
+import { fetchConferenceArticles } from './confFeed.js';
+import { fetchRssArticles } from './rssFeed.js';
+import { CCF_JOURNALS, CCF_CONFERENCES, ccfIdsOf, ccfIdsByCategory } from './ccfVenues.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const CROSSREF_API = 'https://api.crossref.org/journals';
@@ -92,7 +100,7 @@ export const CN_A_JOURNALS = [
   };
 });
 
-export const ALL_JOURNALS = [...UTD_JOURNALS, ...CN_A_JOURNALS];
+export const ALL_JOURNALS = [...UTD_JOURNALS, ...CN_A_JOURNALS, ...CCF_JOURNALS, ...CCF_CONFERENCES];
 
 export const JOURNAL_SETS = [
   {
@@ -106,6 +114,20 @@ export const JOURNAL_SETS = [
     label: '中国 · 国家自然科学基金委管理科学部 A 类（22 种）',
     note: '21 种走知网期刊 RSS（带作者与摘要节选），其余抓官网当期目录；可按刊切换',
     journalIds: CN_A_JOURNALS.map((journal) => journal.id),
+  },
+  {
+    id: 'ccfA',
+    label: '计算机 · CCF-A（期刊 + 会议）',
+    note: '英文刊走出版社 DOI 元数据，中文刊走知网 RSS（没有 RSS 的抓官网目录），会议抓官网论文集目录',
+    collapsible: true,
+    journalIds: ccfIdsOf('A'),
+  },
+  {
+    id: 'ccfB',
+    label: '计算机 · CCF-B（期刊 + 会议）',
+    note: '同上；中文刊等级对应《计算领域高质量科技期刊分级目录》T2',
+    collapsible: true,
+    journalIds: ccfIdsOf('B'),
   },
 ];
 
@@ -135,6 +157,12 @@ export const JOURNAL_PRESETS = {
     label: '中国 · 经济金融',
     journalIds: CN_A_JOURNALS.filter((journal) => ['经济与金融', '公共管理与情报'].includes(journal.category)).map((journal) => journal.id),
   },
+  ccfAAll: { label: '计算机 · CCF-A 全部', journalIds: ccfIdsOf('A') },
+  ccfBAll: { label: '计算机 · CCF-B 全部', journalIds: ccfIdsOf('B') },
+  ccfAI: { label: '计算机 · 人工智能', journalIds: [...ccfIdsByCategory('A', ['人工智能', '自然语言处理', '计算机视觉']), ...ccfIdsByCategory('B', ['人工智能', '自然语言处理', '计算机视觉'])] },
+  ccfSystems: { label: '计算机 · 系统 / 网络 / 安全', journalIds: [...ccfIdsByCategory('A', ['系统与存储', '网络与安全']), ...ccfIdsByCategory('B', ['系统与存储', '网络与安全'])] },
+  ccfSe: { label: '计算机 · 软件工程 / 数据库', journalIds: [...ccfIdsByCategory('A', ['软件工程', '数据库与信息检索']), ...ccfIdsByCategory('B', ['软件工程', '数据库与信息检索'])] },
+  ccfTop: { label: '计算机 · 只看 A 类会议', journalIds: ccfIdsOf('A', 'conference') },
 };
 
 export function dayKey(value = new Date()) {
@@ -177,8 +205,14 @@ export function catalogFor(stateInput) {
   const prefs = stateInput?.sourcePrefs || {};
   return ALL_JOURNALS.map((journal) => {
     const merged = overrides[journal.id] ? { ...journal, feedUrl: overrides[journal.id] } : journal;
-    if (merged.set !== 'cnA') return merged;
-    const wanted = prefs[journal.id] === 'cnki' || prefs[journal.id] === 'site' ? prefs[journal.id] : merged.provider;
+    // 会议只有一条路：抓官网论文集目录
+    if (merged.kind === 'conference') return { ...merged, sourceId: 'conf', sourcePref: '' };
+    // 中文刊（NSFC A 类 + CCF 中文刊）可以在知网 RSS / 官网目录之间切换
+    const switchable = merged.set === 'cnA' || (merged.set === 'ccf' && merged.language === 'zh');
+    if (!switchable) return { ...merged, sourceId: merged.provider === 'rss' ? 'rss' : 'crossref', sourcePref: '' };
+    const wanted = prefs[journal.id] === 'cnki' || prefs[journal.id] === 'site'
+      ? prefs[journal.id]
+      : (merged.provider === 'site' ? 'site' : 'cnki');
     let sourceId = wanted;
     if (sourceId === 'cnki' && !merged.cnkiCode) sourceId = 'site';
     if (sourceId === 'site' && !merged.feedUrl && merged.cnkiCode) sourceId = 'cnki';
@@ -262,11 +296,14 @@ function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
 }
 
-const SOURCE_LABEL = { crossref: 'Crossref', cnki: '知网 RSS', site: '期刊官网' };
+const SOURCE_LABEL = { crossref: 'Crossref', cnki: '知网 RSS', site: '期刊官网', rss: '官网 RSS', conf: '会议官网' };
 
-/** 一个刊这次要依次尝试的数据源：首选在前，失败自动退到备选 */
+/** 一个场馆这次要依次尝试的数据源：首选在前，失败自动退到备选 */
 function sourceAttempts(journal) {
-  if (journal.set !== 'cnA') return ['crossref'];
+  if (journal.kind === 'conference') return ['conf'];
+  if (journal.provider === 'rss') return ['rss'];
+  const switchable = journal.set === 'cnA' || (journal.set === 'ccf' && journal.language === 'zh');
+  if (!switchable) return ['crossref'];
   const primary = journal.sourceId || journal.provider;
   const order = primary === 'site' ? ['site', 'cnki'] : ['cnki', 'site'];
   const usable = order.filter((source) => (source === 'cnki' ? Boolean(journal.cnkiCode) : Boolean(journal.feedUrl)));
@@ -277,6 +314,8 @@ function sourceAttempts(journal) {
 async function fetchFromSource(sourceId, journal, { fetchImpl, rows }) {
   if (sourceId === 'cnki') return fetchCnkiJournalArticles(journal, { fetchImpl });
   if (sourceId === 'site') return fetchCnJournalArticles(journal, { fetchImpl });
+  if (sourceId === 'rss') return fetchRssArticles(journal, { fetchImpl });
+  if (sourceId === 'conf') return fetchConferenceArticles(journal, { fetchImpl });
   const params = new URLSearchParams({ filter: 'type:journal-article', sort: 'published', order: 'desc', rows: String(Math.max(1, Math.min(100, rows))) });
   const response = await fetchImpl(`${CROSSREF_API}/${encodeURIComponent(journal.issn)}/works?${params}`, {
     headers: { Accept: 'application/json', 'User-Agent': 'worlex/1.9 (mailto:research@example.invalid)' },
@@ -286,7 +325,7 @@ async function fetchFromSource(sourceId, journal, { fetchImpl, rows }) {
   return (payload?.message?.items || []).map((item) => mapCrossrefWork(item, journal));
 }
 
-export async function syncJournals(stateInput, journalIds, { fetchImpl = globalThis.fetch, rows = 50 } = {}) {
+export async function syncJournals(stateInput, journalIds, { fetchImpl = globalThis.fetch, rows = 50, force = false } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('当前运行环境不支持网络请求，无法同步期刊元数据');
   const state = createTopJournalState(stateInput);
   const catalog = catalogFor(state);
@@ -295,6 +334,10 @@ export async function syncJournals(stateInput, journalIds, { fetchImpl = globalT
   const synced = [];
   const failed = [];
   const fetched = [];
+  // 会议目录页动辄 3~7 MB（CVPR 全量），签到每天都会跑一次；
+  // 三小时内抓过且库里还有文章就跳过，避免「一天点三次签到就下 20 MB」。
+  const FRESH_MS = 3 * 3600 * 1000;
+  const hasArticlesFor = (id) => state.articles.some((article) => article.journalId === id);
   // 限制并发为 3，既比逐刊串行快，也避免对 Crossref / 知网 / 期刊官网造成突发请求。
   const queue = [...wanted];
   const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
@@ -304,15 +347,33 @@ export async function syncJournals(stateInput, journalIds, { fetchImpl = globalT
       const attempts = sourceAttempts(journal);
       const errors = [];
       let done = false;
+      if (!force && journal.kind === 'conference') {
+        const prev = state.sync[id] || {};
+        const fresh = prev.lastSuccessAt && Date.now() - Date.parse(prev.lastSuccessAt) < FRESH_MS;
+        if (fresh && hasArticlesFor(id)) {
+          synced.push({ journalId: id, count: 0, provider: 'conf', cached: true });
+          continue;
+        }
+      }
       for (const sourceId of attempts) {
         try {
           const articles = await fetchFromSource(sourceId, journal, { fetchImpl, rows });
           fetched.push(...articles);
+          const sourceUrl = sourceId === 'cnki'
+            ? `https://rss.cnki.net/knavi/rss/${journal.cnkiCode}`
+            : sourceId === 'site'
+              ? (journal.feedUrl || '')
+              : sourceId === 'rss'
+                ? (journal.rssUrl || '')
+                : sourceId === 'conf'
+                  ? (articles.meta?.url || '')
+                  : '';
           state.sync[id] = {
             lastSuccessAt: new Date().toISOString(),
             sourceId,
             source: SOURCE_LABEL[sourceId],
-            sourceUrl: sourceId === 'cnki' ? `https://rss.cnki.net/knavi/rss/${journal.cnkiCode}` : sourceId === 'site' ? (journal.feedUrl || '') : '',
+            sourceUrl,
+            edition: sourceId === 'conf' ? String(articles.meta?.year || '') : '',
             count: articles.length,
             error: '',
           };

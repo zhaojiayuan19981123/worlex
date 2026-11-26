@@ -3615,6 +3615,13 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 .tj-group-meta { margin-left:auto; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
 .tj-journal-options { display:grid; grid-template-columns:repeat(2,minmax(260px,1fr)); gap:7px 12px; }
 .tj-journal-options label { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:8px; min-width:0; padding:8px 9px; border:1px solid var(--border-soft); border-radius:7px; cursor:pointer; }
+.tj-journal-options .tj-badges { display:flex; align-items:center; justify-content:flex-end; gap:4px; min-width:0; overflow:hidden; }
+/* 徽标在这张密集列表里要更小：CCF 行一行最多三枚（等级 / 会议 / 数据源），留够刊名的位置 */
+.tj-journal-options .tj-ccf,
+.tj-journal-options .tj-kind,
+.tj-journal-options .tj-src { font-size:9px; padding:0 5px; }
+.tj-journal-options .tj-ccf i { font-size:8px; margin-left:3px; }
+.tj-journal-options b { min-width:56px; }
 .tj-journal-options input { accent-color:var(--primary); }
 .tj-journal-options span { min-width:0; display:flex; align-items:baseline; gap:7px; }
 .tj-journal-options b { color:var(--text); font-size:12px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -3624,15 +3631,41 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 .tj-src { font-style:normal; font-size:10px; line-height:1.6; padding:1px 6px; border-radius:9px; border:1px solid var(--border); color:var(--muted); background:var(--bg); white-space:nowrap; }
 .tj-src.is-on { color:var(--primary); border-color:color-mix(in srgb, var(--primary) 40%, var(--border)); background:color-mix(in srgb, var(--primary) 8%, transparent); }
 .tj-src.is-off { color:var(--warn, #b8860b); border-style:dashed; }
+/* CCF 等级徽标：A 红、B 黄，中文刊在徽标里带一句「中文 T1/T2」的后缀 */
+.tj-ccf { font-style:normal; font-size:10px; line-height:1.6; padding:1px 6px; border-radius:9px; white-space:nowrap; font-weight:700;
+  border:1px solid color-mix(in srgb, var(--border) 70%, transparent); color:var(--text-2); background:var(--bg); }
+.tj-ccf.is-a { color:#b3261e; border-color:color-mix(in srgb, #b3261e 45%, var(--border)); background:color-mix(in srgb, #b3261e 9%, transparent); }
+.tj-ccf.is-b { color:#8a6100; border-color:color-mix(in srgb, #b8860b 45%, var(--border)); background:color-mix(in srgb, #b8860b 11%, transparent); }
+.tj-ccf i { font-style:normal; font-weight:500; opacity:.78; margin-left:4px; font-size:9px; }
+[data-theme="dark"] .tj-ccf.is-a { color:#ff9b91; }
+[data-theme="dark"] .tj-ccf.is-b { color:#e8c268; }
+/* 期刊 / 会议 类型徽标 */
+.tj-kind { font-style:normal; font-size:10px; line-height:1.6; padding:1px 6px; border-radius:9px; color:var(--muted);
+  border:1px dashed color-mix(in srgb, var(--border) 80%, transparent); background:transparent; white-space:nowrap; }
+.tj-kind.is-conf { color:var(--primary); border-style:solid; border-color:color-mix(in srgb, var(--primary) 35%, var(--border)); }
 .tj-no-link { width:14px; }
 /* 期刊分组（UTD 24 / 中国 A 类）之间用更重的分隔，避免 46 本混成一锅 */
 .tj-journal-set { margin-top:18px; padding-top:4px; }
+/* CCF 两组默认折叠：近 80 个场馆全展开会把「期刊管理」拉成好几屏 */
+.tj-set-fold { border:1px solid var(--border); border-radius:12px; padding:10px 14px; background:var(--panel-soft, transparent); }
+.tj-set-fold > summary { cursor:pointer; display:flex; align-items:flex-start; justify-content:space-between; gap:12px; list-style:none; }
+.tj-set-fold > summary::-webkit-details-marker { display:none; }
+.tj-set-fold > summary::before { content:'▸'; color:var(--muted); margin-right:8px; line-height:1.5; }
+.tj-set-fold[open] > summary::before { content:'▾'; }
+.tj-set-fold > summary > div { min-width:0; display:flex; flex-direction:column; gap:3px; flex:1; }
+.tj-set-fold > summary b { font-size:14px; color:var(--text); }
+.tj-set-fold > summary small { font-size:11px; color:var(--muted); line-height:1.5; }
+.tj-set-fold > summary .tj-group-meta { flex:none; }
 .tj-journal-set + .tj-journal-set { border-top:1px solid var(--border); margin-top:22px; padding-top:16px; }
 .tj-set-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .tj-set-head > div { min-width:0; display:flex; flex-direction:column; gap:3px; }
 .tj-set-head b { font-size:14px; color:var(--text); }
 .tj-set-head small { font-size:11px; color:var(--muted); line-height:1.5; }
 .tj-set-head .tj-preset { flex:none; }
+.tj-set-head-slim { justify-content:flex-end; margin-bottom:6px; }
+/* CCF 组一行最多三枚徽标，双列会把刊名压成省略号 → 这两组改单列 */
+.tj-journal-set.is-rich .tj-journal-options { grid-template-columns:1fr; }
+.tj-journal-set.is-rich .tj-journal-options b { min-width:0; }
 /* 中国期刊目录页设置 */
 .tj-feed-box { margin-top:20px; padding-top:14px; border-top:1px dashed var(--border); }
 .tj-feed-box summary { cursor:pointer; color:var(--text-2); font-size:12px; font-weight:600; }

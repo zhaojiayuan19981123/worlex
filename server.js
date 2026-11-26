@@ -2838,7 +2838,7 @@ export function createApp({
     }
   });
 
-  // ---------- 顶刊追踪（UTD 24 + 中国 NSFC 管理科学部 A 类 22 种） ----------
+  // ---------- 顶刊追踪（UTD 24 + 中国 NSFC A 类 22 种 + 计算机 CCF-A / CCF-B 期刊与会议） ----------
   // 采集的是公开书目信息、摘要、DOI 与出版社原文页；不下载或分发受版权保护的全文。
   function topJournalArticlePayload(state, article) {
     return {
@@ -3040,7 +3040,10 @@ export function createApp({
     const current = createTopJournalState(store.getTopJournals());
     const journal = ALL_JOURNALS.find((item) => item.id === req.params.id);
     if (!journal) return res.status(404).json({ error: '期刊不存在' });
-    if (journal.set !== 'cnA') return res.status(400).json({ error: '只有中文期刊可以切换数据源' });
+    if (journal.kind === 'conference') return res.status(400).json({ error: '会议固定抓官网论文集目录，不能切换数据源' });
+    if (!(journal.set === 'cnA' || (journal.set === 'ccf' && journal.language === 'zh'))) {
+      return res.status(400).json({ error: '只有中文期刊可以切换数据源（知网 RSS / 官网目录）' });
+    }
     const raw = String(req.body?.source ?? '').trim();
     if (raw && raw !== 'cnki' && raw !== 'site') return res.status(400).json({ error: '数据源只能是 cnki 或 site' });
     if (raw) current.sourcePrefs[journal.id] = raw;
@@ -3065,7 +3068,8 @@ export function createApp({
     const current = createTopJournalState(store.getTopJournals());
     const requested = Array.isArray(req.body?.journalIds) ? req.body.journalIds : current.selectedJournalIds;
     try {
-      const result = await syncJournals(current, requested);
+      // 手动点「同步最新文章」= 用户明确要求刷新，跳过会议的三小时新鲜度缓存
+      const result = await syncJournals(current, requested, { force: true });
       store.saveTopJournals(result.state);
       res.json({ ...topJournalPayload(result.state), synced: result.synced, failed: result.failed });
     } catch (e) {
@@ -3082,7 +3086,8 @@ export function createApp({
       if (!current.articles.length) {
         // 只订了中文刊时，失败原因几乎都是数据源没配好（知网 RSS 不通 / 目录页没填），提示要指向那一步
         const onlyChinese = current.selectedJournalIds.length > 0
-          && current.selectedJournalIds.every((id) => ALL_JOURNALS.find((journal) => journal.id === id)?.set === 'cnA');
+          && current.selectedJournalIds.every((id) => ALL_JOURNALS.find((journal) => journal.id === id)?.kind === 'journal'
+            && ALL_JOURNALS.find((journal) => journal.id === id)?.language === 'zh');
         const hint = onlyChinese
           ? '暂未同步到可投递文章：中文刊需要能取到当期文章，请到「期刊管理 → 中国期刊数据源」确认数据源（知网 RSS 或官网当期目录）后再同步'
           : '暂未同步到可投递文章，请检查网络后点击「同步最新文章」重试';
