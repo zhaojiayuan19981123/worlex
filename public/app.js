@@ -1817,6 +1817,29 @@
 
   // ============ 世图科研下载助手 ============
   let wlItems = [];            // 解析结果 [{ title, url, checked, done, imported }]
+  // 下载后落到哪个文库：老用户默认实证类，选择会记住，下次打开仍在原来的文库
+  const WL_DOC_TYPE_KEY = 'worldlib:targetDocType';
+  const WL_COLLECTION_KEY = 'worldlib:targetCollection';
+  const savedDocType = localStorage.getItem(WL_DOC_TYPE_KEY) || 'empirical';
+  let wlDocType = LIB_TYPES.includes(savedDocType) ? savedDocType : 'empirical';
+  let wlCollectionId = localStorage.getItem(WL_COLLECTION_KEY) || '';
+
+  function wlTargetPayload() {
+    return { docType: wlDocType, collectionId: wlCollectionId || null };
+  }
+
+  // 目标文库/分类下拉：分类跟着文库走，切库后旧的分类 id 自动清空
+  function renderWlTargets() {
+    const libSel = $('wlTargetLib');
+    const colSel = $('wlTargetCollection');
+    if (!libSel || !colSel) return;
+    libSel.value = wlDocType;
+    const cols = collections.filter((c) => c.docType === wlDocType);
+    if (wlCollectionId && !cols.some((c) => c.id === wlCollectionId)) wlCollectionId = '';
+    colSel.innerHTML = '<option value="">未分类</option>' + cols.map((c) =>
+      `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+    colSel.value = wlCollectionId;
+  }
 
   // 解析「标题：xxx 链接地址：xxx」文本（标题与链接可跨行或同行，支持多条）
   function parseWorldlibText(text) {
@@ -1832,6 +1855,7 @@
   }
 
   function renderWlList() {
+    renderWlTargets();
     const box = $('wlList');
     $('btnWlDownloadAll').disabled = !wlItems.length;
     $('btnWlImport').disabled = !wlItems.length;
@@ -1871,11 +1895,13 @@
     }));
   }
 
-  // 判断某条世图条目当前是否已存在于文献中心（按标题 / DOI 匹配真实数据，非会话标记）
+  // 判断某条世图条目当前是否已存在于「目标文库」（按标题 / DOI 匹配真实数据，非会话标记）。
+  // 只看目标文库：同一篇文献可以分别收在实证类、模型类、算法类等文库里。
   function wlInLibrary(it) {
     const key = String(it?.title || '').trim().toLowerCase();
     if (!key) return false;
     return items.some((r) => {
+      if ((r.docType || 'empirical') !== wlDocType) return false;
       const t = String(r.title || '').trim().toLowerCase();
       const d = String(r.doi || '').trim().toLowerCase();
       return t === key || (d && d === key);
@@ -1885,11 +1911,12 @@
   // 重新导入：清理文献中心里同标题/同 DOI 的旧记录后重新下载
   async function wlRedownloadOne(it) {
     if (!it?.url || it.state === 'downloading') return;
-    if (!confirm(`「${it.title.slice(0, 40)}」已在文献中心。\n\n重新导入会先删除文献中心里的同名旧记录（含其 PDF），再重新下载一份。\n\n确认继续？`)) return;
-    // 删除文献中心里的同名旧记录
+    if (!confirm(`「${it.title.slice(0, 40)}」已在${docTypeLabel(wlDocType)}文库。\n\n重新导入会先删除该文库里的同名旧记录（含其 PDF），再重新下载一份。\n\n确认继续？`)) return;
+    // 只删除目标文库里的同名旧记录，别动其它文库里的同一篇
     const key = String(it.title || '').trim().toLowerCase();
-    const stale = items.filter((r) => String(r.title || '').trim().toLowerCase() === key
-      || (String(r.doi || '').trim().toLowerCase() && String(r.doi || '').trim().toLowerCase() === key));
+    const stale = items.filter((r) => (r.docType || 'empirical') === wlDocType && (
+      String(r.title || '').trim().toLowerCase() === key
+      || (String(r.doi || '').trim().toLowerCase() && String(r.doi || '').trim().toLowerCase() === key)));
     for (const r of stale) {
       try { await api('/api/literature/' + r.id, { method: 'DELETE' }); } catch (_) { /* ignore */ }
     }
@@ -1906,11 +1933,11 @@
     try {
       const res = await api('/api/worldlib/download', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: it.title, url: it.url, overwrite: true }),
+        body: JSON.stringify({ title: it.title, url: it.url, overwrite: true, ...wlTargetPayload() }),
       });
       it.state = 'done'; it.imported = true;
       if (refresh) await loadItems();
-      toast(`「${it.title.slice(0, 24)}…」已下载 PDF 并导入文献中心`, 'success');
+      toast(`「${it.title.slice(0, 24)}…」已下载 PDF 并导入${docTypeLabel(wlDocType)}文库`, 'success');
     } catch (e) {
       it.state = 'error'; it.error = e.message;
       toast(e.message, 'error');
@@ -1924,7 +1951,7 @@
     const all = wlItems.filter((x) => !wlInLibrary(x) && x.state !== 'downloading');
     const list = onlyChecked ? all.filter((x) => x.checked) : all;
     if (!list.length) {
-      toast(onlyChecked ? '没有已勾选且需要导入的条目' : '所有条目都已在文献中心', 'error');
+      toast(onlyChecked ? '没有已勾选且需要导入的条目' : `所有条目都已在${docTypeLabel(wlDocType)}文库`, 'error');
       return;
     }
     let ok = 0, fail = 0;
@@ -1936,7 +1963,7 @@
     }
     await loadItems();
     const failMsg = fail ? `，失败 ${fail} 篇（可点击单条查看原因重试）` : '';
-    toast(`完成：成功下载并导入 ${ok} 篇${failMsg}`, fail ? 'error' : 'success');
+    toast(`完成：成功下载并导入 ${ok} 篇到${docTypeLabel(wlDocType)}文库${failMsg}`, fail ? 'error' : 'success');
   }
 
   async function wlImport() { return wlDownloadImport(true); }
@@ -3297,6 +3324,17 @@
       toast(`解析完成，新增 ${added} 条${parsed.length - added ? `（重复跳过 ${parsed.length - added} 条）` : ''}`, 'success');
     });
     $('btnWlClear').addEventListener('click', () => { $('wlInput').value = ''; wlItems = []; renderWlList(); });
+    $('wlTargetLib').addEventListener('change', (e) => {
+      wlDocType = LIB_TYPES.includes(e.target.value) ? e.target.value : 'empirical';
+      wlCollectionId = '';
+      localStorage.setItem(WL_DOC_TYPE_KEY, wlDocType);
+      localStorage.setItem(WL_COLLECTION_KEY, '');
+      renderWlList();   // 换库后「已在文献中心」的判断与按钮状态都要跟着变
+    });
+    $('wlTargetCollection').addEventListener('change', (e) => {
+      wlCollectionId = e.target.value;
+      localStorage.setItem(WL_COLLECTION_KEY, wlCollectionId);
+    });
     $('btnWlDownloadAll').addEventListener('click', () => wlDownloadImport(false));
     $('btnWlImport').addEventListener('click', wlImport);
 

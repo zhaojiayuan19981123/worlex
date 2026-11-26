@@ -655,6 +655,18 @@
           </div>
           <label class="field"><span>粘贴文本</span><textarea id="wlInput" rows="6" placeholder="标题：10.1093/jcr/ucaf065
 链接地址：https://research.worldlib.site/..."></textarea></label>
+          <div class="wl-targets">
+            <label class="field"><span>下载后导入到</span>
+              <select id="wlTargetLib">
+                <option value="empirical">实证类文库</option>
+                <option value="model">模型类文库</option>
+                <option value="algorithm">算法类文库</option>
+              </select>
+            </label>
+            <label class="field"><span>分类（可选）</span>
+              <select id="wlTargetCollection"><option value="">未分类</option></select>
+            </label>
+          </div>
           <div class="wl-actions">
             <button class="btn btn-primary" id="btnWlParse"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-search"/></svg>解析列表</button>
             <button class="btn" id="btnWlClear">清空</button>

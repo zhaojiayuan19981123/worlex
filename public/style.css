@@ -3194,6 +3194,9 @@ mark.anno-c-purple { color: var(--primary); background: none; }
 .wl-intro p { margin: 6px 0 0; color: var(--text-2); font-size: 13px; }
 .wl-intro pre { margin: 8px 0 0; padding: 10px 12px; background: var(--gray-soft); border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--text-2); }
 .wl-hint { color: var(--text-3) !important; font-size: 12px !important; }
+.wl-targets { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.wl-targets .field { margin: 0; flex: 0 1 260px; min-width: 200px; }
+.wl-targets select { width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
 .wl-actions { display: flex; align-items: center; gap: 10px; }
 .wl-list { display: flex; flex-direction: column; gap: 8px; }
 .wl-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }

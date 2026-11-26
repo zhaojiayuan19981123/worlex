@@ -4812,11 +4812,24 @@ export function createApp({
     res.json({ ok: true, removed });
   });
 
-  // ---------- 世图科研下载助手：批量导入到文献中心 ----------
+  // ---------- 世图科研下载助手 ----------
+  /**
+   * 下载/导入的目标文库。老客户端不带这两个字段，默认仍进实证类文库；
+   * collectionId 必须属于所选文库，避免把文献塞进别的分类里。
+   */
+  function worldlibTarget(body) {
+    const docType = normalizeDocType(body?.docType || 'empirical');
+    const collectionId = checkedCollection(body?.collectionId ?? null, docType);
+    return { docType, collectionId };
+  }
+
   app.post('/api/worldlib/import', (req, res) => {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     if (!items.length) return res.status(400).json({ error: '没有可导入的文献' });
-    const list = store.listLiterature();
+    let target;
+    try { target = worldlibTarget(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
+    // 去重只看目标文库：同一篇文献可以同时收在实证类与算法类等不同文库里
+    const list = store.listLiterature().filter((r) => (r.docType || 'empirical') === target.docType);
     const existDoi = new Set(list.map((r) => String(r.doi || '').trim().toLowerCase()).filter(Boolean));
     const existTitle = new Set(list.map((r) => String(r.title || '').trim().toLowerCase()).filter(Boolean));
     let imported = 0;
@@ -4835,6 +4848,8 @@ export function createApp({
       rec.doi = isDoi ? title : '';
       rec.source = 'worldlib';
       rec.worldlibUrl = url.slice(0, 500);
+      rec.docType = target.docType;
+      rec.collectionId = target.collectionId;
       store.upsertLiterature(rec);
       list.push(rec);
       existTitle.add(titleKey);
@@ -5059,18 +5074,20 @@ export function createApp({
     const overwrite = req.body?.overwrite === true;
     if (!title || !url) return res.status(400).json({ error: '缺少标题或链接地址' });
     if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: '链接格式不正确' });
+    let target;
+    try { target = worldlibTarget(req.body); } catch (e) { return res.status(400).json({ error: e.message }); }
 
-    // 去重：标题或 DOI 已存在时，默认跳过并提示（避免重复导入）。
-    // 但前端「重新导入」会带 overwrite=true：此时改为覆盖旧记录，
+    // 去重：只看目标文库，标题或 DOI 已存在时默认跳过并提示（避免重复导入）。
+    // 但前端「重新导入」会带 overwrite=true：此时改为覆盖同文库里的旧记录，
     // 这样用户误删文献后再导入、或想刷新 PDF 版本时都能成功。
-    const list = store.listLiterature();
+    const list = store.listLiterature().filter((r) => (r.docType || 'empirical') === target.docType);
     const key = title.toLowerCase();
     const doiKey = /^10\.\d{4,9}\//.test(title) ? key : null;
     const dup = list.find((r) => String(r.title || '').trim().toLowerCase() === key
       || (doiKey && String(r.doi || '').trim().toLowerCase() === doiKey));
     let replaced = null;
     if (dup && !overwrite) {
-      return res.status(409).json({ error: '文献中心已有同名/同 DOI 文献，已跳过。如需重新下载请点「重新导入」', duplicate: true });
+      return res.status(409).json({ error: `${docTypeLabel(target.docType)}文库已有同名/同 DOI 文献，已跳过。如需重新下载请点「重新导入」`, duplicate: true });
     }
     if (dup && overwrite) replaced = dup;
 
@@ -5091,6 +5108,8 @@ export function createApp({
       rec.source = 'worldlib';
       rec.worldlibUrl = url.slice(0, 500);
       rec.worldlibFileUrl = String(finalUrl).slice(0, 800);
+      rec.docType = target.docType;
+      rec.collectionId = target.collectionId;
       Object.assign(rec, {
         originalName: safe + '.pdf',
         filename,

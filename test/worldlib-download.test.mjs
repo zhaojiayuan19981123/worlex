@@ -237,3 +237,103 @@ test('同名/同 DOI 已存在 → 409，带 duplicate 标记（前端据此提�
     await close(fileSrv); await close(server);
   }
 });
+
+// ---- v2.8.2：世图下载助手支持选择目标文库 ----
+async function pdfSite() {
+  return mockSite((_req, res) => pdfResponse(res));
+}
+
+test('指定 docType：PDF 落到所选文库，不带则仍然进实证类', async () => {
+  const { server: fileSrv, base: fileBase } = await pdfSite();
+  const { base, server } = await newApp();
+  try {
+    const model = await (await postDownload(base, `${fileBase}/m.pdf`, { docType: 'model' })).json();
+    assert.equal(model.record.docType, 'model');
+    assert.equal(store.getLiterature(model.record.id).docType, 'model');
+
+    const algo = await (await postDownload(base, `${fileBase}/a.pdf`, { docType: 'algorithm' })).json();
+    assert.equal(algo.record.docType, 'algorithm');
+
+    const legacy = await (await postDownload(base, `${fileBase}/legacy.pdf`)).json();
+    assert.equal(legacy.record.docType, 'empirical', '老客户端不带 docType 时保持原行为');
+  } finally {
+    await close(fileSrv); await close(server);
+  }
+});
+
+test('指定 collectionId：写进目标文库的分类；跨文库的分类要拒绝', async () => {
+  const { server: fileSrv, base: fileBase } = await pdfSite();
+  const { base, server } = await newApp();
+  try {
+    store.saveCollections([
+      { id: 'col-model', name: '计量模型', docType: 'model', createdAt: '' },
+      { id: 'col-algo', name: '图算法', docType: 'algorithm', createdAt: '' },
+    ]);
+    const ok = await postDownload(base, `${fileBase}/a.pdf`, { docType: 'algorithm', collectionId: 'col-algo' });
+    assert.equal(ok.status, 200);
+    const rec = (await ok.json()).record;
+    assert.equal(rec.docType, 'algorithm');
+    assert.equal(rec.collectionId, 'col-algo');
+
+    const bad = await postDownload(base, `${fileBase}/b.pdf`, { docType: 'model', collectionId: 'col-algo' });
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).error, /不属于当前文库/);
+    assert.equal(store.listLiterature().length, 1, '校验失败时不该留下记录');
+  } finally {
+    await close(fileSrv); await close(server);
+  }
+});
+
+test('重复判断按目标文库隔离：实证类已有的文献仍可导入模型类', async () => {
+  const { server: fileSrv, base: fileBase } = await pdfSite();
+  const { base, server } = await newApp();
+  try {
+    const first = await postDownload(base, `${fileBase}/a.pdf`); // empirical
+    assert.equal(first.status, 200);
+    const empiricalId = (await first.json()).record.id;
+
+    const second = await postDownload(base, `${fileBase}/a.pdf`, { docType: 'model' });
+    assert.equal(second.status, 200, '不同文库不该被当成重复');
+    const modelId = (await second.json()).record.id;
+    assert.equal(store.getLiterature(empiricalId).docType, 'empirical', '不能把实证类里的旧记录改掉');
+    assert.equal(store.getLiterature(modelId).docType, 'model');
+
+    const third = await postDownload(base, `${fileBase}/a.pdf`, { docType: 'model' });
+    assert.equal(third.status, 409, '同一文库内仍然要去重');
+    assert.match((await third.json()).error, /模型类文库已有同名/);
+    assert.equal(store.listLiterature().length, 2);
+  } finally {
+    await close(fileSrv); await close(server);
+  }
+});
+
+test('/api/worldlib/import 同样按所选文库写入，并校验分类', async () => {
+  const { base, server } = await newApp();
+  try {
+    store.saveCollections([{ id: 'col-m', name: '模型', docType: 'model', createdAt: '' }]);
+    const r = await fetch(`${base}/api/worldlib/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: [{ title: 'A Model Paper', url: 'https://example.com/a' }],
+        docType: 'model',
+        collectionId: 'col-m',
+      }),
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.imported, 1);
+    assert.equal(body.records[0].docType, 'model');
+    assert.equal(body.records[0].collectionId, 'col-m');
+
+    const bad = await fetch(`${base}/api/worldlib/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{ title: 'B' }], docType: 'model', collectionId: 'missing' }),
+    });
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).error, /目标分类不存在/);
+  } finally {
+    await close(server);
+  }
+});
