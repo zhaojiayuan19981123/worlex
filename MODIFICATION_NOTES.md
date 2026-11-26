@@ -1,3 +1,101 @@
+## v2.8.0：新增「方向分析」——主题检索 → 多选文献 → 大模型找研究空白与研究方向（2026-11-26）
+
+### 需求
+1. 用户给搜索词（支持高级搜索、支持多主题搜索），链接百度学术或 X-MOL，取回文献与摘要；
+2. 用户多选文献，根据摘要用大模型分析，找出研究空白与研究方向。
+
+### 一、数据源：为什么不是百度学术 / X-MOL
+
+先探测再动手（`.debug` 里的两个探针）：
+
+| 站点 | 实测 |
+| --- | --- |
+| 百度学术 `xueshu.baidu.com/s?wd=...` | **403**，返回「百度安全验证」壳页（2.5 KB，`<title>百度安全验证</title>`） |
+| X-MOL `www.x-mol.com/paper/search/q?option=...` | 200，61 KB，但正文是「共有 0 个结果 / 暂无搜索结果」，列表靠登录后的前端接口渲染 |
+
+结论：两者都要登录 / 人机验证，服务端没有稳定入口。**需求的核心是「拿到文献与摘要」**，来源是手段，
+所以检索改走 **OpenAlex**（`api.openalex.org/works`）：免密钥、带摘要（`abstract_inverted_index` 还原）、
+带引用数与 DOI、有 OA 全文链接，实测 1~2 秒返回。
+
+百度学术 / X-MOL 没有丢：改成侧栏底部的「去网页看」**跳转按钮**（`linksFor()` 用同一组关键词拼 URL），
+登录和验证码交给用户自己的浏览器。
+
+### 二、检索层（src/directionSearch.js）
+
+- **关键词 → 查询**：逗号 / 分号 / 换行分隔成短语；含空格或连字符的短语加引号（`"large language model"`），
+  多条用 ` AND ` 连接。实测 `search="graph neural network" AND recommendation` 命中 47,627 篇，语义正确。
+- **多主题 = 多次查询 + 轮转合并**：不在一条查询里写括号。实测 `(transformer OR attention) AND recommendation`
+  返回 3,257,579 篇（括号没被识别成分组），所以 OR 只能靠多主题实现；合并后按主题轮转排列（每个主题都能进前列）、
+  DOI 优先去重、命中主题回填到 `topics`，上限 120 条。
+- **排除词本地过滤**：`recommendation NOT survey` 实测 5,870,754 篇 > 单词检索的 9,628,148 篇比例不对，
+  `-survey` 也只降到 3,757,577，语义不可信 → 改为拿到结果后按「标题 + 摘要是否包含」本地丢弃，并统计丢弃数。
+- **字段限定**：`default.search` 走 `search` 参数（服务端按相关度打分），其余走
+  `filter=title.search:` / `abstract.search:` / `title_and_abstract.search:` / `keyword.search:` / `raw_author_name.search:`。
+- **其他 filter**：`publication_year:2020-2025` / `>2019` / `<2020`、`cited_by_count:>19`、`type:`、`language:`、
+  `has_abstract:true`、`is_retracted:false`（默认排除撤稿，面板可关）。
+- **两个编码坑**：`filter` 的逗号是「多个 filter」的分隔符，**不能**整体 encodeURIComponent（会把 `,` 编成 `%2C`
+  使服务端当成一个值）；`:`、`|`、`>`、`<` 也必须原样。现在按「逐段编码 + 手拼逗号」处理。
+- **取数策略**：每主题 `per_page=5..50`；本地过滤后不够数、且上游还给了满一页时才翻第二页（最多两页）。
+- **失败隔离**：单个主题 500 / 超时只影响自己，`perTopic[].error` 带原因，其余主题照常出结果。
+
+### 三、分析层（src/directionAnalyze.js）
+
+- **提示词**：要求「只用所给摘要」「每条论断必须挂 evidence 编号」「空白要落在这批文献的共同边界上，
+  不准抄单篇的未来工作」「方向要给研究问题 / 技术路线 / 数据 / 贡献 / 风险」。输出**结构固定 JSON**：
+  `overview` / `gaps[]` / `directions[]` / `clusters[]` / `readingOrder[]` / `cautions[]`。
+- **为什么强制 JSON**：每条空白与方向都要挂证据编号，前端要能点编号跳回原文；Markdown 里这层关系只能靠正则猜。
+- **摘要预算**：`budget / 篇数` 动态分配，单篇夹在 500~1400 字；40 篇也不会把上下文撑爆。
+- **解析三级兜底**：① 直接切「首个 `{` 到最后一个 `}`」；② 被 `max_tokens` 截断时，从后往前试截断点 +
+  按括号栈补齐收尾（含「停在字符串中间」「停在 `,"key":` 中间」两种残局）；③ 都不行返回 `null`，
+  由上层报「模型输出不是可解析的 JSON」，**不产出空报告**。
+- **收敛**：evidence 里 `"文献3"` / `"3"` / 越界编号统一抠成 1..N 的整数（越界丢弃）；
+  置信度「高/中/低」与 `high/medium/low` 归一；难度同理；重复条目按标题去重；字段别名
+  （`summary`/`method`/`papers`/`rq`）都能落到标准结构。
+
+### 四、路由与存储（src/directionRoutes.js + store 的 direction-analysis.json）
+
+| 接口 | 作用 |
+| --- | --- |
+| `GET /api/direction` | 会话列表 + 元信息（字段 / 类型 / 排序 / 三种口径 / 上限） |
+| `GET /api/direction/session/:id` | 单个会话（候选文献 + 历史报告） |
+| `POST /api/direction/search` | 检索并落库；带 `sessionId` 时覆盖该会话的候选列表（保留标题与勾选） |
+| `PATCH /api/direction/session/:id` | 改标题 / 存勾选 |
+| `DELETE /api/direction/session/:id` | 删会话 |
+| `POST /api/direction/analyze` | 起后台任务，立刻返回 `jobId`（同一会话同时只允许一个） |
+| `GET /api/direction/job/:jobId` | 轮询：状态 / 已生成字数 / 用时 / 报告 |
+| `POST /api/direction/job/:jobId/cancel` | 取消 |
+| `GET /api/direction/markdown/:id` · `POST /api/direction/export-markdown` | 报告转 Markdown（复制 / 存进 Markdown 笔记） |
+
+**为什么分析要做成后台任务 + 轮询**：10~30 篇摘要、三四千字 JSON，本地 7B 模型两三分钟；
+一次 POST 到底容易被浏览器或代理掐断，也看不到进度。任务跑的是流式请求，`onDelta` 累加字数给前端显示。
+
+会话最多留 20 个、每个会话最多 10 份报告（文件要跟着数据备份走，不能无限胀）；选中集合永远与候选列表对齐
+（重新检索后不存在的 id 自动清掉）。数据文件已加入 `store.js` 的 `ALL_DATA_FILES`，备份 / 迁移 / 导出自动带上。
+
+### 五、界面（public/direction.js + direction.css）
+
+- 左侧**粘性**检索条件栏（主题卡可增删、字段 / 排除词逐主题设置、高级检索折叠），右侧「候选文献 / 分析报告」两页签。
+- 列表行式（不是卡片网格）：一屏 8~10 条，勾选与读标题是同一个动作；摘要默认 2 行，点开 1400 字。
+- 报告用卡片：空白卡（置信度徽标 + 证据编号）、方向卡（`dt/dd` 字段表 + 难度徽标 + 证据编号）、
+  主题簇、建议阅读顺序、使用边界、历史报告切换、复制 / 导出。
+- 点证据编号 → 切回列表、`scrollIntoView` 并高亮 1.4 秒（`.is-flash`）。
+- 全部颜色走 `--surface / --border / --primary …` token，深色与 900px 窄屏都验过；样式表里**没有写死颜色**
+  （`direction-wiring.test.mjs` 里有断言，防止后面改坏）。
+
+### 六、验证
+
+- 单元 / 接口测试新增 49 条：`direction-search`（22）、`direction-analyze`（15）、`direction-http`（7）、
+  `direction-wiring`（5）。全量 `node --test --test-concurrency=3` 984 条全通过。
+- 真实检索（本机直连）：中文 `生成式对抗网络` 1.3 秒 8 篇（`language:zh` 生效）；英文两主题
+  `diffusion model, sampling acceleration` + `graph neural network, recommendation` 1.4 秒 24 篇，
+  命中合计 41,073 篇，无重复、无超时。
+- 浏览器验证（Playwright + 真后端）：导航 / 挂载 / 空态 / 主题增删 / 高级检索 / 检索 16 篇 / 摘要展开 /
+  全选与手工勾选 / 无模型时的错误提示 / 页签切换 / 历史下拉 / 900px 栈式布局 / 深色主题 / 证据编号跳转 /
+  复制与导出 Markdown，全部通过，控制台无报错。
+- **未验证**：真实大模型对这批精选摘要的空白提炼质量。本机 `settings.json` 里的模型配置没有 API 密钥
+  （`activeProfileId` 为空、profile 的 key 未填），分析接口按设计返回 400「还没有可用的模型」；
+  报告渲染改用一份手写样例数据验证（`normalizeAnalysis` 真实跑过）。配好密钥后直接点「开始分析」即可。
+
 ## v2.7.0：顶刊追踪加入计算机 CCF-A / CCF-B 期刊与会议；中文文献不做版面识别；期刊等级补北大核心与 CCF（2026-11-26）
 
 ### 需求

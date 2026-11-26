@@ -28,6 +28,7 @@ let TOP_JOURNAL_ANALYSES_FILE = path.join(DATA_DIR, 'top-journal-analyses.json')
 let SPECIAL_ISSUES_FILE = path.join(DATA_DIR, 'special-issues.json');
 let PAPER_NOTES_FILE = path.join(DATA_DIR, 'paper-notes.json');
 let PAPER_CHATS_FILE = path.join(DATA_DIR, 'paper-chats.json');
+let DIRECTION_FILE = path.join(DATA_DIR, 'direction-analysis.json');
 
 export function configure({ dataDir }) {
   if (dataDir) {
@@ -53,6 +54,7 @@ export function configure({ dataDir }) {
     SPECIAL_ISSUES_FILE = path.join(DATA_DIR, 'special-issues.json');
     PAPER_NOTES_FILE = path.join(DATA_DIR, 'paper-notes.json');
     PAPER_CHATS_FILE = path.join(DATA_DIR, 'paper-chats.json');
+    DIRECTION_FILE = path.join(DATA_DIR, 'direction-analysis.json');
   }
 }
 
@@ -148,6 +150,7 @@ const ALL_DATA_FILES = [
   'thesis-quotes.json', // 学位论文阅读：摘录素材库
   'thesis-bigpaper.json', // 学位论文阅读：关联的「我的大论文」框架与阶段
   'knowledge-base.json', // v2.1.0 本地知识库索引 + 主题聚类 + 文献关系图
+  'direction-analysis.json', // v2.8.0 方向分析：检索会话（主题 / 候选文献 / 分析报告）
 ];
 
 export function dataFileNames() {
@@ -677,6 +680,24 @@ export function upsertTopJournalAnalysis(record) {
 export function deleteTopJournalAnalysis(id) {
   const list = listTopJournalAnalyses(); const next = list.filter((item) => item.id !== id);
   if (next.length === list.length) return false; saveFile(TOP_JOURNAL_ANALYSES_FILE, next); return true;
+}
+
+// ---------- 方向分析（v2.8.0） ----------
+// 一次「检索 → 选文献 → 让模型找空白」的全过程存成一个 session：
+// topics 是检索条件，papers 是候选文献（含摘要，供二次分析用），
+// analyses 是历次分析报告。整个文件跟着数据目录一起备份 / 迁移。
+export function getDirectionState() {
+  return loadFile(DIRECTION_FILE, {
+    version: 1,
+    sessions: [],
+    activeSessionId: '',
+    preferences: { model: '', abstractChars: 1100, maxPapers: 30, language: 'zh' },
+  });
+}
+
+export function saveDirectionState(value) {
+  saveFile(DIRECTION_FILE, value && typeof value === 'object' ? value : getDirectionState());
+  return value;
 }
 
 // ---------- 阅读器笔记（按文献 id，一份笔记两种视图：Markdown / 思维导图） ----------

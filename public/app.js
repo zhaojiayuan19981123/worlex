@@ -203,6 +203,7 @@
     thesis: { name: '学位论文', sub: '学位论文库与精读' },
     topjournals: { name: '顶刊追踪', sub: '目标期刊动态与投稿窗口' },
     specialissue: { name: 'SI 征稿', sub: '专刊征稿、截止日期与领域热点' },
+    direction: { name: '方向分析', sub: '主题检索 → 多选文献 → 研究空白与方向' },
     papers: { name: '论文进度', sub: '在投 / 返修论文的推进状态' },
     projects: { name: '项目管理', sub: '课题、文献与任务的归集' },
     tasks: { name: '任务安排', sub: '待办清单与时间安排' },
@@ -12491,7 +12492,7 @@
   async function switchView(v) {
     view = v;
     document.querySelectorAll('.nav-item[data-view]').forEach((n) => n.classList.toggle('active', n.dataset.view === v));
-    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', specialissue: 'viewSpecialIssue', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
+    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', specialissue: 'viewSpecialIssue', direction: 'viewDirection', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
     for (const [key, id] of Object.entries(map)) $(id).classList.toggle('hidden', key !== v);
     // 顶栏「当前页面」指示：15 个模块靠它定位，避免在导航之间迷路
     const page = VIEW_META[v];
@@ -12518,6 +12519,7 @@
     if (v !== 'achievements') window.AchievementView?.close?.();
     if (v !== 'graph') window.GraphView?.close?.();
     if (v !== 'specialissue') window.SpecialIssueView?.close?.();
+    if (v !== 'direction') window.DirectionView?.close?.();
     // 顶栏搜索已移入侧边栏（只对文献中心生效），这里改用 CSS 控制整块搜索区的显隐
     const searchBox = document.querySelector('.side-search');
     if (searchBox) searchBox.classList.toggle('hidden', !isLib);
@@ -12542,11 +12544,13 @@
     // 成果管理：DOM 同样由 achievements.js 自建（含可收起的二级侧边栏）
     if (v === 'achievements') await window.AchievementView?.mount();
     // 带 AI 能力的视图统一补上「模型切换」下拉（放在最后，保证容器已经显示）
-    if (['ai', 'ideas', 'reviewer', 'notes', 'topjournals', 'papers'].includes(v)) renderAiModelRows();
+    if (['ai', 'ideas', 'reviewer', 'notes', 'topjournals', 'papers', 'direction'].includes(v)) renderAiModelRows();
     // 知识图谱：DOM 由 knowledge-graph.js 自建，首次进入挂载、之后仅刷新
     if (v === 'graph') await window.GraphView?.mount?.($('viewGraph'));
     // SI 征稿：DOM 由 special-issue.js 自建，首次进入挂载、之后仅刷新
     if (v === 'specialissue') await window.SpecialIssueView?.mount?.($('viewSpecialIssue'));
+    // 方向分析：DOM 由 direction.js 自建，首次进入挂载、之后仅刷新
+    if (v === 'direction') await window.DirectionView?.mount?.($('viewDirection'));
     if (v === 'ai') {
       renderChatMeta();
       if (!convLoaded) {
@@ -12570,6 +12574,7 @@
     ['reviewModelRow', 'review'],
     ['notesModelRow', 'notes'],
     ['topJournalModelRow', 'topjournal'],
+    ['dirModelRow', 'direction'],
     ['revTransModelRow', 'revtrans'],
   ];
   async function renderAiModelRows() {
@@ -15823,6 +15828,8 @@ a { color: #176b87; }
     setPrTab: (name) => switchPrTab(name),
     reveal: (id, mode) => revealLitFile(id, mode),
     toast, esc, api,
+    readModelPick,
+    writeModelPick: (key, id) => { if (id) localStorage.setItem('aiModel:' + key, id); else localStorage.removeItem('aiModel:' + key); },
     pdfDoc: () => pr.doc,
     scale: () => pr.scale,
     pageSizes: () => pr.pageSizes,

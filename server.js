@@ -56,6 +56,8 @@ import * as localGateway from './src/localGateway.js';
 import { ALL_JOURNALS, JOURNAL_SETS, JOURNAL_PRESETS, catalogFor, createTopJournalState, syncJournals, checkInAndCreateDelivery, deliveryArticles, recentArticles, historyArticles, deliveredArticleIds, setArticleFavorite, removeFavorites, removeHistoryArticles, calendarSummary, markArticleOpened } from './src/topJournals.js';
 // v2.2.0 SI 征稿追踪：ABS 期刊每日抓取、easyScholar 等级、一键翻译、知识图谱推荐与领域热点
 import { registerSpecialIssueRoutes } from './src/specialIssueRoutes.js';
+// v2.8.0 方向分析：主题检索（OpenAlex）→ 多选文献 → 大模型找研究空白与研究方向
+import { registerDirectionRoutes } from './src/directionRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -5539,6 +5541,18 @@ export function createApp({
     resolveRequestModel,
     fetchModelCompletion,
     readLLMResponse,
+    logger: (msg) => console.log(msg),
+  });
+
+  // ---------- 方向分析（v2.8.0） ----------
+  // 检索走 modelFetch（自动直连/代理切换），分析复用全站模型通道；
+  // 会话与报告存 data/direction-analysis.json，随数据备份一起走。
+  const directionService = registerDirectionRoutes(app, {
+    store,
+    resolveRequestModel,
+    fetchModelCompletion,
+    readLLMResponse,
+    fetchImpl: modelFetch,
     logger: (msg) => console.log(msg),
   });
 
