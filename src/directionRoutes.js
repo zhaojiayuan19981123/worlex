@@ -349,7 +349,7 @@ export function registerDirectionRoutes(app, {
       job, session, papers, mode,
       focus: clean(req.body?.focus),
       profile,
-      fetchModelCompletion, readLLMResponse,
+      fetchModelCompletion, readLLMResponse, log,
       onDone: (analysis) => {
         const record = {
           id: `rep-${randomUUID().slice(0, 8)}`,
@@ -447,7 +447,7 @@ export function registerDirectionRoutes(app, {
 /** 真正跑模型的那一段：与路由分开，方便单测直接喂假模型 */
 async function runAnalysis({
   job, session, papers, mode, focus, profile,
-  fetchModelCompletion, readLLMResponse, onDone,
+  fetchModelCompletion, readLLMResponse, onDone, log = () => {},
 }) {
   const messages = buildAnalysisMessages({ topics: session.topics, papers, mode, focus });
   const request = await fetchModelCompletion(profile, {
@@ -484,7 +484,8 @@ async function runAnalysis({
     }
     job.analysis = analysis;
     job.status = 'done';
-    onDone?.(analysis);
+    // 落盘失败不能让结果作废：报告已经拿到，用户至少还能在页面上看/复制
+    try { onDone?.(analysis); } catch (error) { log(`[方向分析] 报告落盘失败：${error.message}`); }
   } finally {
     try { request.cancel?.(); } catch { /* 忽略 */ }
   }

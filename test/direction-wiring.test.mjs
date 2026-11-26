@@ -45,6 +45,12 @@ test('前端模块：挂载约定与后端接口一一对上', () => {
   assert.match(js, /const esc = /);
   // 侧栏条件与「已保存会话」解耦：改条件不该立刻改历史
   assert.match(js, /selected: \[\.\.\.S\.selection\]/);
+  // 长任务要能取消：按钮只在分析中露出，且真的打了取消接口
+  assert.match(js, /data-dir="cancel"/);
+  assert.match(js, /\/cancel`, \{ method: 'POST'/);
+  assert.match(js, /classList\.toggle\('hidden', !running\)/);
+  // 切走再回来要接上轮询，否则会永远停在「分析中…」
+  assert.match(js, /S\.job\?\.status === 'running' && S\.job\.id && !S\.pollTimer/);
 });
 
 test('后端：路由已注册，数据文件进了备份清单', () => {

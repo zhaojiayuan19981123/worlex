@@ -1,0 +1,17 @@
+import { createRequire } from 'node:module';
+const require = createRequire('C:/Users/zjy1998/.workbuddy/binaries/node/workspace/package.json');
+const { chromium } = require('playwright-core');
+const browser = await chromium.launch({ executablePath: 'C:/Users/zjy1998/AppData/Local/ms-playwright/chromium-1208/chrome-win64/chrome.exe', headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errs = [];
+page.on('pageerror', (e) => errs.push(e.message));
+await page.goto('http://127.0.0.1:3014', { waitUntil: 'domcontentloaded' });
+await page.click('.nav-item[data-view="direction"]');
+await page.waitForSelector('.dir-shell');
+await page.waitForTimeout(400);
+const cancel = await page.$eval('[data-dir="cancel"]', (el) => ({ hidden: el.classList.contains('hidden'), text: el.textContent }));
+const run = await page.$eval('[data-dir="analyze"]', (el) => el.textContent);
+console.log('取消按钮', cancel, '| 分析按钮', run);
+await page.screenshot({ path: '.debug/ui-head.png', clip: { x: 420, y: 60, width: 1020, height: 90 } });
+console.log('errors', errs.length ? errs : '无');
+await browser.close();

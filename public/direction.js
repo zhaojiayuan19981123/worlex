@@ -85,6 +85,8 @@
     S.root = container;
     if (!S.topics.length) S.topics = [blankTopic()];
     refresh();
+    // 切走再回来时（分析还在跑），把轮询接上，否则会一直显示「分析中…」不更新
+    if (S.job?.status === 'running' && S.job.id && !S.pollTimer) startPoll(S.job.id);
   }
 
   function close() {
@@ -173,6 +175,7 @@
             </select>
             <div id="dirModelRow" class="ai-model-row dir-model-row"></div>
             <button class="btn btn-primary dir-run" data-dir="analyze">开始分析</button>
+            <button class="btn dir-cancel hidden" data-dir="cancel">取消</button>
           </div>
           <div class="dir-banner hidden" data-dir-banner></div>
           <div class="dir-pane" data-dirpane="papers"></div>
@@ -205,6 +208,7 @@
       if (name === 'del-topic') { removeTopic(action.closest('[data-topic-id]')?.dataset.topicId); return; }
       if (name === 'search') { doSearch(); return; }
       if (name === 'analyze') { doAnalyze(); return; }
+      if (name === 'cancel') { cancelAnalyze(); return; }
       if (name === 'select-all') { return; } // checkbox 由 change 处理
       if (name === 'jump-baidu' || name === 'jump-xmol') { jump(name === 'jump-baidu' ? 'baidu' : 'xmol'); return; }
       if (name === 'clear-selection') { S.selection.clear(); renderPapers(); return; }
@@ -424,11 +428,14 @@
       all.indeterminate = !checked && ids.some((id) => S.selection.has(id));
     }
     const run = $('[data-dir="analyze"]');
+    const cancel = $('[data-dir="cancel"]');
+    const running = S.job?.status === 'running';
     if (run) {
-      const running = S.job?.status === 'running';
       run.disabled = running || S.busy === 'search';
       run.textContent = running ? '分析中…' : '开始分析';
     }
+    // 跑长任务时才露出「取消」：本地 7B 模型能跑两三分钟，没有取消口子只能等
+    if (cancel) cancel.classList.toggle('hidden', !running);
     const searchBtn = $('[data-dir="search"]');
     if (searchBtn) {
       searchBtn.disabled = S.busy === 'search';
@@ -781,6 +788,21 @@
 
   function stopPoll() {
     if (S.pollTimer) { clearTimeout(S.pollTimer); S.pollTimer = null; }
+  }
+
+  async function cancelAnalyze() {
+    const jobId = S.job?.id;
+    if (!jobId) return;
+    try {
+      await api(`/api/direction/job/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', body: {} });
+      banner('已取消这次分析', { tone: 'warn' });
+    } catch (error) {
+      banner(error.message, { tone: 'error' });
+    }
+    stopPoll();
+    S.busy = '';
+    S.job = { ...S.job, status: 'error', error: '已取消' };
+    renderHead();
   }
 
   function currentRecordId() {
