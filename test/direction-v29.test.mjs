@@ -50,7 +50,9 @@ async function newApp({ fetchImpl, queryRankImpl, translateImpl, secretKey = '' 
     store,
     fetchImpl: fetchImpl || (async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ meta: { count: 2 }, results: [] }) })),
     queryRankImpl: queryRankImpl || (async () => ({ code: 404, msg: 'not found' })),
-    translateImpl: translateImpl || (async (text) => `标题：中文标题\n摘要：中文摘要（${text.length} 字）`),
+    translateImpl: translateImpl || (async (segments) => segments.map((s) => ({
+      id: s.id, translation: s.id.endsWith('|title') ? '中文标题' : `中文摘要（${s.text.length} 字）`, error: '',
+    }))),
     resolveRequestModel: () => ({ profile: { id: 'p1', provider: 'fake', baseURL: 'http://fake/v1', model: 'm' } }),
     fetchModelCompletion: async () => { throw new Error('not used'); },
     readLLMResponse: async () => '',
@@ -101,7 +103,7 @@ test('等级接口：配了 Key 就用 easyScholar 的 WoS 数据集判定', asy
   } finally { await ctx.cleanup(); }
 });
 
-test('翻译接口：结果写回会话，切会话回来还在', async () => {
+test('翻译接口：翻译引擎后台任务完成，结果写回会话，切会话回来还在', async () => {
   const ctx = await newApp({
     fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify({
       meta: { count: 1 }, results: [work(1, 'Nature')],
@@ -112,10 +114,19 @@ test('翻译接口：结果写回会话，切会话回来还在', async () => {
       topics: [{ name: 'T', keywords: 'graph' }], filters: DEFAULT_FILTERS,
     })).json();
     const id = search.session.papers[0].id;
-    const data = await (await post(ctx.base, '/api/direction/translate', {
+    const started = await (await post(ctx.base, '/api/direction/translate', {
       sessionId: search.session.id, paperIds: [id],
     })).json();
-    assert.equal(data.byId[id].titleZh, '中文标题');
+    assert.ok(started.jobId);
+    assert.equal(started.total, 1);
+    let job;
+    for (let i = 0; i < 20; i += 1) {
+      job = await (await fetch(`${ctx.base}/api/direction/translate/job/${started.jobId}`)).json();
+      if (job.status !== 'running') break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(job.status, 'done');
+    assert.equal(job.byId[id].titleZh, '中文标题');
     const again = await (await fetch(`${ctx.base}/api/direction/session/${search.session.id}`)).json();
     assert.equal(again.session.papers[0].titleZh, '中文标题');
     assert.match(again.session.papers[0].abstractZh, /^中文摘要/);

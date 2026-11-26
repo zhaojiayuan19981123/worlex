@@ -1,3 +1,44 @@
+## v3.0.0：方向分析扩到 50 篇 + 报告可视化 + 翻译引擎化 + arXiv 翻译与导入（2026-11-26）
+
+### 需求
+1. 方向分析最多分析 50 篇，支持一键选前 50 篇；2. 分析报告支持词云与主题关系图；
+3. 中文翻译改走翻译引擎，不要使用大模型；4. arXiv 支持翻译与批量翻译；
+5. arXiv 支持一键导入文献中心，并可选择不同文库。
+
+### 一、50 篇上限与一键全选
+
+- `src/directionRoutes.js`：`MAX_ANALYZE_PAPERS` 40 → **50**，并通过 `GET /api/direction` 的 `meta.limits` 暴露给前端；超过 50 篇直接 400。
+- `public/direction.js`：新增「一键选前 50 篇」按钮，「全选」也只勾前 50 篇；手动勾选到第 50 篇后继续勾选会提示并拒绝；「开始分析」超量时自动截取前 50 篇并提示。计数改为「已选 x / 50 篇」。
+
+### 二、报告可视化：纯 SVG 词云 + 主题关系图
+
+- 新增 `public/direction-viz.js`（在 `index.html` 中先于 `direction.js` 加载）：
+  - **词云**：从 `overview / gaps / directions / clusters / cautions` 与本次文献标题提取词频（簇名权重最高），中文用 2~4 gram + 停用词，黄金角螺线布局 + 碰撞检测，字号按权重映射到 13~38px，颜色走主题 token。
+  - **主题关系图**：节点 = 主题簇 / 研究空白 / 研究方向；两节点若引用同一篇证据文献就连边，边宽按重合篇数。170 次力导向迭代（斥力 + 边引力 + 回中力）后渲染，节点颜色区分类型，支持下载 SVG。
+- `public/direction.js` 的 `renderReport()` 新增「报告可视化」区，两个页签切换词云 / 关系图，附「下载 SVG」；`public/direction.css` 新增 `.dir-viz-*` 样式，深浅主题都可读。
+
+### 三、翻译改走翻译引擎（明确排除大模型）
+
+- 新增 `src/academicTranslate.js`：引擎白名单复用 `translateProviders.js` 的 `NON_LLM_PROVIDERS`，**排除 `siliconflow`（当前激活大模型）与 `builtin`（固定小模型，本质仍是 LLM）**；自动选引擎顺序 = 用户显式指定 > 已配密钥的引擎 > 全局非 LLM 偏好 > 有道网页版（免密钥）。按句读切段（≤850 字）、免费网页接口 800ms 限速、429/411 重试、失败自动降级到其它可用引擎。
+- 新增 `src/translateJobs.js`：批量翻译后台任务（POST 拿 jobId + GET 轮询 + 取消），与方向分析的任务模式一致，只存内存。
+- `server.js` 新增 `GET /api/translate/engines`：返回带 `configured` 标记的非大模型引擎清单。
+- `src/directionRoutes.js` 的 `POST /api/direction/translate` 改为后台任务：标题与摘要拆成两段分别送引擎（不再需要「标题：/摘要：」提示词），结果写回会话；新增 `GET /api/direction/translate/job/:id` 与 `POST .../cancel`，上限 50 篇。
+- 前端下拉可显式选引擎，选择记进 `localStorage`；进度条、取消按钮、部分失败提示都已接上。
+
+### 四、arXiv 翻译与一键导入
+
+- `src/arxivRoutes.js` 新增：`POST /api/arxiv/translate`（+ 轮询 / 取消）与 `POST /api/arxiv/import`。
+  - 翻译条目拆成 `id|title` / `id|abstract` 两段，复用同一套翻译引擎与后台任务；
+  - 导入复用 `blankRecord()` 与 `normalizeDocType()`，写全标题 / 中文标题、作者、摘要 / 中文摘要、年份、DOI、arXiv 编号 / 页面 / PDF、分类代码；校验 `collectionId` 必须属于目标文库；按 arXiv 编号 → DOI → 标题在**目标文库内**去重，同一篇可收进不同文库。
+- `public/arxiv.js` / `public/arxiv.css`：工具条新增翻译引擎下拉、批量译中文、目标文库 / 分类下拉、「导入勾选」「一键导入本页」；每条卡片新增勾选框、单篇「译中文」「导入」、中文标题 / 摘要与「已导入」徽标。译文存 `localStorage`，文库与分类选择也持久化。
+- `server.js` 注册 arXiv 路由时注入 `store` 与 `blankRecord`。
+
+### 验证
+
+- 新增 `test/academic-translate.test.mjs`（6 条）、`test/direction-v30.test.mjs`（4 条）、`test/arxiv-v30.test.mjs`（4 条），更新 `direction-v29` / `arxiv-wiring` 两处旧断言；全量 **1024 条测试通过**。
+- 真实翻译引擎实测：`POST /api/arxiv/translate` 提交 1 篇（2 段），约 0.9 秒返回「图神经网络推荐 / 我们利用图神经网络研究冷启动推荐。」，确认没有调用大模型。
+- 浏览器实测：一键选前 50 后计数为「已选 50 / 50 篇」；词云渲染 40 个词、关系图 4 个节点；方向分析与 arXiv 的译文、导入徽标均正常；深浅主题与 900px 窄屏无横向溢出、无控制台错误。
+
 ## v2.9.0：方向分析收紧取数口径 + 新增 arXiv 分类浏览（2026-11-26）
 
 ### 需求

@@ -50,6 +50,9 @@
     onlyWithAbstract: true, includeRetracted: false, sort: 'relevance', perTopic: 30,
   };
   const PAGE_SIZE = 10;
+  // 单次分析最多 50 篇：与后端 meta.limits.maxAnalyzePapers 对齐
+  const MAX_SELECT = 50;
+  const TRANSLATE_ENGINE_KEY = 'direction:translateEngine';
 
   const S = {
     mounted: false,
@@ -72,6 +75,11 @@
     rankLoading: false,
     rankNote: '',
     translating: false,
+    translateEngine: localStorage.getItem(TRANSLATE_ENGINE_KEY) || '',
+    translateJobId: '',
+    translateTimer: null,
+    engines: [],
+    vizTab: 'wordcloud',
     reportId: '',
     error: '',
     hint: '',
@@ -93,9 +101,11 @@
     }
     S.root = container;
     if (!S.topics.length) S.topics = [blankTopic()];
+    loadEngines();
     refresh();
     // 切走再回来时（分析还在跑），把轮询接上，否则会一直显示「分析中…」不更新
     if (S.job?.status === 'running' && S.job.id && !S.pollTimer) startPoll(S.job.id);
+    if (S.translateJobId && S.translating) pollTranslate(S.translateJobId);
   }
 
   function close() {
@@ -160,9 +170,12 @@
               <button class="seg-tab" data-dirtab="report">分析报告</button>
             </div>
             <div class="tb-spacer"></div>
-            <label class="dir-inline-check dir-all"><input type="checkbox" data-dir="select-all"> 全选</label>
-            <span class="dir-selcount" data-dir-selcount>已选 0 篇</span>
-            <button class="btn btn-sm" data-dir="translate-selected" title="把勾选文献的标题与摘要翻译成中文">翻译成中文</button>
+            <label class="dir-inline-check dir-all"><input type="checkbox" data-dir="select-all"> 全选（前50）</label>
+            <button class="btn btn-sm" data-dir="select-top50" title="一键勾选前 50 篇候选文献（单次分析上限）">一键选前 50 篇</button>
+            <span class="dir-selcount" data-dir-selcount>已选 0 / 50 篇</span>
+            <select class="dir-select dir-translate-engine" data-dir="translate-engine" title="翻译引擎（不使用大模型）"><option value="">翻译引擎：自动</option></select>
+            <button class="btn btn-sm" data-dir="translate-selected" title="用翻译引擎把勾选文献的标题与摘要译成中文">翻译成中文</button>
+            <button class="btn btn-sm hidden" data-dir="cancel-translate">取消翻译</button>
             <select class="dir-select" data-dir="mode" title="分析口径">
               <option value="both">空白 + 方向</option>
               <option value="gap">只找空白</option>
@@ -205,8 +218,12 @@
       if (name === 'analyze') { doAnalyze(); return; }
       if (name === 'cancel') { cancelAnalyze(); return; }
       if (name === 'select-all') { return; } // checkbox 由 change 处理
+      if (name === 'select-top50') { selectTop50(); return; }
       if (name === 'jump-baidu' || name === 'jump-xmol') { jump(name === 'jump-baidu' ? 'baidu' : 'xmol'); return; }
-      if (name === 'clear-selection') { S.selection.clear(); renderPapers(); return; }
+      if (name === 'clear-selection') { S.selection.clear(); renderPapers(); renderHead(); saveSelection(); return; }
+      if (name === 'cancel-translate') { cancelTranslate(); return; }
+      if (name === 'viz-tab') { S.vizTab = action.dataset.vizTab; renderReport(); return; }
+      if (name === 'download-svg') { downloadSvg(action.closest('.dir-viz')?.querySelector('svg')); return; }
       if (name === 'page-prev') { S.page = Math.max(1, S.page - 1); renderPapers(); return; }
       if (name === 'page-next') { S.page = Math.min(pageCount(), S.page + 1); renderPapers(); return; }
       if (name === 'translate-paper') { translatePapers([action.dataset.paperId]); return; }
@@ -241,10 +258,17 @@
       return;
     }
     if (target.matches('[data-dir="select-all"]')) {
-      const ids = visiblePapers().map((p) => p.id);
+      const ids = visiblePapers().map((p) => p.id).slice(0, MAX_SELECT);
       ids.forEach((id) => (target.checked ? S.selection.add(id) : S.selection.delete(id)));
+      if (visiblePapers().length > MAX_SELECT && target.checked) toast(`候选超过 ${MAX_SELECT} 篇，已勾选前 ${MAX_SELECT} 篇`, 'warn');
       renderPapers();
+      renderHead();
       saveSelection();
+      return;
+    }
+    if (target.matches('[data-dir="translate-engine"]')) {
+      S.translateEngine = target.value;
+      localStorage.setItem(TRANSLATE_ENGINE_KEY, S.translateEngine);
       return;
     }
     if (target.matches('[data-paper-id] input[type="checkbox"]')) {
@@ -280,6 +304,21 @@
   }
 
   // ==================== 数据 ====================
+
+  async function loadEngines() {
+    try {
+      const data = await api('/api/translate/engines');
+      S.engines = data.engines || [];
+    } catch { S.engines = []; }
+    const box = $('[data-dir="translate-engine"]');
+    if (!box) return;
+    // 已配密钥的排前面，免密钥的标出来；大模型引擎不会出现在清单里
+    const sorted = [...S.engines].sort((x, y) => Number(y.configured) - Number(x.configured));
+    const preferred = S.translateEngine && sorted.some((e) => e.id === S.translateEngine) ? S.translateEngine : '';
+    box.innerHTML = `<option value="">翻译引擎：自动</option>${sorted.map((e) =>
+      `<option value="${esc(e.id)}"${preferred === e.id ? ' selected' : ''}>${esc(e.label.replace(/（[^）]*）/g, ''))}${e.configured ? ' · 已配置' : ''}</option>`).join('')}`;
+    box.value = preferred;
+  }
 
   async function refresh() {
     try {
@@ -455,15 +494,22 @@
     const count = visiblePapers().length;
     const countBox = $('[data-dir-count]');
     if (countBox) countBox.textContent = String(count);
+    const cap = S.meta?.limits?.maxAnalyzePapers || MAX_SELECT;
     const sel = $('[data-dir-selcount]');
-    if (sel) sel.textContent = `已选 ${S.selection.size} 篇`;
+    if (sel) sel.textContent = `已选 ${S.selection.size} / ${cap} 篇`;
     const all = $('[data-dir="select-all"]');
     if (all) {
-      const ids = visiblePapers().map((p) => p.id);
+      const ids = visiblePapers().map((p) => p.id).slice(0, cap);
       const checked = ids.length > 0 && ids.every((id) => S.selection.has(id));
       all.checked = checked;
       all.indeterminate = !checked && ids.some((id) => S.selection.has(id));
     }
+    const top50 = $('[data-dir="select-top50"]');
+    if (top50) top50.disabled = !visiblePapers().length;
+    const translateBtn = $('[data-dir="translate-selected"]');
+    if (translateBtn) translateBtn.disabled = S.translating || !S.selection.size;
+    const cancelTranslateBtn = $('[data-dir="cancel-translate"]');
+    if (cancelTranslateBtn) cancelTranslateBtn.classList.toggle('hidden', !S.translating);
     const run = $('[data-dir="analyze"]');
     const cancel = $('[data-dir="cancel"]');
     const running = S.job?.status === 'running';
@@ -671,6 +717,26 @@
         ${analyses.map((r) => `<button class="dir-link${r.id === active.id ? ' is-active' : ''}" data-dir="switch-report" data-record-id="${esc(r.id)}">${esc(new Date(r.createdAt).toLocaleString('zh-CN'))} · ${r.paperCount} 篇</button>`).join('')}
       </div>` : '';
 
+    // 可视化只依赖报告文本与本次送进模型的文献，重绘很快，没必要另存一份数据
+    const vizPapers = order.map((id) => S.session?.papers.find((p) => p.id === id)).filter(Boolean);
+    const viz = window.DirectionViz ? `
+      <section class="dir-block dir-viz">
+        <h3>报告可视化
+          <span class="dir-viz-tabs">
+            <button class="dir-viz-tab${S.vizTab === 'wordcloud' ? ' active' : ''}" data-dir="viz-tab" data-viz-tab="wordcloud">词云</button>
+            <button class="dir-viz-tab${S.vizTab === 'graph' ? ' active' : ''}" data-dir="viz-tab" data-viz-tab="graph">主题关系图</button>
+          </span>
+          <span class="tb-spacer"></span>
+          <button class="dir-link" data-dir="download-svg" title="把当前图另存为 SVG">下载 SVG</button>
+        </h3>
+        <div class="dir-viz-body">${S.vizTab === 'graph'
+          ? window.DirectionViz.graphSvg(a, vizPapers)
+          : window.DirectionViz.wordCloudSvg(a, vizPapers)}</div>
+        <p class="dir-viz-note">${S.vizTab === 'graph'
+          ? '节点 = 主题簇 / 研究空白 / 研究方向；连线表示两者引用了同一篇证据文献，线越粗重合越多。'
+          : '字号 = 词在报告与所选文献标题里的重要程度；中文按 2~4 字短语提取，便于快速看出反复出现的概念。'}</p>
+      </section>` : '';
+
     pane.innerHTML = `
       <div class="dir-report tools">
         <div class="dir-report-meta">
@@ -685,6 +751,7 @@
       </div>
       ${history}
       ${a.overview ? `<section class="dir-block dir-overview"><h3>这批文献在做什么</h3><p>${esc(a.overview)}</p></section>` : ''}
+      ${viz}
       ${gaps ? `<section class="dir-block"><h3>研究空白 <span class="dir-n">${(a.gaps || []).length}</span></h3><div class="dir-cards">${gaps}</div></section>` : ''}
       ${directions ? `<section class="dir-block"><h3>研究方向 <span class="dir-n">${(a.directions || []).length}</span></h3><div class="dir-cards">${directions}</div></section>` : ''}
       ${clusters}${reading}${cautions}
@@ -693,8 +760,27 @@
 
   // ==================== 交互动作 ====================
 
+  function selectTop50() {
+    const cap = S.meta?.limits?.maxAnalyzePapers || MAX_SELECT;
+    const papers = visiblePapers();
+    if (!papers.length) { toast('先检索出候选文献', 'error'); return; }
+    S.selection = new Set(papers.slice(0, cap).map((p) => p.id));
+    S.page = 1;
+    renderPapers();
+    renderHead();
+    saveSelection();
+    toast(papers.length > cap ? `已勾选前 ${cap} 篇（单次分析上限）` : `已勾选全部 ${papers.length} 篇`, 'ok');
+  }
+
   function togglePaper(id, checked) {
     if (!id) return;
+    const cap = S.meta?.limits?.maxAnalyzePapers || MAX_SELECT;
+    if (checked && !S.selection.has(id) && S.selection.size >= cap) {
+      toast(`单次最多分析 ${cap} 篇，请先取消一些勾选`, 'error');
+      const row = S.root.querySelector(`[data-paper-id="${CSS.escape(id)}"]`);
+      if (row) { const box = row.querySelector('input[type="checkbox"]'); if (box) box.checked = false; }
+      return;
+    }
     if (checked) S.selection.add(id); else S.selection.delete(id);
     const row = S.root.querySelector(`[data-paper-id="${CSS.escape(id)}"]`);
     if (row) row.classList.toggle('is-checked', checked);
@@ -723,35 +809,88 @@
     if (btn) btn.textContent = open ? '收起' : '展开摘要';
   }
 
+  function applyTranslation(byId) {
+    let ok = 0, errors = 0;
+    for (const paper of visiblePapers()) {
+      const out = byId?.[paper.id];
+      if (!out) continue;
+      if (out.titleZh) paper.titleZh = out.titleZh;
+      if (out.abstractZh) paper.abstractZh = out.abstractZh;
+      if (out.error) errors += 1; else if (out.titleZh || out.abstractZh) ok += 1;
+    }
+    renderPapers();
+    return { ok, errors };
+  }
+
   async function translatePapers(ids) {
     if (S.translating) return;
+    const cap = S.meta?.limits?.maxTranslatePapers || MAX_SELECT;
     const valid = [...new Set(ids.filter(Boolean))]
       .filter((id) => visiblePapers().some((p) => p.id === id))
-      .slice(0, 20);
+      .slice(0, cap);
     if (!valid.length) { toast('请先勾选要翻译的文献', 'error'); return; }
     S.translating = true;
-    banner(`正在把 ${valid.length} 篇文献翻译成中文…`, { spin: true });
+    renderHead();
+    banner(`正在用翻译引擎翻译 ${valid.length} 篇文献的标题与摘要…（不走大模型）`, { spin: true });
     try {
       const data = await api('/api/direction/translate', {
         method: 'POST',
-        body: { sessionId: S.session?.id || '', paperIds: valid },
+        body: { sessionId: S.session?.id || '', paperIds: valid, engine: S.translateEngine || undefined },
       });
-      let ok = 0;
-      for (const paper of visiblePapers()) {
-        const out = data.byId?.[paper.id];
-        if (!out || out.error) continue;
-        paper.titleZh = out.titleZh;
-        paper.abstractZh = out.abstractZh;
-        ok += 1;
-      }
-      toast(ok ? `已翻译 ${ok} 篇` : (data.hint || '没有需要翻译的文献'), ok ? 'success' : '');
-      renderPapers();
+      if (data.skipped) { toast(data.hint || '所选文献都已翻译过'); S.translating = false; renderHead(); banner(''); return; }
+      S.translateJobId = data.jobId;
+      pollTranslate(data.jobId);
     } catch (e) {
-      toast(e.message, 'error');
-    } finally {
       S.translating = false;
-      banner('');
+      S.translateJobId = '';
+      renderHead();
+      banner(e.message, { tone: 'error' });
     }
+  }
+
+  function pollTranslate(jobId) {
+    clearTimeout(S.translateTimer);
+    const tick = async () => {
+      try {
+        const job = await api(`/api/direction/translate/job/${encodeURIComponent(jobId)}`);
+        if (job.byId && Object.keys(job.byId).length) applyTranslation(job.byId);
+        if (job.status === 'running') {
+          const pct = job.total ? Math.round(job.done / job.total * 100) : 0;
+          banner(`翻译引擎处理中：${job.done} / ${job.total} 段（${pct}%）。免费接口有频率限制，批量会慢一些…`, { spin: true });
+          S.translateTimer = setTimeout(tick, 1000);
+          return;
+        }
+        clearTimeout(S.translateTimer);
+        S.translating = false;
+        S.translateJobId = '';
+        renderHead();
+        if (job.status === 'done') {
+          const { ok, errors } = applyTranslation(job.byId);
+          toast(ok ? `已翻译 ${ok} 篇${errors ? `，${errors} 篇失败（可改用已配密钥的翻译引擎重试）` : ''}` : '没有译出内容，请换一个翻译引擎重试', ok ? 'ok' : 'error');
+          banner('', {});
+        } else {
+          banner(job.error || '翻译失败', { tone: 'error' });
+        }
+      } catch (e) {
+        clearTimeout(S.translateTimer);
+        S.translating = false;
+        S.translateJobId = '';
+        renderHead();
+        banner(e.message, { tone: 'error' });
+      }
+    };
+    tick();
+  }
+
+  async function cancelTranslate() {
+    const jobId = S.translateJobId;
+    if (!jobId) return;
+    try { await api(`/api/direction/translate/job/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', body: {} }); } catch { /* 已结束无所谓 */ }
+    clearTimeout(S.translateTimer);
+    S.translating = false;
+    S.translateJobId = '';
+    renderHead();
+    banner('已取消翻译', { tone: 'warn' });
   }
 
   // 展开摘要走委托（paperRow 里的按钮没有独立 handler）
@@ -813,6 +952,9 @@
   async function doAnalyze() {
     if (!S.session) { toast('先检索一次，再选文献分析', 'error'); return; }
     if (!S.selection.size) { toast('请先勾选至少 1 篇文献', 'error'); S.tab = 'papers'; renderPane(); return; }
+    const cap = S.meta?.limits?.maxAnalyzePapers || MAX_SELECT;
+    const picked = [...S.selection].slice(0, cap);
+    if (S.selection.size > cap) toast(`单次最多分析 ${cap} 篇，已取前 ${cap} 篇`, 'warn');
     const profileId = window.Worlex?.readModelPick?.('direction') || localStorage.getItem('aiModel:direction') || '';    S.busy = 'analyze';
     renderHead();
     banner('正在提交分析任务…', { spin: true });
@@ -821,12 +963,12 @@
         method: 'POST',
         body: {
           sessionId: S.session.id,
-          paperIds: [...S.selection],
+          paperIds: picked,
           mode: $('[data-dir="mode"]')?.value || 'both',
           profileId,
         },
       });
-      S.job = { id: data.jobId, status: 'running', chars: 0, analysis: null, paperIds: [...S.selection], mode: data.mode, model: data.model, paperCount: data.paperCount };
+      S.job = { id: data.jobId, status: 'running', chars: 0, analysis: null, paperIds: picked, mode: data.mode, model: data.model, paperCount: data.paperCount };
       startPoll(data.jobId);
     } catch (error) {
       S.busy = '';
@@ -893,6 +1035,23 @@
 
   function currentRecordId() {
     return S.session?.analyses?.find((r) => r.id === S.reportId)?.id || S.session?.analyses?.[0]?.id || '';
+  }
+
+  function downloadSvg(svg) {
+    if (!svg) { toast('当前没有可下载的图', 'error'); return; }
+    try {
+      const clone = svg.cloneNode(true);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('width', '1440');
+      clone.setAttribute('height', String(Math.round(1440 * (svg.viewBox.baseVal.height || 320) / (svg.viewBox.baseVal.width || 720))));
+      const xml = new XMLSerializer().serializeToString(clone);
+      const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `方向分析-${S.vizTab === 'graph' ? '主题关系图' : '词云'}.svg`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('SVG 已下载', 'ok');
+    } catch (e) { toast(`下载失败：${e.message}`, 'error'); }
   }
 
   async function exportMarkdown() {

@@ -33,6 +33,19 @@
 .ax-actions { display: flex; gap: 12px; margin-top: 7px; }
 .ax-pager { display: flex; align-items: center; gap: 8px; padding-top: 4px; font-size: 12px; color: var(--text-3); }
 .ax-empty { text-align: center; color: var(--text-3); padding: 40px 0; font-size: 13px; }
+/* 翻译 / 导入工具条 */
+.ax-import-bar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.ax-import-bar .tb-spacer { flex: 1 1 auto; }
+.ax-engine { max-width: 210px; }
+.ax-lib { max-width: 130px; }
+.ax-collection { max-width: 150px; }
+.ax-item.is-selected { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+.ax-check { flex: none; display: inline-flex; align-items: center; padding-top: 2px; }
+.ax-check input { accent-color: var(--primary); }
+.ax-zh-badge, .ax-imported-badge { flex: none; font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-3); }
+.ax-zh-badge { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.ax-imported-badge { color: var(--accent-gold); border-color: color-mix(in srgb, var(--accent-gold) 40%, var(--border)); }
+.ax-origin { margin-top: 3px; font-size: 11px; color: var(--text-3); overflow-wrap: anywhere; }
 @media (max-width: 1080px) {
   .ax-shell { grid-template-columns: minmax(0, 1fr); }
   .ax-side { max-height: 220px; }

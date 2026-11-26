@@ -26,5 +26,5 @@ test('前端：视图元信息 / switchView map / mount 与 close 都接上', ()
 
 test('后端：arXiv 路由已注册', () => {
   assert.match(server, /import \{ registerArxivRoutes \} from '\.\/src\/arxivRoutes\.js'/);
-  assert.match(server, /registerArxivRoutes\(app, \{ fetchImpl: modelFetch/);
+  assert.match(server, /registerArxivRoutes\(app, \{[\s\S]*?fetchImpl: modelFetch[\s\S]*?makeRecord: blankRecord/);
 });

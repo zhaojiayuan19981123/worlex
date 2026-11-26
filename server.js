@@ -39,6 +39,8 @@ import { boldMapFor } from './src/layoutBold.js';
 import { queryPublicationRank, formatRank } from './src/easyscholar.js';
 import { translate } from './src/translate.js';
 import { TRANSLATE_PROVIDERS } from './src/translateProviders.js';
+// v3.0.0 方向分析 / arXiv：批量翻译只走翻译引擎，不走大模型
+import { academicEngineList } from './src/academicTranslate.js';
 import { registerMailRoutes } from './src/mailRoutes.js';
 import { registerPdfTranslateRoutes } from './src/pdfTranslate/routes.js';
 import { registerReadingRoutes } from './src/readingMode.js';
@@ -3164,6 +3166,11 @@ export function createApp({
     });
   });
 
+  // 文献批量翻译专用引擎清单：明确排除大模型与内置小模型（builtin 虽免费但本质是 LLM）
+  app.get('/api/translate/engines', (_req, res) => {
+    res.json({ engines: academicEngineList(store.getSettings()) });
+  });
+
   // ---------- 查询 ----------
   // 列表前顺手回收僵尸 parsing：前端每次刷新都会走到这里，卡住的记录最多多显示一个刷新周期，
   // 之后会自动变成「解析被中断」（可重新解析），而不是永远转圈。
@@ -5576,7 +5583,12 @@ export function createApp({
     fetchImpl: modelFetch,
     logger: (msg) => console.log(msg),
   });
-  registerArxivRoutes(app, { fetchImpl: modelFetch, logger: (msg) => console.log(msg) });
+  registerArxivRoutes(app, {
+    fetchImpl: modelFetch,
+    store,
+    makeRecord: blankRecord,
+    logger: (msg) => console.log(msg),
+  });
 
   // 静态：上传目录（动态）+ 前端页面
   app.use('/uploads', (req, res, next) => express.static(currentUploadDir)(req, res, next));

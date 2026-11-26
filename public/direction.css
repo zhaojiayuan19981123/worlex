@@ -226,6 +226,23 @@
 .dir-cautions li { color: var(--text-3); }
 .dir-foot { margin: 16px 0 0; font-size: 11.5px; color: var(--text-3); line-height: 1.7; border-top: 1px dashed var(--border); padding-top: 10px; }
 
+/* ===== 报告可视化：词云 / 主题关系图（随深浅主题走 CSS 变量） ===== */
+.dir-viz > h3 { flex-wrap: wrap; gap: 8px; }
+.dir-viz-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
+.dir-viz-tab {
+  border: 0; background: transparent; color: var(--text-3); font: inherit; font-size: 11.5px;
+  padding: 2px 9px; border-radius: 5px; cursor: pointer;
+}
+.dir-viz-tab.active { background: var(--primary); color: var(--on-primary); font-weight: 600; }
+.dir-viz-body {
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  padding: 6px; overflow: hidden;
+}
+.dir-viz-svg { display: block; width: 100%; height: auto; max-height: 380px; }
+.dir-viz-note { margin: 6px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-3); }
+.dir-viz-empty { padding: 40px 12px; text-align: center; font-size: 12px; color: var(--text-3); }
+.dir-translate-engine { max-width: 190px; }
+
 /* ===== 窄屏：侧栏落到上方 ===== */
 @media (max-width: 1080px) {
   .dir-shell { grid-template-columns: minmax(0, 1fr); }

@@ -17,7 +17,8 @@ import {
   ANALYSIS_MODES, buildAnalysisMessages, parseAnalysisJson, normalizeAnalysis, hasAnalysisContent, normalizeMode,
 } from './directionAnalyze.js';
 import { queryPublicationRank, formatRank, isWosCoreRank } from './easyscholar.js';
-import { translate } from './translate.js';
+import { translateSegments } from './academicTranslate.js';
+import { startTranslateJob, getTranslateJob, cancelTranslateJob, translateJobSummary } from './translateJobs.js';
 
 const str = (v) => String(v == null ? '' : v);
 const clean = (v) => str(v).replace(/\s+/g, ' ').trim();
@@ -25,8 +26,10 @@ const clean = (v) => str(v).replace(/\s+/g, ' ').trim();
 const MAX_ANALYSES = 10;
 const MAX_SESSIONS = 20;
 const MAX_JOB_HISTORY = 30;
-/** 单次分析最多塞几篇：再多摘要就超上下文，模型也会明显开始编 */
-const MAX_ANALYZE_PAPERS = 40;
+/** 单次分析最多塞几篇：50 篇摘要是本机模型还能读得动的经验上限 */
+const MAX_ANALYZE_PAPERS = 50;
+/** 单次翻译最多几篇：翻译引擎限速分段，比分析更吃时间 */
+const MAX_TRANSLATE_PAPERS = 50;
 /** 单篇摘要写进会话文件时的上限（候选列表本身不需要全文摘要） */
 const SAVED_ABSTRACT = 2000;
 
@@ -174,7 +177,7 @@ export function analysisToMarkdown(session, record) {
 
 export function registerDirectionRoutes(app, {
   store, resolveRequestModel, fetchModelCompletion, readLLMResponse, fetchImpl, logger,
-  queryRankImpl = queryPublicationRank, translateImpl = translate,
+  queryRankImpl = queryPublicationRank, translateImpl = translateSegments,
 } = {}) {
   const log = typeof logger === 'function' ? logger : () => {};
   /** 期刊等级查询缓存：同一期刊在多个会话里重复出现，不必每次都打 easyScholar（限速 2 次/秒） */
@@ -227,7 +230,7 @@ export function registerDirectionRoutes(app, {
     types: WORK_TYPES,
     sorts: SORTS,
     modes: ANALYSIS_MODES,
-    limits: { maxTopics: MAX_TOPICS, maxResults: MAX_RESULTS, maxAnalyzePapers: MAX_ANALYZE_PAPERS },
+    limits: { maxTopics: MAX_TOPICS, maxResults: MAX_RESULTS, maxAnalyzePapers: MAX_ANALYZE_PAPERS, maxTranslatePapers: MAX_TRANSLATE_PAPERS },
     defaults: DEFAULT_FILTERS,
     source: {
       id: 'openalex',
@@ -321,32 +324,79 @@ export function registerDirectionRoutes(app, {
     });
   });
 
-  // ---------- 中文翻译（标题 + 摘要，结果写回会话，切走再回来还在） ----------
-  app.post('/api/direction/translate', async (req, res) => {
+  // ---------- 中文翻译（翻译引擎，不走大模型；后台任务 + 轮询） ----------
+  // 标题与摘要拆成两段分别送给引擎：免费接口有单次字数上限，且不再需要「标题：/摘要：」提示词格式。
+  app.post('/api/direction/translate', (req, res) => {
     const state = readState();
     const session = findSession(state, clean(req.body?.sessionId));
     if (!session) return res.status(404).json({ error: '这次检索记录已不存在' });
-    const ids = [...new Set(Array.isArray(req.body?.paperIds) ? req.body.paperIds : [])].slice(0, 20);
-    const picked = ids.map((id) => session.papers.find((p) => p.id === id)).filter((p) => p && !p.titleZh);
-    if (!picked.length) return res.json({ byId: {}, hint: '所选文献都已翻译过' });
+    const ids = [...new Set(Array.isArray(req.body?.paperIds) ? req.body.paperIds : [])].slice(0, MAX_TRANSLATE_PAPERS);
+    const force = req.body?.force === true;
+    const picked = ids
+      .map((id) => session.papers.find((p) => p.id === id))
+      .filter((p) => p && (force || !p.titleZh))
+      .slice(0, MAX_TRANSLATE_PAPERS);
+    if (!picked.length) return res.json({ byId: {}, hint: '所选文献都已翻译过', skipped: true });
+
     const settings = store.getSettings();
-    const byId = {};
+    const byIdView = {};
+    const segments = [];
     for (const paper of picked) {
-      try {
-        const source = `标题：${paper.title}\n摘要：${paper.abstract || ''}`;
-        const output = await translateImpl(source, settings, { target: 'zh' });
-        const parsed = parseTranslation(output);
-        paper.titleZh = parsed.title || paper.title;
-        paper.abstractZh = parsed.abstract;
-        byId[paper.id] = { titleZh: paper.titleZh, abstractZh: paper.abstractZh };
-      } catch (e) {
-        byId[paper.id] = { error: clean(e?.message) || '翻译失败' };
-        log(`[方向分析] 翻译失败 ${paper.id}：${e?.message || e}`);
-      }
+      if (clean(paper.title)) segments.push({ id: `${paper.id}|title`, text: paper.title });
+      const abstract = clean(paper.abstract).slice(0, 1200);
+      if (abstract) segments.push({ id: `${paper.id}|abstract`, text: abstract });
     }
-    touch(session);
-    writeState(state);
-    res.json({ byId });
+    if (!segments.length) return res.status(400).json({ error: '所选文献没有可翻译的标题或摘要' });
+
+    const job = startTranslateJob({
+      kind: 'direction',
+      items: segments,
+      settings,
+      engine: clean(req.body?.engine),
+      translateImpl,
+      logger: (msg) => log(`[方向分析] ${msg}`),
+      onResult: (raw) => {
+        for (const paper of picked) {
+          const titleOut = raw[`${paper.id}|title`];
+          const abstractOut = raw[`${paper.id}|abstract`];
+          if (titleOut?.translation) paper.titleZh = clean(titleOut.translation).slice(0, 500);
+          if (abstractOut?.translation) paper.abstractZh = clean(abstractOut.translation).slice(0, 4000);
+          const error = titleOut?.error || abstractOut?.error;
+          byIdView[paper.id] = {
+            ...(titleOut?.translation ? { titleZh: paper.titleZh } : {}),
+            ...(abstractOut?.translation ? { abstractZh: paper.abstractZh } : {}),
+            ...(error ? { error } : {}),
+          };
+        }
+        // 无论部分失败还是全部成功，已译出的都落盘
+        const latest = readState();
+        const target = findSession(latest, session.id);
+        if (target) {
+          for (const paper of picked) {
+            const saved = target.papers.find((p) => p.id === paper.id);
+            if (!saved) continue;
+            if (paper.titleZh) saved.titleZh = paper.titleZh;
+            if (paper.abstractZh) saved.abstractZh = paper.abstractZh;
+          }
+          touch(target);
+          writeState(latest);
+        }
+        return byIdView;
+      },
+    });
+    job.paperIds = picked.map((p) => p.id);
+    res.json({ jobId: job.id, total: picked.length, segments: segments.length, engine: job.engine });
+  });
+
+  app.get('/api/direction/translate/job/:jobId', (req, res) => {
+    const job = getTranslateJob(req.params.jobId);
+    if (!job || job.kind !== 'direction') return res.status(404).json({ error: '翻译任务已结束（或服务已重启）' });
+    res.json(translateJobSummary(job));
+  });
+
+  app.post('/api/direction/translate/job/:jobId/cancel', (req, res) => {
+    const ok = cancelTranslateJob(req.params.jobId);
+    res.json({ ok });
   });
 
   // ---------- 检索 ----------
