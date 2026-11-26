@@ -123,8 +123,8 @@ test('阅读器「按来源收敛面板」用到的元素都真的在 index.html
   const bar = html.slice(html.indexOf('id="prSelectionToolbar"'));
   const marked = [...bar.slice(0, bar.indexOf('</div>')).matchAll(/data-sel="(\w+)"[^>]*data-litonly|data-litonly[^>]*data-sel="(\w+)"/g)]
     .map((m) => m[1] || m[2]).sort();
-  assert.deepEqual(marked, ['cite', 'highlight', 'note', 'underline'],
-    '高亮 / 下划线 / 笔记 / 引用 会写回文献库或 AI 对话，必须标记 data-litonly 以便在成果论文下隐藏');
+  assert.deepEqual(marked, ['cite', 'comment', 'highlight', 'note', 'underline'],
+    '高亮 / 下划线 / 笔记 / 批注 / 引用 会写回文献库或 AI 对话，必须标记 data-litonly 以便在成果论文下隐藏');
   assert.ok(/data-sel="translate"/.test(bar), '划词翻译必须保留');
 });
 

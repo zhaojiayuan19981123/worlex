@@ -7,7 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import katex from 'katex';
-import mammoth from 'mammoth';
+// mammoth（DOCX 解析）约 500ms，只在「模拟审稿上传 Word / 成果识别 Word 附件」时用到，
+// 改为在用到的地方动态加载（v3.1.1 启动优化），不要在模块顶层 import。
 
 import { extractPdfText } from './src/pdfParser.js';
 import {
@@ -3182,6 +3183,11 @@ export function createApp({
       importedAt: it.importedAt || it.parsedAt || it.createdAt || null,
     })));
   });
+  // 文献库版本戳：前端切回列表时比对它决定要不要重新拉数据（arXiv 导入后实时可见）。
+  // 必须放在 /api/literature/:id 之前，否则会被当成 id="version" 的请求吃掉。
+  app.get('/api/literature/version', (_req, res) => {
+    res.json(store.literatureVersion());
+  });
   app.get('/api/literature/:id', (req, res) => {
     const item = store.getLiterature(req.params.id);
     if (!item) return res.status(404).json({ error: '记录不存在' });
@@ -3567,6 +3573,7 @@ export function createApp({
       const parsed = await extractPdfText(file.path);
       return { text: parsed.text, pages: parsed.numPages, fileType: 'pdf' };
     }
+    const { default: mammoth } = await import('mammoth');
     const parsed = await mammoth.extractRawText({ path: file.path });
     const text = String(parsed.value || '').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     if (text.length < 40) throw new Error('无法从该 DOCX 提取有效文本，请确认文件不是空文档或受保护文档');
@@ -5193,6 +5200,8 @@ export function createApp({
     if (!file?.filePath || !fs.existsSync(file.filePath)) return null;
     return { path: file.filePath, name: file.originalName || path.basename(file.filePath) };
   };
+  // 全文翻译的注册参数。pdf-lib / fontkit 已改成「第一次生成 PDF 时才加载」，
+  // 所以这里同步注册不再需要等约 0.9 秒的模块导入（v3.1.1 启动优化）。
   const pdfTranslateService = registerPdfTranslateRoutes(app, {
     store,
     getUploadDir: () => currentUploadDir,

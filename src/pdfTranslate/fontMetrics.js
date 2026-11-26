@@ -16,7 +16,8 @@
 //
 // 这样无论用户换成什么字体（黑体/宋体/楷体/自己丢进来的字体），都能得到一致的观感，
 // 而不是靠一张写死的"哪个字体偏细"的表格。
-import fontkit from '@pdf-lib/fontkit';
+import { fontkitModule } from './lazyLibs.js';
+// fontkit 惰性加载（v3.1.1 启动优化）
 
 /** 采样字符：覆盖横竖撇捺与包围结构，避免个别字形的偏斜影响估计 */
 const SAMPLE = '营销组合有效性演变研究实证优先方法价格品类分销核心工具探讨';
@@ -116,7 +117,7 @@ export function measureFontInk(bytes) {
 
   let result = null;
   try {
-    const font = fontkit.create(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
+    const font = fontkitModule().create(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
     const upem = font.unitsPerEm || 1000;
     const scale = 1 / upem;
     let ink = 0;

@@ -1,3 +1,97 @@
+## v3.1.1：文献中心实时刷新 + 启动/运行优化 + 阅读器批注 + 算法类「实验环境」（2026-11-27）
+
+### 需求
+1. 从 arXiv 导入后，文献中心没有实时更新，必须重启软件才能看到；
+2. 打开软件比较慢，运行时也比较卡；
+3. （追加）阅读器已经能高亮文字，希望新增**批注**：批注后**不显示批注内容**，只显示一个「有批注」的标记；
+4. （追加）**算法类文库**新增「实验环境」字段，把文中的实验环境配置与硬件设施列出来。
+
+### 一、文献中心实时刷新
+
+问题的根子是**两份数据**：arXiv 导入直接写服务端的 `literature.json`，而文献中心的
+`items` 是页面启动时一次拉进内存的数组，之后没有任何地方重新拉 —— 所以只有重启才看得到。
+
+- 服务端新增 `store.literatureVersion()`：返回文献库文件的 `mtimeMs:size` 与条数。
+  任何一次 `upsertLiterature` 都是「写 tmp → rename」，戳一定变化。
+  路由 `GET /api/literature/version` 注册在 `/api/literature/:id` **之前**，否则会被当成 `id="version"`。
+- 前端 `loadItems()` 改成「列表 + 版本戳」一起取；`switchView()` 在切到 **文献中心 / 首页** 时先
+  `syncItemsIfChanged()`：戳变了才重新拉整份列表，没变只花一次 stat —— 不会每次切页都白拉几 MB。
+- 跨模块通知：`window.Worlex.literatureChanged()` + `worlex:literature-changed` 事件。
+  arXiv 导入任务结束时调用一次（`public/arxiv.js` 的 `notifyLibraryChanged()`），当前若正好在列表页就立刻追平。
+- `loadItems()` 顺带调 `renderLibBar()`，侧栏「实证 / 模型 / 算法」与分类的计数也跟着更新（以前也不刷新）。
+- 这条链路对「另一个窗口改了数据」「世图下载助手导入」同样有效，不限于 arXiv。
+
+### 二、启动更快、运行更顺
+
+**后端：重型依赖改成「用到才加载」**
+
+| 依赖 | 原来 | 改动 |
+| --- | --- | --- |
+| imapflow + mailparser + nodemailer | 静态导入，约 1.3 s | `src/mail.js` 内 `mailLibs()` 惰性 `import()`，`simpleParser` / `buildClient` / `sendMail` 改成 await |
+| mammoth（DOCX 解析） | 静态导入，约 0.5~0.8 s | `server.js` 与 `src/achievementRoutes.js` 在用到它的函数里 `await import()` |
+| pdf-lib + fontkit | 静态导入，约 0.9 s | 新增 `src/pdfTranslate/lazyLibs.js`，用 `createRequire` **同步**惰性加载；`render / reflow / paint / fontMetrics` 改用 `pdfLibModule()` / `fontkitModule()` |
+
+> 为什么 pdf-lib 用 `createRequire` 而不是 `await import()`：它被 `measureFontInk → buildStrokeTable →
+> drawPlans` 这一串**同步**函数依赖，改成 await 会把整条渲染链染成 async、调用点全要改。
+> CJS 包用 require 既能延迟加载，调用方也完全不用动，函数签名与返回值一模一样。
+
+实测 `import('./server.js')` 从约 **3.2 s 降到 0.9 s**（本机冷启动，同一份数据目录）。
+
+**Electron：先出窗口，再等后端**
+
+- 以前是 `await startBackend()` 之后才 `createWindow()`，用户点图标后先干等一两秒没有任何反馈。
+- 现在先建窗口并加载 `SPLASH_HTML` 加载页（品牌色 + 进度条 +「正在准备文献库…」），后端就绪后再 `loadURL`；
+  `did-finish-load` 打一行 `[启动] 首屏就绪：xxx ms`，以后反馈「慢」可以直接对照。
+
+**前端：不再在启动时抢主线程**
+
+- 缩略图：原来启动就同步渲染 10 张 PDF 首页（pdf.js 解析 + canvas 编码），窗口刚出来就是卡的。
+  现在 `scheduleThumbBackfill()` 在 `requestIdleCallback` 里**一张一张**补，主线程有活就让出去；
+  补完只替换那一行的 `.cell-attach`，不再整表重绘。
+- 文献表格：`renderBody()` 从「逐行 createElement + appendChild + 每行挂 dragstart」改成
+  **一次拼字符串、一次 innerHTML**，拖拽改到 tbody 上做事件委托。库里有几百上千条时，
+  点一个勾选框不再要等半秒。
+
+### 三、阅读器新增「批注」（正文只留标记）
+
+与已有「笔记」的区别是刻意的：
+
+| | 笔记 | 批注（新） |
+| --- | --- | --- |
+| 正文 | 铺一层淡底色 + 小图标 | **不铺底色、不展开任何内容** |
+| 位置 | 选区起点 | 选区最后一行右端一个 16px 圆标 |
+| 查看 | 点图标弹内容 | 点标记才弹内容（可编辑 / 删除） |
+
+- 划词工具条新增「批注」按钮（`data-sel="comment"`，带 `data-litonly`，成果附件下自动隐藏）。
+- 数据仍写同一条 `annotations` 数组，`type: 'comment'`，带 `rects` / `text` / `note`，老数据结构不变。
+- `renderAnnotations()` 新增 `comment` 分支：只画 `.pr-comment-marker`；
+  点位按「最后一行右端、不出页面」计算（页面尺寸是 `{w,h}`，旋转 90/270 时要换长宽）。
+- 重排视图 `.rm-comment`：虚线下划 + 右端小圆点；EPUB 用 `ep-comment`（极淡虚线框）。
+  点重排视图里的批注会直接弹出内容，不再先跳到「笔记」栏。
+- 「笔记与高亮」的筛选、导出、徽标都加上「批注」；顺带修掉一个老问题：
+  `.pr-highlight-layer` 是 `pointer-events: none`，子元素没写 `auto`，**笔记的小图标其实点不到**。
+- 浮层定位补上视口约束：`showPopover()` 先以 `visibility: hidden` 挂进布局量出真实尺寸，
+  放不下就翻到触发点上方（`top - h - 24`），再兜底夹进视口。批注标记常常贴在页面最底部，
+  原来一律向下展开，内容被窗口下沿切掉大半，看着像「点了没反应」。
+
+### 四、算法类文库新增「实验环境」
+
+- `experimentalEnv` 进入 `ALGORITHM_FIELDS / TYPE_FIELDS.algorithm / FIELD_LABELS / ALGORITHM_JSON_KEYS`，
+  前端 `CONTENT_COLS` 与 `TYPE_ORDER.algorithm` 同步，表格列、解析详情、编辑表单、阅读器侧栏自动出现。
+- 提示词要求按五段列：① 计算硬件（GPU 型号/数量、CPU、内存显存、是否多机多卡）；
+  ② 软件环境（框架与版本、CUDA/cuDNN/驱动、依赖库、OS）；③ 训练配置（优化器、学习率、batch、轮数、精度、分布式、随机种子）；
+  ④ 推理与测量（推理硬件、batch、时延/吞吐/显存的测法）；⑤ 复现材料（代码/模型/数据是否公开）。
+  **没写的项必须标「原文未报告」，不许用常见默认值去填**；只给总预算时按原话写并注明明细缺失。
+
+### 测试
+
+- 新增 `test/v311-features.test.mjs`（9 条）：版本戳随写入变化、`/api/literature/version` 路由不被 `/:id` 吃掉、
+  前端追平链路、重型依赖不再静态导入、表格整批渲染与缩略图空闲回填、批注只画标记、批注浮层贴边翻转、
+  实验环境进字段集与提示词、Electron 先出窗口。
+- 更新 `test/ai-extractor-fields.test.mjs`（算法类字段集 + 13 个专属字段）、
+  `test/achievement-reader.test.mjs`（划词工具条新增 comment）。
+- 全量 `node --test`：1040 条通过。
+
 ## v3.1.0：报告更细 + 专业视角 + 可视化改由大模型基于摘要生成 + arXiv 真下载 PDF 入库（2026-11-27）
 
 ### 需求

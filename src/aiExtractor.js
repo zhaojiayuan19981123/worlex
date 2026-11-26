@@ -65,7 +65,7 @@ const MODEL_FIELDS = [
 // 算法类（CCF）专属：实验设计 / 消融实验 / 数据集 / 评价指标 / 研究领域 是这一类论文的核心证据
 const ALGORITHM_FIELDS = [
   'researchQuestion', 'scienceQuestion', 'coreFindings', 'researchDesign', 'criticalThinking',
-  'reviewUse', 'experimentalDesign', 'ablationDesign', 'researchGap',
+  'reviewUse', 'experimentalDesign', 'experimentalEnv', 'ablationDesign', 'researchGap',
   'dataset', 'metrics', 'researchField',
 ];
 
@@ -95,7 +95,7 @@ export const FIELD_LABELS = {
   // 模型类
   model: '模型', paramDiscussion: '参数讨论',
   // 算法类
-  experimentalDesign: '实验设计', ablationDesign: '消融实验设计',
+  experimentalDesign: '实验设计', experimentalEnv: '实验环境', ablationDesign: '消融实验设计',
   dataset: '数据集', metrics: '评价指标', researchField: '研究领域',
   // 旧版（仅为兼容历史数据与成果管理保留）
   background: '研究背景', summary: '一段话总结', innovation: '创新点', theory: '理论',
@@ -205,6 +205,13 @@ ${SCIENCE_QUESTION_NOTE}
 - coreFindings（核心结论）：3-6 段（段间空一行、每段首行缩进两格），每段写「在什么数据集/设定下，相对什么基线，取得什么结果（带关键数值）」，并标注是主实验还是消融结论。
 - researchDesign（研究设计）：整体技术路线——问题形式化、方法框架、模块组成、训练/推理流程、与已有方法的本质区别。
 - experimentalDesign（实验设计）：实验怎么做的：数据集划分、对比基线（列全）、评价设置、超参数与训练细节、重复次数、显著性检验；以及主实验结果表的核心数字。
+- experimentalEnv（实验环境）：把文中交代的**实验环境配置与硬件设施**完整列出来，分段（每段一行，用「项：值」的写法）：
+  ① 计算硬件：GPU 型号与数量（如 8× NVIDIA A100 80GB）、CPU 型号、内存与显存、是否多机多卡 / 集群规模；
+  ② 软件环境：深度学习框架与版本（PyTorch / TensorFlow 等）、CUDA / cuDNN / 驱动版本、关键依赖库、操作系统；
+  ③ 训练配置：优化器与学习率策略、batch size、训练轮数 / 步数、精度（FP32 / FP16 / BF16 / 混合精度）、分布式策略、随机种子与重复次数；
+  ④ 推理与测量：推理硬件、batch、时延 / 吞吐 / 显存占用的测量方式（是否取平均、warmup）；
+  ⑤ 复现材料：代码 / 模型 / 数据是否公开，给了什么链接或仓库名。
+  文中没写的项直接标「原文未报告」——**不要用常见默认值去填**；只给出总预算（如「单卡 V100 约 24 小时」）时按原话写，并注明明细缺失。
 - ablationDesign（消融实验设计）：消融了哪些模块/损失/组件，每个消融对应什么假设，结果说明哪个模块真正起作用；没有消融就写「原文未做消融实验」。
 - dataset（数据集）：用到的数据集名称、规模、来源与划分方式；自建数据集要写清构建流程与标注方式。
 - metrics（评价指标）：用了哪些指标（如 Accuracy / F1 / mAP / BLEU / AUC / 运行时间 / 显存），以及主结果的关键数值。
@@ -232,7 +239,7 @@ const MODEL_JSON_KEYS = [
 const ALGORITHM_JSON_KEYS = [
   'title', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
   'researchQuestion', 'scienceQuestion', 'coreFindings', 'researchDesign', 'criticalThinking',
-  'reviewUse', 'experimentalDesign', 'ablationDesign', 'researchGap',
+  'reviewUse', 'experimentalDesign', 'experimentalEnv', 'ablationDesign', 'researchGap',
   'dataset', 'metrics', 'researchField',
 ];
 

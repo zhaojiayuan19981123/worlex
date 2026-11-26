@@ -350,6 +350,9 @@
     mark.dataset.ann = range.id;
     if (range.type === 'underline') {
       mark.classList.add('rm-underline');
+    } else if (range.type === 'comment') {
+      // 批注：不铺底色，只留一条虚线和右端一个小圆点（正文不展开任何内容）
+      mark.classList.add('rm-comment');
     } else {
       mark.style.background = range.color || '#ffe08a';
       mark.style.opacity = '0.42';

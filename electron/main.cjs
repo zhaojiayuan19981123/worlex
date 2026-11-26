@@ -722,6 +722,27 @@ async function startBackend() {
   return port;
 }
 
+// 启动加载页（v3.1.1）：后端（Express + 数据目录自检）要几百毫秒到一两秒才能就绪，
+// 以前是「等后端好了才建窗口」，用户点图标后先干等一两秒没有任何反馈。
+// 现在先出窗口 + 这个极简加载页，后端就绪后再换成真正的页面。
+const SPLASH_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>worlex</title>
+<style>
+  html,body{height:100%;margin:0;background:#f4f6f3;font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  body{display:flex;align-items:center;justify-content:center}
+  .box{display:flex;flex-direction:column;align-items:center;gap:18px;color:#5b6b5f}
+  .logo{width:56px;height:56px;border-radius:14px;background:#c0763c;color:#fff;font-size:26px;font-weight:700;
+        display:flex;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(192,118,60,.28)}
+  .name{font-size:17px;font-weight:600;letter-spacing:.5px;color:#3c4a3f}
+  .bar{width:132px;height:3px;border-radius:2px;background:#e2e7df;overflow:hidden}
+  .bar i{display:block;width:40%;height:100%;border-radius:2px;background:#c0763c;animation:mv 1.1s ease-in-out infinite}
+  .tip{font-size:12px;color:#8a968c}
+  @keyframes mv{0%{transform:translateX(-100%)}100%{transform:translateX(330%)}}
+</style></head><body><div class="box">
+  <div class="logo">W</div><div class="name">worlex</div>
+  <div class="bar"><i></i></div><div class="tip">正在准备文献库…</div>
+</div></body></html>`;
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -732,6 +753,7 @@ function createWindow() {
     icon: path.join(__dirname, 'icon.png'),
     autoHideMenuBar: true,
     backgroundColor: '#f4f6f3',
+    show: false,          // 先不显示，等加载页 ready-to-show（避免白屏闪烁）
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -739,7 +761,9 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`);
+  mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(SPLASH_HTML));
+  // 加载页绘制出来就显示窗口，别等后端（首屏体感从「白屏一两秒」变成「立刻有反馈」）
+  mainWindow.once('ready-to-show', () => { try { mainWindow.show(); } catch (_) { /* ignore */ } });
 
   // 外部链接（原 PDF、导出等）交给系统浏览器
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -749,6 +773,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  const bootAt = Date.now();
   setupUpdater();
   // SI「粘贴收稿」需要一键读剪贴板。只放行剪贴板读写，其余权限仍按默认拒绝。
   const allowClipboard = (permission) => permission === 'clipboard-read' || permission === 'clipboard-sanitized-write';
@@ -756,6 +781,8 @@ app.whenReady().then(async () => {
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(allowClipboard(permission)));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowClipboard(permission));
   } catch (_) { /* 老版本 Electron 缺 API 时退回手按 Ctrl+V */ }
+  // ★ 先出窗口（加载页），再等后端就绪：用户点图标立刻有反馈，而不是先干等一两秒
+  createWindow();
   try {
     backendPort = await startBackend();
   } catch (e) {
@@ -763,7 +790,14 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  createWindow();
+  // 后端就绪，把加载页换成真正的应用页面
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      // 启动耗时只打日志：用户反馈「慢」时可以直接对照这条（v3.1.1）
+      console.log(`[启动] 首屏就绪：${Date.now() - bootAt}ms`);
+    });
+    mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`);
+  }
   // 窗口建好后再启动后台检查：启动时查一次，之后每 6 小时查一次，
   // 发现新版本时按「窗口是否在前台」决定弹页面卡片还是发系统通知。
   scheduleAutoUpdateChecks();

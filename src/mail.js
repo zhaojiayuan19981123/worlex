@@ -1,8 +1,29 @@
 // mail.js —— 邮箱收信（IMAP）/ 发信（SMTP）封装
 // 依赖 imapflow（IMAP 客户端）与 mailparser（MIME 解析），支持网易 163/126、QQ、Gmail、Outlook 及自定义服务器。
-import { ImapFlow } from 'imapflow';
-import { simpleParser } from 'mailparser';
-import nodemailer from 'nodemailer';
+//
+// ★ 三个依赖改成**首次用到才加载**（v3.1.1）：
+//   imapflow + mailparser + nodemailer 合计约 1 秒（本机冷启动实测），而绝大多数启动
+//   根本没有配邮箱 —— 为了「打开软件」等这一秒不值。模块本身仍是同步可用的，
+//   只是内部第一次真正发请求时才 await import()，之后复用同一个 Promise。
+let mailLibsPromise = null;
+function mailLibs() {
+  if (!mailLibsPromise) {
+    mailLibsPromise = Promise.all([import('imapflow'), import('mailparser'), import('nodemailer')])
+      .then(([imap, parser, nodemailer]) => ({
+        ImapFlow: imap.ImapFlow,
+        simpleParser: parser.simpleParser,
+        nodemailer: nodemailer.default || nodemailer,
+      }))
+      .catch((e) => { mailLibsPromise = null; throw e; });
+  }
+  return mailLibsPromise;
+}
+
+/** MIME 解析也走懒加载：只有真正下载邮件正文 / 附件时才需要 mailparser */
+async function parseMime(source) {
+  const { simpleParser } = await mailLibs();
+  return simpleParser(source);
+}
 
 // ---------- 常见邮箱服务商预设（用户只需选服务商 + 填邮箱 + 授权码） ----------
 export const MAIL_PROVIDERS = {
@@ -76,7 +97,8 @@ export function getProvider(key) {
 const CONN_CACHE = new Map(); // accountId -> { client, lastUsed }
 const CACHE_IDLE_MS = 5 * 60 * 1000;
 
-function buildClient(account) {
+async function buildClient(account) {
+  const { ImapFlow } = await mailLibs();
   const opts = {
     host: account.imapHost,
     port: Number(account.imapPort) || 993,
@@ -103,7 +125,7 @@ async function openClient(account) {
     CONN_CACHE.delete(account.id);
     try { cached.client.close(); } catch { /* ignore */ }
   }
-  const client = buildClient(account);
+  const client = await buildClient(account);
   const entry = { client, lastUsed: Date.now() };
   // 必须监听 error，否则底层连接异常会导致进程崩溃
   client.on('error', () => {
@@ -318,7 +340,7 @@ export async function getMessage(account, { folder = 'INBOX', uid }) {  if (!uid
   return withMailbox(account, folder, async (client) => {
     const msg = await client.fetchOne(String(uid), { uid: true, source: true, flags: true }, { uid: true });
     if (!msg || !msg.source) throw new Error('邮件不存在或已被删除');
-    const parsed = await simpleParser(msg.source);
+    const parsed = await parseMime(msg.source);
 
     const attachments = (parsed.attachments || []).map((a, i) => ({
       index: i,
@@ -366,7 +388,7 @@ export async function getAttachment(account, { folder = 'INBOX', uid, index }) {
     if (!one || !one.source) throw new Error('邮件不存在或已被删除');
     return one;
   });
-  const parsed = await simpleParser(msg.source);
+  const parsed = await parseMime(msg.source);
   const att = (parsed.attachments || [])[idx];
   if (!att || !att.content) throw new Error('该附件不存在');
   return {
@@ -406,6 +428,7 @@ export async function deleteMessage(account, { folder = 'INBOX', uid }) {
 // 发送邮件
 export async function sendMail(account, { to, cc, subject, text, html }) {
   if (!account.smtpHost) throw new Error('该账户未配置 SMTP 服务器，无法发信（可在邮箱管理中补填）');
+  const { nodemailer } = await mailLibs();
   const transporter = nodemailer.createTransport({
     host: account.smtpHost,
     port: Number(account.smtpPort) || 465,

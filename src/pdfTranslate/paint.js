@@ -4,9 +4,16 @@
 //   · render.js —— 在原始页面上原位覆盖（保留版面）
 //   · reflow.js —— 生成全新的单栏文档（doc2x 式重排）
 // 两边的字形选择与描边补偿必须一致，否则同一篇论文在两种成品里粗细不同。
-import {
-  pushGraphicsState, popGraphicsState, setLineWidth, setTextRenderingMode, TextRenderingMode, rgb,
-} from 'pdf-lib';
+// pdf-lib 的操作符原语改成惰性取用（v3.1.1 启动优化）：
+// 这个模块被 reflow / render 连带导入，静态 import 会让「打开软件」多等约 0.6 秒。
+import { pdfLibModule } from './lazyLibs.js';
+
+const lib = () => pdfLibModule();
+const rgb = (...args) => lib().rgb(...args);
+const pushGraphicsState = () => lib().pushGraphicsState();
+const popGraphicsState = () => lib().popGraphicsState();
+const setLineWidth = (w) => lib().setLineWidth(w);
+const setTextRenderingMode = (m) => lib().setTextRenderingMode(m);
 
 export function clamp01(v) {
   const n = Number(v);
@@ -35,7 +42,7 @@ export function withTextStroke(page, strokeEm, size, fn) {
   page.pushOperators(
     pushGraphicsState(),
     setLineWidth(strokeEm * size),
-    setTextRenderingMode(TextRenderingMode.FillAndOutline),
+    setTextRenderingMode(lib().TextRenderingMode.FillAndOutline),
   );
   try {
     fn();

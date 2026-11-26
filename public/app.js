@@ -39,6 +39,7 @@
     researchGap: { key: 'researchGap', label: '研究空白', type: 'md', ai: true, w: 260 },
     // —— 算法类（CCF）专属 ——
     experimentalDesign: { key: 'experimentalDesign', label: '实验设计', type: 'md', ai: true, w: 280 },
+    experimentalEnv: { key: 'experimentalEnv', label: '实验环境', type: 'md', ai: true, w: 240 },
     ablationDesign: { key: 'ablationDesign', label: '消融实验设计', type: 'md', ai: true, w: 260 },
     dataset: { key: 'dataset', label: '数据集', type: 'md', ai: true, w: 200 },
     metrics: { key: 'metrics', label: '评价指标', type: 'md', ai: true, w: 200 },
@@ -74,7 +75,7 @@
     // 算法类（CCF）：书目 → 问题与结论 → 评价 → 实验证据 → 用户笔记 → 空白 → 领域
     algorithm: ['importedAt', 'title', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
       'researchQuestion', 'scienceQuestion', 'coreFindings', 'researchDesign', 'criticalThinking',
-      'reviewUse', 'experimentalDesign', 'ablationDesign', 'thoughts', 'researchGap',
+      'reviewUse', 'experimentalDesign', 'experimentalEnv', 'ablationDesign', 'thoughts', 'researchGap',
       'dataset', 'metrics', 'researchField'],
   };
   const LIB_META = {
@@ -537,11 +538,49 @@
   }
 
   async function loadItems() {
-    items = await api('/api/literature');
+    // 列表与版本戳一起取：只多一个几毫秒的小请求，换来「外部改动能立刻追平」的能力
+    const [list, ver] = await Promise.all([
+      api('/api/literature'),
+      api('/api/literature/version').catch(() => null),
+    ]);
+    items = list;
+    if (ver?.stamp) { itemsStamp = ver.stamp; itemsDirty = false; }
     window.LibSearch?.resetCache?.();   // 记录是整批换新对象，字段缓存跟着清掉
     window.ReadingHeat?.sync(items);   // 服务端热力与本地离线缓存取较大值
     render();
+    renderLibBar();                     // 侧栏各文库 / 分类的计数也要跟着变
   }
+
+  /**
+   * 文献库版本戳与「脏」标记（v3.1.1）。
+   *
+   * 问题：文献中心的 items 是启动时一次性拉进内存的，arXiv 导入、另一个窗口改动
+   * 都写在服务端的 literature.json 里，页面不知道 → 必须重启才能看到新文献。
+   * 做法：服务端 /api/literature/version 返回「文件 mtime + 大小」，切回文献中心 /
+   * 首页时先问一次，变了才重新拉整份列表（没变就只花一个几毫秒的小请求）。
+   */
+  let itemsStamp = '';
+  let itemsDirty = false;
+
+  async function syncItemsIfChanged() {
+    try {
+      const ver = await api('/api/literature/version');
+      if (!ver?.stamp) return;
+      const changed = itemsDirty || (itemsStamp && ver.stamp !== itemsStamp);
+      itemsStamp = ver.stamp;
+      if (!changed) return;
+      itemsDirty = false;
+      await loadItems();
+    } catch (_) { /* 版本接口失败就按现有数据渲染，不打断用户 */ }
+  }
+
+  /** 别的模块（arXiv 导入等）写完文献后可以叫一声：标记为脏，当场或下次切回来时追平 */
+  function notifyLiteratureChanged() {
+    itemsDirty = true;
+    if (view === 'library' || view === 'home') syncItemsIfChanged().catch(() => {});
+  }
+  window.addEventListener('worlex:literature-changed', notifyLiteratureChanged);
+
   async function loadSettings() {
     settings = await api('/api/settings');
     fillSettingsForm();    // 恢复用户调节过的表格列宽
@@ -894,23 +933,23 @@
         : '';
     }
     if (!scope.length) return;
-    scope.forEach((it, idx) => {
-      const tr = document.createElement('tr');
-      tr.dataset.id = it.id;
-      tr.draggable = true;
-      // 卡住的僵尸解析不再整行染成「上传中」的底色（那会让人以为还在跑）
-      if (it.status === 'parsing' && !isStaleParsing(it)) tr.classList.add('uploading');
-      if (selectedIds.has(it.id)) tr.classList.add('row-selected');
-      tr.innerHTML = `<td class="cell-check"><input type="checkbox" data-check${selectedIds.has(it.id) ? ' checked' : ''} /></td>` +
+    // 一次性拼 HTML 再赋值：原来逐行 createElement + appendChild + 每行挂 dragstart 监听，
+    // 库里有几百上千条时「点一个勾选框要等半秒」。现在只有一次 DOM 写入，
+    // 拖拽交给 tbody 上的事件委托（dragstart 会冒泡），行数再多也不线性变慢。
+    const rows = [];
+    for (let idx = 0; idx < scope.length; idx += 1) {
+      const it = scope[idx];
+      const cls = [
+        it.status === 'parsing' && !isStaleParsing(it) ? 'uploading' : '',
+        selectedIds.has(it.id) ? 'row-selected' : '',
+      ].filter(Boolean).join(' ');
+      rows.push(`<tr data-id="${esc(it.id)}" draggable="true"${cls ? ` class="${cls}"` : ''}>` +
+        `<td class="cell-check"><input type="checkbox" data-check${selectedIds.has(it.id) ? ' checked' : ''} /></td>` +
         `<td class="cell-num">${idx + 1}</td>` +
-        cols.map((c) => `<td>${renderCell(c, it)}</td>`).join('');
-      tr.addEventListener('dragstart', (e) => {
-        e.dataTransfer.setData('text/lit-id', it.id);
-        e.dataTransfer.setData('text/plain', it.id);
-        e.dataTransfer.effectAllowed = 'move';
-      });
-      el.tbody.appendChild(tr);
-    });
+        cols.map((c) => `<td>${renderCell(c, it)}</td>`).join('') +
+        '</tr>');
+    }
+    el.tbody.innerHTML = rows.join('');
   }
 
   function renderCell(c, it) {
@@ -1075,14 +1114,48 @@
       return c.toDataURL('image/jpeg', 0.72);
     } catch (e) { return null; }
   }
-  async function ensureThumb(record) {
-    if (!record.filename || record.thumb) return;
-    const thumb = await makeThumb(record.filename);
-    if (thumb) {
+  async function ensureThumb(record, { quiet = false } = {}) {
+    if (!record.filename || record.thumb || record._thumbBusy) return;
+    record._thumbBusy = true;
+    try {
+      const thumb = await makeThumb(record.filename);
+      if (!thumb) return;
       await api('/api/literature/' + record.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thumb }) });
       const it = items.find((x) => x.id === record.id);
-      if (it) { it.thumb = thumb; render(); }
+      if (!it) return;
+      it.thumb = thumb;
+      // 只换当前可见那一行的缩略图：整表重绘在库里几百上千条时是一次明显的卡顿，
+      // 而这里补一张图的收益只有那一个格子。
+      const box = el.tbody?.querySelector(`tr[data-id="${it.id}"] .cell-attach`);
+      if (box) box.outerHTML = attachCell(it);
+      else if (!quiet) render();
+    } finally {
+      record._thumbBusy = false;
     }
+  }
+
+  /**
+   * 缩略图回填（v3.1.1 启动优化）。
+   * 原来启动时立刻渲染 10 张 PDF 首页：pdf.js 解析 + canvas 编码把主线程占住好几秒，
+   * 窗口刚出来就是卡的状态。现在改成空闲时一张一张来，用户先看到列表。
+   */
+  function scheduleThumbBackfill(limit = 10) {
+    const pending = items.filter((i) => i.filename && !i.thumb).slice(0, limit);
+    if (!pending.length) return;
+    const idle = window.requestIdleCallback
+      || ((cb) => setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 8 }), 500));
+    let i = 0;
+    const step = (deadline) => {
+      if (i >= pending.length) return;
+      // 主线程还有别的活（滚动、输入）就先让出去
+      if (i > 0 && deadline && !deadline.didTimeout && deadline.timeRemaining() < 4) {
+        idle(step, { timeout: 2500 });
+        return;
+      }
+      const rec = pending[i++];
+      ensureThumb(rec, { quiet: true }).catch(() => {}).finally(() => idle(step, { timeout: 2500 }));
+    };
+    idle(step, { timeout: 2500 });
   }
 
   // ============ 上传 ============
@@ -1181,6 +1254,14 @@
 
   // ============ 表格事件 ============
   function bindGrid() {
+    // 行拖拽（拖到分类上归类）用委托：表格整批重建后不用再逐行挂监听
+    el.tbody.addEventListener('dragstart', (e) => {
+      const tr = e.target.closest('tr[data-id]');
+      if (!tr || !e.dataTransfer) return;
+      e.dataTransfer.setData('text/lit-id', tr.dataset.id);
+      e.dataTransfer.setData('text/plain', tr.dataset.id);
+      e.dataTransfer.effectAllowed = 'move';
+    });
     el.tbody.addEventListener('click', (e) => {
       // 行复选框：点击复选框本身只切换选中，不触发行内其他操作
       const chk = e.target.closest('[data-check]');
@@ -9053,6 +9134,11 @@
         const anns = currentAnnotations();
         const idx = anns.findIndex((a) => a.id === id);
         if (idx < 0) return;
+        // 批注：点一下直接在重排视图里弹出内容，不用先跳到「笔记」栏
+        if (anns[idx].type === 'comment') {
+          showCommentPopover(anns[idx], Math.max(20, window.innerWidth / 2 - 160), 160);
+          return;
+        }
         pr.notesHit = idx;
         if (pr.tab !== 'notes') switchPrTab('notes');
         renderNotesList();
@@ -9801,6 +9887,25 @@
         m.title = a.note || '';
         m.addEventListener('click', (e) => { e.stopPropagation(); showNotePopover(a, e.clientX, e.clientY); });
         layer.appendChild(m);
+      } else if (a.type === 'comment') {
+        // 批注：正文里**什么都不铺**，只在选区最后一行右端放一个小标记。
+        // 这样读原文时不会被底色或一段文字打断，但又能一眼看到「这里我写过东西」。
+        const list = Array.isArray(a.rects) && a.rects.length
+          ? a.rects.map((r) => (Array.isArray(r) ? r : [r.x1, r.y1, r.x2, r.y2]))
+          : [rect];
+        const lastRect = list[list.length - 1] || rect;
+        const r = displayRect(lastRect);
+        // 页面尺寸用 {w,h}（不是 width/height）；旋转 90/270 时长宽互换
+        const disp = window.pdfReaderUtils?.getDisplaySize?.(size, rotation) || size || {};
+        const pageW = (Number(disp.w) || 0) * scale;
+        const m = document.createElement('div');
+        m.className = 'pr-comment-marker';
+        m.innerHTML = ico('note');
+        m.title = '这里有批注（点击查看）';
+        m.style.left = Math.max(0, Math.min(r.x2 * scale + 1, pageW - 16)) + 'px';
+        m.style.top = Math.max(0, r.y1 * scale - 3) + 'px';
+        m.addEventListener('click', (e) => { e.stopPropagation(); showCommentPopover(a, e.clientX, e.clientY); });
+        layer.appendChild(m);
       }
     }
   }
@@ -9892,6 +9997,7 @@
         : `第 ${a.page} 页 · <a href="#" data-goto="${a.page}" style="color:var(--primary)">跳转</a>`;
       const badge = a.type === 'highlight' ? '<span class="badge badge-source">高亮</span>'
         : a.type === 'underline' ? '<span class="badge badge-source">下划线</span>'
+        : a.type === 'comment' ? '<span class="badge badge-source">批注</span>'
         : '<span class="badge badge-done">笔记</span>';
       const tags = (a.tags || []).map((t) => `<button class="pr-note-tag" data-tag-edit="${idx}" title="点击编辑标签">${esc(t)}</button>`).join('');
       return `
@@ -10012,7 +10118,7 @@
     const lines = [`# ${title} · 笔记与高亮`, ''];
     if (metaBits) lines.push(`> ${metaBits}`, '');
     lines.push(`> 导出时间：${stamp}　·　共 ${rows.length} 条${keepFilter ? '（筛选结果）' : ''}`, '');
-    const TYPE_NAME = { highlight: '高亮', underline: '下划线', note: '笔记' };
+    const TYPE_NAME = { highlight: '高亮', underline: '下划线', note: '笔记', comment: '批注' };
     for (const { ann: a, idx } of rows) {
       const loc = a.cfi ? '电子书' : `第 ${a.page} 页`;
       lines.push(`## ${TYPE_NAME[a.type] || '批注'} · ${loc}`, '');
@@ -10458,13 +10564,82 @@
     ]);
   }
 
+  /**
+   * 批注（v3.1.1）—— 与「笔记」的区别：
+   *   · 笔记：正文铺一层淡底色 + 小图标，一眼能看出记的是哪句；
+   *   · 批注：正文**不铺底色、不展开任何内容**，只在选区右端留一个小标记；
+   *     点标记才弹出来看/改/删，符合「只标记、不干扰阅读」的用法。
+   */
+  function doComment() {
+    const sel = pr.currentSelection;
+    if (!sel) return;
+    showPopover($('prPopover'), '添加批注',
+      `<div class="pr-note-quote" style="margin-bottom:8px">${esc(sel.text.slice(0, 150))}</div>
+       <textarea id="prNoteText" placeholder="写下批注内容…（正文只显示标记，不展开内容）"></textarea>`,
+      [{ text: '保存', cls: 'btn-primary', onClick: () => {
+        const note = $('prNoteText').value.trim();
+        if (!note) { toast('批注内容为空', 'error'); return; }
+        if (sel.kind === 'epub') { addEpubAnnotation('comment', sel, note); return; }
+        addAnnotations(annotationsFromSelection('comment', sel, note));
+      } }]);
+  }
+
+  /** 点批注标记：先给内容，再决定改还是删（不展开在正文里） */
+  function showCommentPopover(a, x, y) {
+    const idx = currentAnnotations().indexOf(a);
+    if (idx < 0) return;
+    showPopover($('prPopover'), '批注',
+      `<div class="pr-note-quote">${esc((a.text || '').slice(0, 240))}</div>
+       <div class="pr-note-text">${esc(a.note || '')}</div>`,
+      [
+        { text: '编辑', onClick: () => editComment(idx) },
+        { text: '删除', cls: 'btn-danger', onClick: () => deleteComment(idx) },
+      ], { left: x, top: y });
+  }
+
+  function editComment(idx) {
+    const anns = currentAnnotations();
+    const a = anns[idx];
+    if (!a) return;
+    showPopover($('prPopover'), '编辑批注',
+      `<div class="pr-note-quote">${esc((a.text || '').slice(0, 160))}</div>
+       <textarea id="prNoteText">${esc(a.note || '')}</textarea>`,
+      [{ text: '保存', cls: 'btn-primary', onClick: async () => {
+        const v = $('prNoteText').value.trim();
+        if (!v) { toast('批注内容为空', 'error'); return; }
+        const next = [...currentAnnotations()];
+        if (!next[idx]) return;
+        next[idx] = { ...next[idx], note: v, updatedAt: new Date().toISOString() };
+        await saveAnnotations(next);
+        if (next[idx].cfi) {
+          window.EpubReader?.detachAnnotation?.(a);
+          window.EpubReader?.attachAnnotation?.(next[idx]);
+        } else {
+          rerenderVisiblePage(a.page);
+        }
+        renderNotesList();
+        toast('批注已更新', 'success');
+      } }]);
+  }
+
+  async function deleteComment(idx) {
+    const anns = [...currentAnnotations()];
+    const [removed] = anns.splice(idx, 1);
+    if (!removed) return;
+    await saveAnnotations(anns);
+    if (removed.cfi) window.EpubReader?.detachAnnotation?.(removed);
+    else rerenderVisiblePage(removed.page);
+    renderNotesList();
+    toast('批注已删除', 'success');
+  }
+
   /** EPUB 的批注只有 CFI 与文字，没有页面坐标 → 单独组装，最终仍写进同一条 annotations */
   async function addEpubAnnotation(type, sel, note = '') {
     const ann = {
       id: 'a' + Date.now(),
       type,                                     // 'highlight' | 'underline' | 'note'
       cfi: sel.cfi,
-      color: type === 'note' ? '' : pr.highlightColor,
+      color: (type === 'note' || type === 'comment') ? '' : pr.highlightColor,
       text: sel.text || '',
       note,
       createdAt: new Date().toISOString(),
@@ -10512,9 +10687,27 @@
     const tb = $('prSelectionToolbar');
     const tbRect = tb.classList.contains('hidden') ? { left: 300, bottom: 300 } : tb.getBoundingClientRect();
     const z = uiZoom();
-    pop.style.left = ((pos.left != null ? pos.left : Math.max(10, tbRect.left)) / z) + 'px';
-    pop.style.top = ((pos.top != null ? pos.top : Math.min(window.innerHeight - 250, tbRect.bottom + 8)) / z) + 'px';
+    let left = (pos.left != null ? pos.left : Math.max(10, tbRect.left)) / z;
+    let top = (pos.top != null ? pos.top : Math.min(window.innerHeight - 250, tbRect.bottom + 8)) / z;
+    // 先挂进布局（仍不可见）量出真实尺寸，再把它收进视口。
+    // 批注标记常常就贴在页面最底部，浮层若一律向下展开，会被窗口下沿切掉大半 ——
+    // 看起来像「点了没反应」。所以先按下方展开，放不下就翻到触发点上方。
+    pop.style.visibility = 'hidden';
     pop.classList.remove('hidden');
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    const vw = window.innerWidth / z;
+    const vh = window.innerHeight / z;
+    const w = pop.offsetWidth;
+    const h = pop.offsetHeight;
+    if (top + h > vh - 8) {
+      const above = top - h - 24;
+      top = above >= 8 ? above : Math.max(8, vh - 8 - h);
+    }
+    if (left + w > vw - 8) left = Math.max(8, vw - 8 - w);
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    pop.style.visibility = '';
     pop.querySelector('[data-popclose]')?.addEventListener('click', hidePopover);
     pop.querySelectorAll('[data-popbtn]').forEach((btn) => btn.addEventListener('click', () => {
       const b = buttons.find((x) => x.text === btn.dataset.popbtn);
@@ -11239,6 +11432,7 @@
       else if (btn.dataset.sel === 'highlight') doHighlight();
       else if (btn.dataset.sel === 'underline') doUnderline();
       else if (btn.dataset.sel === 'note') doNote();
+      else if (btn.dataset.sel === 'comment') doComment();
       else if (btn.dataset.sel === 'cite') doCite();
     });
 
@@ -12533,6 +12727,9 @@
     document.querySelectorAll('.nav-item[data-view]').forEach((n) => n.classList.toggle('active', n.dataset.view === v));
     const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', specialissue: 'viewSpecialIssue', direction: 'viewDirection', arxiv: 'viewArxiv', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
     for (const [key, id] of Object.entries(map)) $(id).classList.toggle('hidden', key !== v);
+    // 切回文献中心 / 首页时先追一次服务端版本：arXiv 导入、另一个窗口的改动
+    // 都能立刻反映到列表与统计上，不必重启应用（v3.1.1）
+    if (v === 'library' || v === 'home') await syncItemsIfChanged();
     // 顶栏「当前页面」指示：15 个模块靠它定位，避免在导航之间迷路
     const page = VIEW_META[v];
     if (page) {
@@ -15853,7 +16050,8 @@ a { color: #176b87; }
     renderModelSwitcher();
     // 「当前大模型」这个引擎名要带上模型名，而模型列表是上面这一句才有的：拿到后补刷一次
     renderTranslateEngine();
-    items.filter((i) => i.filename && !i.thumb).slice(0, 10).forEach((i) => ensureThumb(i));
+    // 缩略图不在启动时抢主线程：空闲时一张一张补（见 scheduleThumbBackfill）
+    scheduleThumbBackfill();
     renderLibBar();
     switchView('home');
     maybeStartOnboarding();
@@ -15884,6 +16082,8 @@ a { color: #176b87; }
     },
     isReaderOpen: () => !!pr.open,
     refreshItems: () => loadItems(),
+    /** 外部模块（arXiv 导入、世图下载等）写完文献后叫一声，文献中心不必重启即可看到 */
+    literatureChanged: notifyLiteratureChanged,
     /**
      * SI 里「加入任务」之后要立刻反映到任务安排和首页，
      * 但任务列表在 app.js 的闭包里，所以由这里统一刷新，避免 SI 自己再拉一份造成两处状态不一致。

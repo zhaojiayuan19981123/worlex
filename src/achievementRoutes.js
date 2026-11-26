@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import multer from 'multer';
-import mammoth from 'mammoth';
+// mammoth（DOCX 解析）约 500ms，只有「识别 Word 附件」才用到，改为按需加载（v3.1.1 启动优化）
 
 import * as achievementStore from './achievementStore.js';
 import {
@@ -351,6 +351,7 @@ export function registerAchievementRoutes(app, ctx) {
   async function readAttachmentText(file) {
     const ext = extOf(file.originalName || file.filename);
     if (ext === 'docx') {
+      const { default: mammoth } = await import('mammoth');
       const parsed = await mammoth.extractRawText({ path: file.filePath });
       const out = String(parsed.value || '').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
       if (out.length < 40) throw new Error('无法从该 DOCX 提取有效文本，请确认不是空文档或受保护文档');

@@ -349,6 +349,23 @@ export function getLiterature(id) {
   return listLiterature().find((it) => it.id === id) || null;
 }
 
+/**
+ * 文献库版本戳（v3.1.1）。
+ *
+ * 前端只在启动时拉一次列表，之后任何「服务端直接写入」（arXiv 导入、另一个窗口的
+ * 改动）它都不知道，用户必须重启应用才能看到新文献。这里给一个极轻量的版本号：
+ * 文件 mtime + 大小。任何一次 upsert 都会「写 tmp → rename」，戳一定变化。
+ * 前端切换视图时比对它，变了才重新拉列表，没变就只花一次 stat。
+ */
+export function literatureVersion() {
+  try {
+    const st = fs.statSync(DATA_FILE);
+    return { stamp: `${st.mtimeMs}:${st.size}`, count: listLiterature().length };
+  } catch {
+    return { stamp: '', count: 0 };
+  }
+}
+
 export function upsertLiterature(record) {
   const db = loadFile(DATA_FILE, { items: [] });
   const idx = db.items.findIndex((it) => it.id === record.id);

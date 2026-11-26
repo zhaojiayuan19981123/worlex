@@ -393,11 +393,11 @@
     yellow: '#ffe08a', green: '#b5e6b5', blue: '#a8d4f5', pink: '#f7b8d0',
   };
   // 我们的批注类型 → epub.js 的注解类型（epub.js 把「文字批注」叫 mark）
-  const KIND_TO_EPUB = { highlight: 'highlight', underline: 'underline', note: 'mark' };
+  const KIND_TO_EPUB = { highlight: 'highlight', underline: 'underline', note: 'mark', comment: 'mark' };
 
   function kindOf(ann) {
     const t = ann && ann.type;
-    return (t === 'underline' || t === 'note') ? t : 'highlight';
+    return (t === 'underline' || t === 'note' || t === 'comment') ? t : 'highlight';
   }
 
   /**
@@ -420,6 +420,10 @@
         // 文字批注没有颜色可选，统一用琥珀色波浪线标出位置，正文里一眼能看到
         api.mark(ann.cfi, data, null, 'ep-note',
           { 'fill': '#e8a213', 'fill-opacity': '0.34' });
+      } else if (kind === 'comment') {
+        // 批注：极淡的虚线框，只表示「这里有一条批注」，不铺可见底色
+        api.mark(ann.cfi, data, null, 'ep-comment',
+          { 'fill': '#c0763c', 'fill-opacity': '0.08', 'stroke': '#c0763c', 'stroke-opacity': '0.55', 'stroke-width': '1', 'stroke-dasharray': '3 3' });
       } else {
         api.highlight(ann.cfi, data, null, 'ep-highlight',
           { 'fill': color, 'fill-opacity': '0.42', 'mix-blend-mode': 'multiply' });

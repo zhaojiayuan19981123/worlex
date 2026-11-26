@@ -18,12 +18,16 @@
 //   · 带 /Rotate 的页面不做裁剪（坐标系要额外变换，横排论文里极少见），
 //     改为留一行占位说明，避免贴歪
 //   · 不保留双栏的并排关系、不保留环绕排版——这正是「重排」的代价
-import { PDFDocument } from 'pdf-lib';
+import { pdfLibModule, fontkitModule } from './lazyLibs.js';
+// pdf-lib / fontkit 惰性加载（v3.1.1 启动优化），调用点写法不变
+const PDFDocument = {
+  create: (...args) => pdfLibModule().PDFDocument.create(...args),
+  load: (...args) => pdfLibModule().PDFDocument.load(...args),
+};
 import { tokenize, applyLineBreakRules, hardSplit, sanitizeForPdf } from './layout.js';
 import { toUint8Array } from './util.js';
 import { drawLines } from './paint.js';
 import { buildStrokeTable } from './fontMetrics.js';
-import fontkit from '@pdf-lib/fontkit';
 
 // A4（pt）
 const PAGE_W = 595.28;
@@ -436,7 +440,7 @@ export async function renderReflowPdf({
   // pdf.js 在解析阶段会 detach 传入的 ArrayBuffer，拿原始字节重新解析一遍最干净。
   const srcDoc = await PDFDocument.load(src, { ignoreEncryption: true, updateMetadata: false });
   const doc = await PDFDocument.create();
-  doc.registerFontkit(fontkit);
+  doc.registerFontkit(fontkitModule());
 
   const regularFont = await doc.embedFont(fontBytes, { subset: true });
   const hasRealBold = !!boldFontBytes && boldFontBytes.length > 0

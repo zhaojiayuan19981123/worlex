@@ -155,10 +155,10 @@ test('科学问题与研究问题必须被讲成两件事（否则模型会写�
   }
 });
 
-test('算法类（CCF）提示词覆盖实验设计 / 消融 / 数据集 / 指标 / 领域，并强调 CCF 标注', () => {
+test('算法类（CCF）提示词覆盖实验设计 / 实验环境 / 消融 / 数据集 / 指标 / 领域，并强调 CCF 标注', () => {
   const p = buildPrompt('algorithm', '简体中文');
   for (const k of ['researchQuestion', 'scienceQuestion', 'coreFindings', 'researchDesign',
-    'criticalThinking', 'reviewUse', 'experimentalDesign', 'ablationDesign', 'researchGap',
+    'criticalThinking', 'reviewUse', 'experimentalDesign', 'experimentalEnv', 'ablationDesign', 'researchGap',
     'dataset', 'metrics', 'researchField']) {
     assert.ok(p.includes(k), `算法类提示词缺 ${k}`);
   }
@@ -189,11 +189,11 @@ test('三种文献类型归一化：algorithm / ccf 都落到算法类', () => {
   assert.deepEqual(DOC_TYPE_LABELS, { empirical: '实证类', model: '模型类', algorithm: '算法类' });
 });
 
-test('算法类字段集：书目 + 12 个专属字段，且不含实证类/模型类的独有字段', () => {
+test('算法类字段集：书目 + 13 个专属字段，且不含实证类/模型类的独有字段', () => {
   assert.deepEqual(TYPE_FIELDS.algorithm, [
     'title', 'titleZh', 'authors', 'journal', 'year', 'doi', 'keywords', 'abstract',
     'researchQuestion', 'scienceQuestion', 'coreFindings', 'researchDesign', 'criticalThinking',
-    'reviewUse', 'experimentalDesign', 'ablationDesign', 'researchGap',
+    'reviewUse', 'experimentalDesign', 'experimentalEnv', 'ablationDesign', 'researchGap',
     'dataset', 'metrics', 'researchField',
   ]);
   for (const k of ['researchObject', 'constructs', 'background', 'paramDiscussion', 'innovation', 'method']) {

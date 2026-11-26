@@ -15,14 +15,20 @@
 //   3) 双语模式必须重新摆放嵌入页：embedPdf 拿到的是「未旋转的原始内容」，
 //      带 /Rotate 的页面要按旋转角做一次刚体变换才能和阅读器里看到的方向一致。
 
-import {
-  PDFDocument, rgb, degrees,
-} from 'pdf-lib';
-import fontkit from '@pdf-lib/fontkit';
 import { fitText, sanitizeForPdf } from './layout.js';
 import { toUint8Array } from './util.js';
 import { buildStrokeTable } from './fontMetrics.js';
 import { toRgb, drawLines as paintLines } from './paint.js';
+// pdf-lib / fontkit 改为「第一次真正生成 PDF 时才 require」（v3.1.1 启动优化）：
+// 调用点写法不变，只是把模块级 import 换成同步的惰性取用。
+import { pdfLibModule, fontkitModule } from './lazyLibs.js';
+
+const PDFDocument = {
+  create: (...args) => pdfLibModule().PDFDocument.create(...args),
+  load: (...args) => pdfLibModule().PDFDocument.load(...args),
+};
+const rgb = (...args) => pdfLibModule().rgb(...args);
+const degrees = (...args) => pdfLibModule().degrees(...args);
 
 const DEFAULT_OPTIONS = {
   coverOriginal: true,      // 单语模式是否覆盖原文
@@ -77,7 +83,7 @@ export async function renderTranslatedPdf(args) {
   const doc = mode === 'dual'
     ? await PDFDocument.create()
     : await PDFDocument.load(src, { ignoreEncryption: true, updateMetadata: false });
-  doc.registerFontkit(fontkit);
+  doc.registerFontkit(fontkitModule());
   const regularFont = await doc.embedFont(fontBytes, { subset: true });
   // 有独立加粗字体就嵌它，否则加粗全靠描边合成（仍然只画一次文字）
   const hasRealBold = !!boldFontBytes && boldFontBytes.length > 0

@@ -2144,6 +2144,7 @@
                 <option value="highlight">高亮</option>
                 <option value="underline">下划线</option>
                 <option value="note">笔记</option>
+                <option value="comment">批注</option>
               </select>
               <select id="prNotesColor" class="pr-notes-sel" title="按颜色筛选">
                 <option value="all">全部颜色</option>
@@ -2220,7 +2221,9 @@
       <span class="pr-sel-sep" data-litonly></span>
       <button class="pr-sel-btn" data-sel="highlight" data-litonly title="高亮选中文字"><span class="pr-sel-ico"><svg class="ico ico" aria-hidden="true"><use href="#i-pen"/></svg></span>高亮</button>
       <button class="pr-sel-btn" data-sel="underline" data-litonly title="给选中文字加下划线"><span class="pr-sel-ico pr-ico-u">U</span>下划线</button>
-      <button class="pr-sel-btn" data-sel="note" data-litonly title="写笔记"><span class="pr-sel-ico"><svg class="ico ico" aria-hidden="true"><use href="#i-note"/></svg></span>笔记</button>
+      <button class="pr-sel-btn" data-sel="note" data-litonly title="写笔记（正文显示淡底色 + 小图标）"><span class="pr-sel-ico"><svg class="ico ico" aria-hidden="true"><use href="#i-note"/></svg></span>笔记</button>
+      <!-- 批注：正文里**不显示批注内容**，只留一个标记；点标记才展开（v3.1.1） -->
+      <button class="pr-sel-btn" data-sel="comment" data-litonly title="加批注（正文只显示标记，不展开内容）"><span class="pr-sel-ico"><svg class="ico ico" aria-hidden="true"><use href="#i-note"/></svg></span>批注</button>
       <button class="pr-sel-btn" data-sel="cite" data-litonly title="把选中文字放进 AI 引用池，可累积多段后一起提问"><span class="pr-sel-ico"><svg class="ico ico" aria-hidden="true"><use href="#i-link"/></svg></span>引用</button>
       <span class="pr-sel-sep"></span>
       <button class="pr-sel-btn" data-sel="translate" title="翻译选中文字"><span class="pr-sel-ico"><svg class="ico ico" aria-hidden="true"><use href="#i-globe"/></svg></span>翻译</button>

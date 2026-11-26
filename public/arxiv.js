@@ -438,6 +438,15 @@
     }
   }
 
+  /**
+   * 导入会直接写服务端的 literature.json，而文献中心的列表是启动时拉进内存的。
+   * 这里主动通知一次，配合 app.js 的版本戳校验，切回去就能立刻看到新文献（不必重启）。
+   */
+  function notifyLibraryChanged() {
+    try { window.Worlex?.literatureChanged?.(); } catch (_) { /* ignore */ }
+    try { window.dispatchEvent(new CustomEvent('worlex:literature-changed', { detail: { source: 'arxiv' } })); } catch (_) { /* ignore */ }
+  }
+
   function pollImport(jobId) {
     clearTimeout(S.importTimer);
     const tick = async () => {
@@ -458,6 +467,8 @@
           if (item) S.imported.add(item.id);
         }
         renderList(); renderHead();
+        // 导入直接写的是服务端 literature.json，这里通知文献中心：切回去就能看到，不必重启
+        notifyLibraryChanged();
         if (job.status === 'done') {
           const parts = [`成功 ${job.imported} 篇`];
           if (job.skipped.length) parts.push(`跳过重复 ${job.skipped.length} 篇`);
