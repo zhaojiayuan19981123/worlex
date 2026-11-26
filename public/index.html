@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="knowledge-graph.css" />
   <link rel="stylesheet" href="special-issue.css" />
   <link rel="stylesheet" href="direction.css" />
+  <link rel="stylesheet" href="arxiv.css" />
   <link rel="stylesheet" href="workbench-extras.css" />
   <link rel="stylesheet" href="interface.css" />
 </head>
@@ -217,6 +218,7 @@
         <div class="nav-item" data-view="topjournals"><svg class="ico" aria-hidden="true"><use href="#i-journal"/></svg><span class="nav-label">顶刊追踪</span><span id="navTopJournalBadge" class="nav-badge hidden">0</span></div>
         <div class="nav-item" data-view="specialissue"><svg class="ico" aria-hidden="true"><use href="#i-megaphone"/></svg><span class="nav-label">SI 征稿</span><span id="navSiBadge" class="nav-badge hidden">0</span></div>
         <div class="nav-item" data-view="direction"><svg class="ico" aria-hidden="true"><use href="#i-compass"/></svg><span class="nav-label">方向分析</span></div>
+        <div class="nav-item" data-view="arxiv"><svg class="ico" aria-hidden="true"><use href="#i-brain"/></svg><span class="nav-label">arXiv 分类</span></div>
         <div class="nav-item" data-view="graph"><svg class="ico" aria-hidden="true"><use href="#i-graph"/></svg><span class="nav-label">知识图谱</span></div>
         <div class="nav-item" data-view="papers"><svg class="ico" aria-hidden="true"><use href="#i-papers"/></svg><span class="nav-label">论文进度</span></div>
 
@@ -771,6 +773,9 @@
 
       <!-- ===== 视图：方向分析（DOM 由 direction.js 自建） ===== -->
       <section id="viewDirection" class="view hidden"></section>
+
+      <!-- ===== 视图：arXiv 分类浏览（DOM 由 arxiv.js 自建） ===== -->
+      <section id="viewArxiv" class="view hidden"></section>
 
       <!-- ===== 视图：知识图谱（DOM 由 knowledge-graph.js 自建） ===== -->
       <section id="viewGraph" class="view hidden"></section>
@@ -2348,6 +2353,7 @@
   <script src="knowledge-graph.js"></script>
   <script src="special-issue.js"></script>
   <script src="direction.js"></script>
+  <script src="arxiv.js"></script>
   <script src="app.js"></script>
   <script src="interface.js"></script>
 </body>

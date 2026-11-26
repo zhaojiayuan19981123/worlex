@@ -1,3 +1,42 @@
+## v2.9.0：方向分析收紧取数口径 + 新增 arXiv 分类浏览（2026-11-26）
+
+### 需求
+1. 检索结果要显示期刊等级；2. 要有下一页按钮；3. 只显示期刊论文；4. 预印本不纳入；
+5. 支持翻译成中文；6. 剔除非英文期刊；7. 剔除非 Web of Science 核心期刊；
+8. 新增 arXiv 功能，按不同类别展示。
+
+### 一、方向分析的取数口径
+
+`src/directionSearch.js` 把三个条件变成**硬约束**（前端改不了，服务端再归一一次）：
+
+- `type:article|review`：只要期刊论文与期刊综述，预印本、会议论文、图书章节全部排除；
+- `language:en`：只收英文期刊；
+- `primary_location.source.type:journal` + `primary_location.source.is_core:true`：只收正式期刊与核心来源。
+
+本地再兜一层：即便上游字段缺失，`preprint` / 非 `journal` / 明确 `is_core:false` 的条目也会被丢掉，并计入 `droppedByScope`。真实检索实测 6 篇全部是英文期刊论文，`isCore` 均为 true。
+
+**关于「Web of Science 核心」**：OpenAlex 没有 WoS 期刊名单（查过 `/source-lists`，只有 CWTS Core、DOAJ、MEDLINE 等）。所以：
+- 默认用 OpenAlex 的 `is_core`（**CWTS Core sources**，与 WoS 核心高度重叠但**不是同一份名单**）做硬过滤，界面如实标注「核心来源：CWTS Core 近似」；
+- 配了 easyScholar SecretKey 后，检索完再按 easyScholar 的 SCI / SSCI / AHCI / ESCI 数据集交叉核对，严格剔除不在 WoS 核心的期刊；未命中的用 CWTS Core 兜底。
+
+### 二、期刊等级、分页、中文翻译
+
+- 新增 `POST /api/direction/ranks`：按一页里出现的期刊批量查 easyScholar（限速 2 次/秒，进程内缓存），返回中科院 / 新锐 / ABS / UTD24 / SSCI / FMS / CSSCI / 北大核心 / CCF 九类标签，配色沿用 `rank-utils.js`。没配 Key 时显示「核心来源 · CWTS Core」，并给出说明，不会假装成 WoS。
+- 候选列表改为**10 条一页**，底部有上一页 / 下一页与「第 x / y 页」；勾选是全批次生效，翻页不丢选择。
+- 新增 `POST /api/direction/translate`：把标题 + 摘要交给现有翻译链路译成中文，按「标题：/ 摘要：」解析后写回会话，重开还在；列表里显示「中」徽标与译文，单条「译中文」和批量「翻译成中文」都支持。
+
+### 三、arXiv 分类浏览
+
+- `src/arxivFeed.js`：四组 50+ 个 arXiv 分类（cs / stat / eess / q-bio / econ / 物理），Atom XML 解析（作者、类别、摘要、发布日期、journal_ref、PDF 链接），`buildArxivUrl` 把类别拼成 `cat:`、关键词拼成 `all:` 并用 `AND` 连接。
+- `src/arxivRoutes.js`：`GET /api/arxiv/meta` 与 `GET /api/arxiv/feed`，校验分类、检索词长度与翻页参数，上游失败返回 502 而不是空列表。
+- `public/arxiv.js` + `public/arxiv.css`：左侧学科分类栏 + 右侧论文卡片列表，支持关键词、排序、翻页、展开摘要、原文/PDF 跳转；窄屏分类栏收到上方。
+
+### 验证
+
+- 新增 `arxiv-feed` / `arxiv-http` / `arxiv-wiring`（12 条）、`direction-v29`（5 条），并更新检索与接线测试；全量测试通过。
+- 真实抓取：arXiv `cs.AI` 返回 215310 篇、解析出 3 条完整记录；方向分析检索 6 篇全为英文期刊论文且均为核心来源。
+- 浏览器实测：候选列表 10 条/页与翻页正常、等级标签与中文译名正常显示；arXiv 分类切换与分页正常；深浅主题与窄屏无横向溢出。
+
 ## v2.8.2：世图下载助手支持选择目标文库（2026-11-26）
 
 ### 需求

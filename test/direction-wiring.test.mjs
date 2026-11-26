@@ -63,6 +63,19 @@ test('后端：路由已注册，数据文件进了备份清单', () => {
   assert.match(storeSrc, /export function saveDirectionState\(value\)/);
 });
 
+test('v2.9：等级 / 分页 / 翻译的接线都在', () => {
+  const js = read('../public/direction.js');
+  const routes = read('../src/directionRoutes.js');
+  assert.match(js, /dir-scope-note/);
+  assert.match(js, /data-dir="page-next"/);
+  assert.match(js, /data-dir="translate-selected"/);
+  assert.match(js, /api\('\/api\/direction\/ranks'/);
+  assert.match(js, /api\('\/api\/direction\/translate'/);
+  assert.match(routes, /app\.post\('\/api\/direction\/ranks'/);
+  assert.match(routes, /app\.post\('\/api\/direction\/translate'/);
+  assert.match(read('../src/directionSearch.js'), /primary_location\.source\.is_core:true/);
+});
+
 test('样式：全部走主题 token，没有写死颜色', () => {
   // 允许 color-mix / transparent / 关键字，但不允许 #rrggbb 或 rgb( 字面量
   const literals = css.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g) || [];

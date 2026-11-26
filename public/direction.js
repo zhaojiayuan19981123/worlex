@@ -42,10 +42,14 @@
     return data;
   }
 
+  // 类型 / 语言 / 核心期刊是硬口径，服务端也会再归一一次：
+  // 只要英文期刊论文（含综述），排除预印本、会议论文与非核心来源。
   const DEFAULT_FILTERS = {
-    yearFrom: 0, yearTo: 0, minCitations: 0, type: '', language: '',
+    yearFrom: 0, yearTo: 0, minCitations: 0,
+    type: 'article|review', language: 'en', coreOnly: true,
     onlyWithAbstract: true, includeRetracted: false, sort: 'relevance', perTopic: 30,
   };
+  const PAGE_SIZE = 10;
 
   const S = {
     mounted: false,
@@ -63,6 +67,11 @@
     pollTimer: null,
     selection: new Set(),
     expanded: new Set(),
+    page: 1,
+    ranks: {},          // paperId → {summary, items, wosCore, coreSource}
+    rankLoading: false,
+    rankNote: '',
+    translating: false,
     reportId: '',
     error: '',
     hint: '',
@@ -118,22 +127,7 @@
                   <input class="dir-num" type="number" min="0" step="10" placeholder="0" data-filter="minCitations">
                   <label class="dir-inline-check"><input type="checkbox" data-filter="onlyWithAbstract" checked> 只保留有摘要</label>
                 </div>
-                <div class="dir-adv-row">
-                  <label>类型</label>
-                  <select class="dir-select" data-filter="type">
-                    <option value="">全部</option>
-                    <option value="article">期刊论文</option>
-                    <option value="review">综述</option>
-                    <option value="preprint">预印本</option>
-                    <option value="book-chapter">图书章节</option>
-                  </select>
-                  <label>语言</label>
-                  <select class="dir-select" data-filter="language">
-                    <option value="">全部</option>
-                    <option value="en">英文</option>
-                    <option value="zh">中文</option>
-                  </select>
-                </div>
+                <div class="dir-scope-note">仅英文期刊论文（含综述）；预印本、会议论文、非核心来源不纳入</div>
                 <div class="dir-adv-row">
                   <label>排序</label>
                   <select class="dir-select" data-filter="sort">
@@ -168,6 +162,7 @@
             <div class="tb-spacer"></div>
             <label class="dir-inline-check dir-all"><input type="checkbox" data-dir="select-all"> 全选</label>
             <span class="dir-selcount" data-dir-selcount>已选 0 篇</span>
+            <button class="btn btn-sm" data-dir="translate-selected" title="把勾选文献的标题与摘要翻译成中文">翻译成中文</button>
             <select class="dir-select" data-dir="mode" title="分析口径">
               <option value="both">空白 + 方向</option>
               <option value="gap">只找空白</option>
@@ -212,6 +207,10 @@
       if (name === 'select-all') { return; } // checkbox 由 change 处理
       if (name === 'jump-baidu' || name === 'jump-xmol') { jump(name === 'jump-baidu' ? 'baidu' : 'xmol'); return; }
       if (name === 'clear-selection') { S.selection.clear(); renderPapers(); return; }
+      if (name === 'page-prev') { S.page = Math.max(1, S.page - 1); renderPapers(); return; }
+      if (name === 'page-next') { S.page = Math.min(pageCount(), S.page + 1); renderPapers(); return; }
+      if (name === 'translate-paper') { translatePapers([action.dataset.paperId]); return; }
+      if (name === 'translate-selected') { translatePapers([...S.selection]); return; }
       if (name === 'sample') { applySample(action.dataset.sample); return; }
       if (name === 'export-md') { exportMarkdown(); return; }
       if (name === 'copy-md') { copyMarkdown(); return; }
@@ -310,6 +309,9 @@
       S.selection = new Set(data.session.selected || []);
       S.reportId = data.session.analyses?.[0]?.id || '';
       S.expanded.clear();
+      S.page = 1;
+      S.ranks = {};
+      S.rankNote = '';
       S.error = '';
       render();
     } catch (error) {
@@ -345,6 +347,43 @@
   }
 
   const visiblePapers = () => (S.session?.papers || []);
+  const pageCount = () => Math.max(1, Math.ceil(visiblePapers().length / PAGE_SIZE));
+  const pagedPapers = () => visiblePapers().slice((S.page - 1) * PAGE_SIZE, S.page * PAGE_SIZE);
+
+  const titleOf = (p) => cleanText(p?.titleZh || p?.title || '（无标题）');
+  const abstractOf = (p) => cleanText(p?.abstractZh || p?.abstract || '');
+  function cleanText(v) { return String(v ?? '').replace(/\s+/g, ' ').trim(); }
+
+  function rankChips(paper) {
+    const rank = S.ranks[paper.id];
+    if (!rank || rank.pending) return '<span class="dir-rank is-loading">等级…</span>';
+    if (!rank.items?.length) return '<span class="dir-rank is-empty">—</span>';
+    const toneOf = window.RankUtils?.rankSystemTone || (() => 'gray');
+    return rank.items.slice(0, 4).map((i) => {
+      const tone = toneOf(i.label, i.value);
+      return `<span class="dir-rank rank-chip-${tone}">${esc(i.label)} <b>${esc(i.value)}</b></span>`;
+    }).join('');
+  }
+
+  async function loadRanks(papers) {
+    const need = papers.filter((p) => p.venue && !S.ranks[p.id]);
+    if (!need.length || S.rankLoading) return;
+    need.forEach((p) => { S.ranks[p.id] = { pending: true, items: [], summary: '' }; });
+    S.rankLoading = true;
+    try {
+      const data = await api('/api/direction/ranks', {
+        method: 'POST',
+        body: { papers: need.map((p) => ({ id: p.id, venue: p.venue, isCore: p.isCore })) },
+      });
+      Object.assign(S.ranks, data.byId || {});
+      S.rankNote = data.note || '';
+    } catch (e) {
+      need.forEach((p) => { S.ranks[p.id] = { items: [], summary: '等级查询失败' }; });
+    } finally {
+      S.rankLoading = false;
+      renderPapers();
+    }
+  }
 
   // ==================== 渲染 ====================
 
@@ -383,8 +422,6 @@
     set('[data-filter="yearFrom"]', f.yearFrom || '');
     set('[data-filter="yearTo"]', f.yearTo || '');
     set('[data-filter="minCitations"]', f.minCitations || '');
-    set('[data-filter="type"]', f.type || '');
-    set('[data-filter="language"]', f.language || '');
     set('[data-filter="sort"]', f.sort || 'relevance');
     set('[data-filter="perTopic"]', f.perTopic || 30);
     const only = $('[data-filter="onlyWithAbstract"]'); if (only) only.checked = f.onlyWithAbstract !== false;
@@ -477,42 +514,56 @@
       pane.innerHTML = emptyState();
       return;
     }
+    if (S.page > pageCount()) S.page = pageCount();
+    const shown = pagedPapers();
     const stats = S.session?.stats || {};
     const perTopic = S.session?.perTopic || [];
     const failed = perTopic.filter((t) => t.error);
+    const offset = (S.page - 1) * PAGE_SIZE;
     pane.innerHTML = `
       <div class="dir-paper-head">
-        <div>共 <b>${papers.length}</b> 篇候选${stats.totalHits ? `（各主题命中合计 ${Number(stats.totalHits).toLocaleString('zh-CN')} 篇）` : ''}${stats.duplicated ? `，合并去重 ${stats.duplicated} 篇` : ''}${stats.droppedByExclude ? `，按排除词过滤 ${stats.droppedByExclude} 篇` : ''}</div>
+        <div>共 <b>${papers.length}</b> 篇候选${stats.totalHits ? `（各主题命中合计 ${Number(stats.totalHits).toLocaleString('zh-CN')} 篇）` : ''}${stats.duplicated ? `，合并去重 ${stats.duplicated} 篇` : ''}${stats.droppedByExclude ? `，按排除词过滤 ${stats.droppedByExclude} 篇` : ''}${stats.wosFiltered ? `，按 WoS 收录剔除 ${stats.wosFiltered} 篇` : ''}</div>
         ${S.selection.size ? `<button class="dir-link" data-dir="clear-selection">清空勾选</button>` : ''}
       </div>
       ${failed.length ? `<div class="dir-warn">${failed.map((t) => `${esc(t.topicName)}：${esc(t.error)}`).join('；')}</div>` : ''}
-      <div class="dir-papers">${papers.map((p, i) => paperRow(p, i)).join('')}</div>`;
+      <div class="dir-papers">${shown.map((p, i) => paperRow(p, offset + i)).join('')}</div>
+      <div class="dir-pager">
+        <span>第 ${S.page} / ${pageCount()} 页 · 显示 ${offset + 1}–${Math.min(offset + PAGE_SIZE, papers.length)} 篇</span>
+        <span class="tb-spacer"></span>
+        <button class="btn btn-sm" data-dir="page-prev"${S.page <= 1 ? ' disabled' : ''}>上一页</button>
+        <button class="btn btn-sm btn-primary" data-dir="page-next"${S.page >= pageCount() ? ' disabled' : ''}>下一页</button>
+      </div>
+      ${S.rankNote ? `<div class="dir-rank-note">${esc(S.rankNote)}</div>` : ''}`;
+    // 等级按需查询：只查这一页出现的期刊，结果缓存到会话生命周期内
+    loadRanks(shown);
   }
 
   function paperRow(paper, index) {
     const checked = S.selection.has(paper.id);
     const open = S.expanded.has(paper.id);
     const url = safeUrl(paper.oaUrl || paper.url);
-    const abstract = String(paper.abstract || '').trim();
+    const title = titleOf(paper);
+    const abstract = abstractOf(paper);
+    const translated = Boolean(paper.titleZh || paper.abstractZh);
     const tags = (paper.topics || []).slice(0, 2).map((t) => `<span class="dir-tag">${esc(t)}</span>`).join('');
     const meta = [
       paper.authorLine || '',
       paper.year || '',
       paper.venue || '',
       paper.citedBy ? `被引 ${paper.citedBy}` : '',
-      paper.type === 'preprint' ? '预印本' : '',
-      paper.language === 'zh' ? '中文' : '',
     ].filter(Boolean).map(esc).join(' · ');
     return `
       <div class="dir-paper${checked ? ' is-checked' : ''}${open ? ' is-open' : ''}" data-paper-id="${esc(paper.id)}">
         <label class="dir-check"><input type="checkbox"${checked ? ' checked' : ''} aria-label="选择这篇文献"></label>
         <div class="dir-paper-body">
-          <div class="dir-paper-title">${esc(paper.title)}${url ? ` <a href="${esc(url)}" target="_blank" rel="noopener">原文 ↗</a>` : ''}</div>
+          <div class="dir-paper-title">${esc(title)}${translated ? '<span class="dir-zh-badge">中</span>' : ''}${url ? ` <a href="${esc(url)}" target="_blank" rel="noopener">原文 ↗</a>` : ''}</div>
           <div class="dir-paper-meta">${esc(String(index + 1)).padStart(2, '0')} · ${meta || '元数据不全'}${tags ? ` ${tags}` : ''}</div>
+          <div class="dir-paper-rank">${rankChips(paper)}</div>
           ${abstract
             ? `<div class="dir-paper-abs" data-abs>
                  <span class="dir-abs-text">${esc(abstract.slice(0, open ? 1400 : 180))}${!open && abstract.length > 180 ? '…' : ''}</span>
                  ${abstract.length > 180 ? `<button class="dir-abs-toggle" data-dir="toggle-abs">${open ? '收起' : '展开摘要'}</button>` : ''}
+                 <button class="dir-translate-btn" data-dir="translate-paper" data-paper-id="${esc(paper.id)}" title="把标题和摘要翻译成中文">${translated ? '重译' : '译中文'}</button>
                </div>`
             : '<div class="dir-paper-abs is-missing">公开元数据没有摘要，这一篇交给模型时只能按标题判断</div>'}
         </div>
@@ -666,9 +717,41 @@
     const open = S.expanded.has(id);
     row.classList.toggle('is-open', open);
     const text = row.querySelector('.dir-abs-text');
-    if (text) text.textContent = `${String(paper.abstract || '').slice(0, open ? 1400 : 180)}${!open && String(paper.abstract || '').length > 180 ? '…' : ''}`;
+    const abstract = abstractOf(paper);
+    if (text) text.textContent = `${abstract.slice(0, open ? 1400 : 180)}${!open && abstract.length > 180 ? '…' : ''}`;
     const btn = row.querySelector('.dir-abs-toggle');
     if (btn) btn.textContent = open ? '收起' : '展开摘要';
+  }
+
+  async function translatePapers(ids) {
+    if (S.translating) return;
+    const valid = [...new Set(ids.filter(Boolean))]
+      .filter((id) => visiblePapers().some((p) => p.id === id))
+      .slice(0, 20);
+    if (!valid.length) { toast('请先勾选要翻译的文献', 'error'); return; }
+    S.translating = true;
+    banner(`正在把 ${valid.length} 篇文献翻译成中文…`, { spin: true });
+    try {
+      const data = await api('/api/direction/translate', {
+        method: 'POST',
+        body: { sessionId: S.session?.id || '', paperIds: valid },
+      });
+      let ok = 0;
+      for (const paper of visiblePapers()) {
+        const out = data.byId?.[paper.id];
+        if (!out || out.error) continue;
+        paper.titleZh = out.titleZh;
+        paper.abstractZh = out.abstractZh;
+        ok += 1;
+      }
+      toast(ok ? `已翻译 ${ok} 篇` : (data.hint || '没有需要翻译的文献'), ok ? 'success' : '');
+      renderPapers();
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      S.translating = false;
+      banner('');
+    }
   }
 
   // 展开摘要走委托（paperRow 里的按钮没有独立 handler）
@@ -700,11 +783,14 @@
       S.selection = keep.size ? keep : new Set((data.session.papers || []).slice(0, 12).map((p) => p.id));
       S.reportId = data.session.analyses?.[0]?.id || '';
       S.tab = 'papers';
+      S.page = 1;
+      S.ranks = {};
+      S.rankNote = '';
       S.error = '';
       await loadSessions();
       render();
       if (data.empty) banner(data.hint || '没有命中', { tone: 'warn' });
-      else banner(`检索完成：${data.session.papers.length} 篇候选`, { tone: 'ok' });
+      else banner(`检索完成：${data.session.papers.length} 篇候选（${data.wosStrict ? '已按 WoS 收录核对' : '核心来源：CWTS Core 近似'}）`, { tone: 'ok' });
       if (!keep.size && S.selection.size) saveSelection();
       setTimeout(() => { if (S.job?.status !== 'running') banner(''); }, 4000);
     } catch (error) {

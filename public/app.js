@@ -204,6 +204,7 @@
     topjournals: { name: '顶刊追踪', sub: '目标期刊动态与投稿窗口' },
     specialissue: { name: 'SI 征稿', sub: '专刊征稿、截止日期与领域热点' },
     direction: { name: '方向分析', sub: '主题检索 → 多选文献 → 研究空白与方向' },
+    arxiv: { name: 'arXiv 分类', sub: '按学科浏览最新预印本' },
     papers: { name: '论文进度', sub: '在投 / 返修论文的推进状态' },
     projects: { name: '项目管理', sub: '课题、文献与任务的归集' },
     tasks: { name: '任务安排', sub: '待办清单与时间安排' },
@@ -12530,7 +12531,7 @@
   async function switchView(v) {
     view = v;
     document.querySelectorAll('.nav-item[data-view]').forEach((n) => n.classList.toggle('active', n.dataset.view === v));
-    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', specialissue: 'viewSpecialIssue', direction: 'viewDirection', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
+    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', specialissue: 'viewSpecialIssue', direction: 'viewDirection', arxiv: 'viewArxiv', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
     for (const [key, id] of Object.entries(map)) $(id).classList.toggle('hidden', key !== v);
     // 顶栏「当前页面」指示：15 个模块靠它定位，避免在导航之间迷路
     const page = VIEW_META[v];
@@ -12558,6 +12559,7 @@
     if (v !== 'graph') window.GraphView?.close?.();
     if (v !== 'specialissue') window.SpecialIssueView?.close?.();
     if (v !== 'direction') window.DirectionView?.close?.();
+    if (v !== 'arxiv') window.ArxivView?.close?.();
     // 顶栏搜索已移入侧边栏（只对文献中心生效），这里改用 CSS 控制整块搜索区的显隐
     const searchBox = document.querySelector('.side-search');
     if (searchBox) searchBox.classList.toggle('hidden', !isLib);
@@ -12589,6 +12591,7 @@
     if (v === 'specialissue') await window.SpecialIssueView?.mount?.($('viewSpecialIssue'));
     // 方向分析：DOM 由 direction.js 自建，首次进入挂载、之后仅刷新
     if (v === 'direction') await window.DirectionView?.mount?.($('viewDirection'));
+    if (v === 'arxiv') await window.ArxivView?.mount?.($('viewArxiv'));
     if (v === 'ai') {
       renderChatMeta();
       if (!convLoaded) {

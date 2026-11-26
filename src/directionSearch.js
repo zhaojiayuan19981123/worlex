@@ -31,12 +31,10 @@ export const SEARCH_FIELDS = [
   { id: 'author', label: '作者', key: 'raw_author_name.search' },
 ];
 
+// 只保留期刊论文：article = 研究论文，review = 期刊综述。
+// 预印本 / 会议论文 / 图书章节都不收，避免用户勾选后才发现不是正式发表文献。
 export const WORK_TYPES = [
-  { id: '', label: '全部类型' },
-  { id: 'article', label: '期刊论文' },
-  { id: 'review', label: '综述' },
-  { id: 'preprint', label: '预印本' },
-  { id: 'book-chapter', label: '图书章节' },
+  { id: 'article|review', label: '期刊论文（含综述）' },
 ];
 
 export const SORTS = [
@@ -49,8 +47,12 @@ export const DEFAULT_FILTERS = {
   yearFrom: 0,          // 0 = 不限
   yearTo: 0,
   minCitations: 0,
-  type: '',
-  language: '',         // '' / 'zh' / 'en'
+  // 用户口径：只看英文的世界核心期刊论文，预印本不要。
+  // OpenAlex 没有 Web of Science 的期刊名单，`is_core` 是 CWTS Core sources
+  //（与 WoS 核心高度重叠的开放列表），这里用它做服务端硬过滤。
+  type: 'article|review',
+  language: 'en',
+  coreOnly: true,
   onlyWithAbstract: true,
   includeRetracted: false,
   sort: 'relevance',
@@ -112,15 +114,18 @@ export function normalizeTopic(raw, index = 0) {
 
 export function normalizeFilters(raw = {}) {
   const sort = SORTS.some((s) => s.id === raw?.sort) ? raw.sort : DEFAULT_FILTERS.sort;
-  const type = WORK_TYPES.some((t) => t.id === raw?.type) ? raw.type : '';
-  const language = ['zh', 'en'].includes(raw?.language) ? raw.language : '';
+  // 这三个是硬约束，不接受前端改成「全部 / 中文 / 预印本」：
+  // 需求明确只显示英文期刊论文、不纳入预印本与非核心期刊。
+  const type = DEFAULT_FILTERS.type;
+  const language = DEFAULT_FILTERS.language;
+  const coreOnly = raw?.coreOnly !== false;
   let yearFrom = clampInt(raw?.yearFrom, 0, 2100, 0);
   let yearTo = clampInt(raw?.yearTo, 0, 2100, 0);
   if (yearFrom && yearTo && yearFrom > yearTo) [yearFrom, yearTo] = [yearTo, yearFrom];
   return {
     yearFrom, yearTo,
     minCitations: clampInt(raw?.minCitations, 0, 100000, 0),
-    type, language,
+    type, language, coreOnly,
     onlyWithAbstract: raw?.onlyWithAbstract !== false,
     includeRetracted: raw?.includeRetracted === true,
     sort,
@@ -148,6 +153,9 @@ export function buildQuery(topic, filters) {
   if (f.minCitations > 0) filterParts.push(`cited_by_count:>${f.minCitations - 1}`);
   if (f.type) filterParts.push(`type:${f.type}`);
   if (f.language) filterParts.push(`language:${f.language}`);
+  // 只收正式期刊：排除会议论文集、预印本平台与非核心来源
+  filterParts.push('primary_location.source.type:journal');
+  if (f.coreOnly) filterParts.push('primary_location.source.is_core:true');
   if (f.onlyWithAbstract) filterParts.push('has_abstract:true');
   if (!f.includeRetracted) filterParts.push('is_retracted:false');
 
@@ -231,7 +239,10 @@ export function parseWork(item) {
     authors,
     authorLine,
     venue,
+    venueId: clean(source.id).replace(/^https?:\/\/openalex\.org\//i, ''),
     venueKind: clean(source.type),
+    issn: clean(source.issn_l),
+    isCore: source.is_core === true,
     citedBy: Number(item.cited_by_count) || 0,
     type: clean(item.type),
     language: clean(item.language),
@@ -303,6 +314,7 @@ export async function searchTopic(topic, filters, deps = {}) {
   const seen = new Set();
   let total = 0;
   let droppedByExclude = 0;
+  let droppedByScope = 0;
   let pages = 0;
 
   for (let page = 1; page <= 2; page += 1) {
@@ -317,6 +329,14 @@ export async function searchTopic(topic, filters, deps = {}) {
       const key = workKey(work);
       if (seen.has(key)) continue;
       seen.add(key);
+      // 服务端已经按 type / language / is_core 过滤；这里再兜一层，
+      // 免得接口字段缺失时把预印本或非期刊来源混进候选列表。
+      if (work.type === 'preprint'
+        || (raw?.primary_location?.source?.type && clean(raw.primary_location.source.type) !== 'journal')
+        || (f.coreOnly && raw?.primary_location?.source?.is_core === false)) {
+        droppedByScope += 1;
+        continue;
+      }
       if (f.onlyWithAbstract && !work.hasAbstract) continue;
       if (isExcluded(work, excludePhrases)) { droppedByExclude += 1; continue; }
       collected.push(work);
@@ -327,7 +347,7 @@ export async function searchTopic(topic, filters, deps = {}) {
     if (results.length < f.perTopic) break;
   }
 
-  return { topicId: topic.id, topicName: topic.name, total, works: collected, droppedByExclude, pages, error: '' };
+  return { topicId: topic.id, topicName: topic.name, total, works: collected, droppedByExclude, droppedByScope, pages, error: '' };
 }
 
 /** 并发受限的 map：同时最多 3 个请求，避免一次开 6 条把接口打限流 */
@@ -361,7 +381,7 @@ export async function searchTopics(topics, filters, deps = {}) {
     try {
       return await searchTopic(topic, f, deps);
     } catch (error) {
-      return { topicId: topic.id, topicName: topic.name, total: 0, works: [], droppedByExclude: 0, pages: 0, error: error.message || '检索失败' };
+      return { topicId: topic.id, topicName: topic.name, total: 0, works: [], droppedByExclude: 0, droppedByScope: 0, pages: 0, error: error.message || '检索失败' };
     }
   });
 

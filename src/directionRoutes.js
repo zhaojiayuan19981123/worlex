@@ -16,6 +16,8 @@ import {
 import {
   ANALYSIS_MODES, buildAnalysisMessages, parseAnalysisJson, normalizeAnalysis, hasAnalysisContent, normalizeMode,
 } from './directionAnalyze.js';
+import { queryPublicationRank, formatRank, isWosCoreRank } from './easyscholar.js';
+import { translate } from './translate.js';
 
 const str = (v) => String(v == null ? '' : v);
 const clean = (v) => str(v).replace(/\s+/g, ' ').trim();
@@ -36,6 +38,14 @@ function normalizeTopics(raw) {
     .map((t, i) => ({ ...t, id: t.id || `t${i + 1}` }));
 }
 
+/** 翻译结果解析：要求模型按「标题：/摘要：」两段输出；格式跑偏时整段当摘要兜底 */
+export function parseTranslation(text) {
+  const raw = str(text).replace(/\r\n/g, '\n').trim();
+  const title = /^(?:标题|Title)\s*[:：]\s*([\s\S]*?)(?:\n\s*(?:摘要|Abstract)\s*[:：]|$)/im.exec(raw)?.[1];
+  const abstract = /^(?:摘要|Abstract)\s*[:：]\s*([\s\S]*)$/im.exec(raw)?.[1];
+  return { title: clean(title), abstract: clean(abstract) || clean(raw) };
+}
+
 function sessionTitle(topics) {
   const names = topics.map((t) => clean(t.name) || topicPhrases(t.keywords)[0] || '').filter(Boolean);
   const text = names.slice(0, 3).join(' × ');
@@ -53,9 +63,14 @@ function slimPaper(paper) {
     authors: Array.isArray(paper.authors) ? paper.authors.slice(0, 12) : [],
     authorLine: paper.authorLine || '',
     venue: paper.venue || '',
+    venueId: paper.venueId || '',
+    issn: paper.issn || '',
+    isCore: paper.isCore === true,
     citedBy: paper.citedBy || 0,
     type: paper.type || '',
     language: paper.language || '',
+    titleZh: clean(paper.titleZh),
+    abstractZh: clean(paper.abstractZh),
     topic: paper.topic || '',
     oaUrl: paper.oaUrl || '',
     landUrl: paper.landUrl || '',
@@ -159,8 +174,32 @@ export function analysisToMarkdown(session, record) {
 
 export function registerDirectionRoutes(app, {
   store, resolveRequestModel, fetchModelCompletion, readLLMResponse, fetchImpl, logger,
+  queryRankImpl = queryPublicationRank, translateImpl = translate,
 } = {}) {
   const log = typeof logger === 'function' ? logger : () => {};
+  /** 期刊等级查询缓存：同一期刊在多个会话里重复出现，不必每次都打 easyScholar（限速 2 次/秒） */
+  const rankCache = new Map();
+
+  const venueKey = (name) => clean(name).toLowerCase();
+
+  /** easyScholar 单次查询 → {summary, items, wosCore, source}；失败也缓存，避免反复打接口 */
+  async function rankOfVenue(name, secretKey) {
+    const key = venueKey(name);
+    if (!key) return null;
+    if (rankCache.has(key)) return rankCache.get(key);
+    let value = { summary: 'easyScholar 未收录', items: [], wosCore: false, source: 'easyscholar' };
+    try {
+      const raw = await queryRankImpl(name, secretKey);
+      if (raw?.code === 200) {
+        const fmt = formatRank(raw.data);
+        value = { ...fmt, wosCore: isWosCoreRank(raw.data), source: 'easyscholar' };
+      }
+    } catch (e) {
+      value = { summary: `等级查询失败：${clean(e?.message).slice(0, 60)}`, items: [], wosCore: false, source: 'error' };
+    }
+    rankCache.set(key, value);
+    return value;
+  }
   /** jobId → 运行状态。只在内存里，进程重启后前端重新点一次即可（报告本身已落盘） */
   const jobs = new Map();
 
@@ -193,7 +232,7 @@ export function registerDirectionRoutes(app, {
     source: {
       id: 'openalex',
       label: 'OpenAlex',
-      note: '开放学术数据库（免密钥、含摘要与引用数）。百度学术 / X-MOL 需要登录与人机验证，服务端取不到，已改为用同一组关键词一键跳转。',
+      note: '开放学术数据库（免密钥、含摘要与引用数）。只取英文期刊论文（含综述），排除预印本、会议论文与非核心来源；核心名单用 OpenAlex 的 CWTS Core（近似 WoS 核心），配置 easyScholar Key 后再按 WoS 收录严格核对。百度学术 / X-MOL 需要登录与人机验证，服务端取不到，已改为一键跳转。',
     },
   };
 
@@ -240,6 +279,76 @@ export function registerDirectionRoutes(app, {
     res.json({ ok: true, sessions: state.sessions.map(sessionSummary) });
   });
 
+  // ---------- 候选文献的期刊等级 ----------
+  // 前端拿到一页候选后按 venue 查询；没配 easyScholar Key 时用 OpenAlex 的核心来源标记兜底。
+  app.post('/api/direction/ranks', async (req, res) => {
+    const papers = (Array.isArray(req.body?.papers) ? req.body.papers : []).slice(0, 60);
+    const secretKey = clean(store.getSettings()?.easyScholarKey);
+    const pending = new Map();
+    if (secretKey) {
+      for (const p of papers) {
+        const name = clean(p?.venue);
+        if (name && !pending.has(venueKey(name))) pending.set(venueKey(name), name);
+      }
+    }
+    const ranked = new Map();
+    if (secretKey) {
+      for (const [key, name] of pending) ranked.set(key, await rankOfVenue(name, secretKey));
+    }
+    const byId = {};
+    for (const p of papers) {
+      const id = clean(p?.id);
+      if (!id) continue;
+      const es = ranked.get(venueKey(p?.venue)) || null;
+      const items = es?.items?.length ? [...es.items] : [];
+      if (p?.isCore === true && !items.some((i) => i.label === '核心来源')) {
+        items.unshift({ label: '核心来源', value: 'CWTS Core' });
+      }
+      byId[id] = {
+        summary: es?.summary || (p?.isCore ? 'CWTS Core 核心来源' : ''),
+        items,
+        wosCore: es?.wosCore === true,
+        coreSource: p?.isCore === true,
+        source: es?.source || (p?.isCore ? 'openalex' : 'none'),
+      };
+    }
+    res.json({
+      configured: Boolean(secretKey),
+      byId,
+      note: secretKey
+        ? '等级来自 easyScholar；WoS 核心按 SCI / SSCI / AHCI / ESCI 数据集判定。'
+        : '未配置 easyScholar SecretKey，仅显示 OpenAlex 的 CWTS Core 标记（与 WoS 核心高度重叠，但不是同一份名单）。',
+    });
+  });
+
+  // ---------- 中文翻译（标题 + 摘要，结果写回会话，切走再回来还在） ----------
+  app.post('/api/direction/translate', async (req, res) => {
+    const state = readState();
+    const session = findSession(state, clean(req.body?.sessionId));
+    if (!session) return res.status(404).json({ error: '这次检索记录已不存在' });
+    const ids = [...new Set(Array.isArray(req.body?.paperIds) ? req.body.paperIds : [])].slice(0, 20);
+    const picked = ids.map((id) => session.papers.find((p) => p.id === id)).filter((p) => p && !p.titleZh);
+    if (!picked.length) return res.json({ byId: {}, hint: '所选文献都已翻译过' });
+    const settings = store.getSettings();
+    const byId = {};
+    for (const paper of picked) {
+      try {
+        const source = `标题：${paper.title}\n摘要：${paper.abstract || ''}`;
+        const output = await translateImpl(source, settings, { target: 'zh' });
+        const parsed = parseTranslation(output);
+        paper.titleZh = parsed.title || paper.title;
+        paper.abstractZh = parsed.abstract;
+        byId[paper.id] = { titleZh: paper.titleZh, abstractZh: paper.abstractZh };
+      } catch (e) {
+        byId[paper.id] = { error: clean(e?.message) || '翻译失败' };
+        log(`[方向分析] 翻译失败 ${paper.id}：${e?.message || e}`);
+      }
+    }
+    touch(session);
+    writeState(state);
+    res.json({ byId });
+  });
+
   // ---------- 检索 ----------
   app.post('/api/direction/search', async (req, res) => {
     const topics = normalizeTopics(req.body?.topics);
@@ -249,6 +358,32 @@ export function registerDirectionRoutes(app, {
     try {
       const result = await searchTopics(topics, filters, { fetchImpl, mailto, concurrency: 3 });
       if (result.error) return res.status(400).json({ error: result.error });
+
+      // 严格口径：配了 easyScholar Key 时再按 WoS 收录交叉核对一次。
+      // OpenAlex 的 is_core 是 CWTS Core，虽然高度重叠但不是 WoS 名单；
+      // 没配 Key 时只能保留核心来源标记，并在界面上如实说明。
+      const secretKey = clean(store.getSettings()?.easyScholarKey);
+      let wosFiltered = 0;
+      if (secretKey && result.papers.length) {
+        const names = new Map();
+        for (const p of result.papers) {
+          const name = clean(p.venue);
+          if (name) names.set(venueKey(name), name);
+        }
+        const checked = new Map();
+        let budget = 30;   // easyScholar 限速 2 次/秒，别把一次检索拖到几分钟
+        for (const [key, name] of names) {
+          if (budget <= 0) break;
+          checked.set(key, await rankOfVenue(name, secretKey));
+          budget -= 1;
+        }
+        const before = result.papers.length;
+        result.papers = result.papers.filter((p) => {
+          const rank = checked.get(venueKey(p.venue));
+          return rank ? rank.wosCore === true : p.isCore === true;
+        });
+        wosFiltered = before - result.papers.length;
+      }
 
       const state = readState();
       const existing = clean(req.body?.sessionId) ? findSession(state, req.body.sessionId) : null;
@@ -263,6 +398,8 @@ export function registerDirectionRoutes(app, {
           duplicated: result.duplicated || 0,
           truncated: Boolean(result.truncated),
           droppedByExclude: (result.perTopic || []).reduce((sum, t) => sum + (t.droppedByExclude || 0), 0),
+          droppedByScope: (result.perTopic || []).reduce((sum, t) => sum + (t.droppedByScope || 0), 0),
+          wosFiltered,
           totalHits: (result.perTopic || []).reduce((sum, t) => sum + (t.total || 0), 0),
           searchedAt: new Date().toISOString(),
         },
@@ -285,7 +422,10 @@ export function registerDirectionRoutes(app, {
         meta,
         links: linksFor(session.topics),
         empty: session.papers.length === 0,
-        hint: session.papers.length ? '' : '没有命中：试试放宽年份 / 引用数限制，或改用英文关键词（该数据源以英文文献为主）。',
+        wosStrict: Boolean(secretKey),
+        hint: session.papers.length
+          ? (secretKey ? '' : '当前用 CWTS Core 作为核心期刊近似名单；配置 easyScholar Key 后会再按 Web of Science 收录严格核对。')
+          : '没有命中：试试放宽年份 / 引用数限制，或改用英文关键词（该数据源以英文文献为主）。',
       });
     } catch (error) {
       const message = /abort|timeout|超时/i.test(String(error?.message)) ? '检索超时，请减少主题数量后重试' : `检索失败：${error.message}`;

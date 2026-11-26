@@ -90,8 +90,10 @@ test('年份 / 引用 / 类型 / 语言都进 filter，且默认排除撤稿', (
   const q = buildQuery({ keywords: 'llm' }, { ...DEFAULT_FILTERS, yearFrom: 2020, yearTo: 2025, minCitations: 20, type: 'review', language: 'en' });
   assert.match(q.filter, /publication_year:2020-2025/);
   assert.match(q.filter, /cited_by_count:>19/);
-  assert.match(q.filter, /type:review/);
+  assert.match(q.filter, /type:article\|review/);
   assert.match(q.filter, /language:en/);
+  assert.match(q.filter, /primary_location\.source\.type:journal/);
+  assert.match(q.filter, /primary_location\.source\.is_core:true/);
   assert.match(q.filter, /is_retracted:false/);
   const open = buildQuery({ keywords: 'llm' }, { ...DEFAULT_FILTERS, includeRetracted: true });
   assert.doesNotMatch(open.filter, /is_retracted/);
@@ -108,8 +110,10 @@ test('过滤条件归一：年份反过来自动交换，条数夹在 5~50，未
   assert.equal(f.yearTo, 2025);
   assert.equal(f.perTopic, 50);
   assert.equal(f.sort, 'relevance');
-  assert.equal(f.type, '');
-  assert.equal(f.language, '');
+  // 类型 / 语言 / 核心期刊是硬口径，前端传什么都不能放宽
+  assert.equal(f.type, 'article|review');
+  assert.equal(f.language, 'en');
+  assert.equal(f.coreOnly, true);
 });
 
 test('请求地址：逗号保持分隔符、冒号与 | 不被编码', () => {
@@ -293,6 +297,25 @@ test('主题归一：缺名字时用第一个关键词顶上，未知字段回�
   assert.equal(topic.name, 'federated learning');
   assert.equal(topic.field, 'default');
   assert.equal(topic.enabled, true);
+});
+
+test('本地兜底：预印本 / 非期刊来源 / 非核心来源不进候选，work 带上核心字段', async () => {
+  const good = work({ title: 'Journal Article', doi: '10.1/good' });
+  const preprint = work({ title: 'Preprint', doi: '10.1/pre' });
+  preprint.type = 'preprint';
+  const proceedings = work({ title: 'Conference', doi: '10.1/conf' });
+  proceedings.primary_location.source.type = 'conference';
+  const nonCore = work({ title: 'Non Core', doi: '10.1/noncore' });
+  nonCore.primary_location.source.is_core = false;
+  const { fetchImpl } = fakeOpenAlex(() => ({
+    body: { meta: { count: 4 }, results: [preprint, proceedings, nonCore, good] },
+  }));
+  const result = await searchTopic({ id: 't1', name: 'T', keywords: 'graph' }, DEFAULT_FILTERS, { fetchImpl });
+  assert.deepEqual(result.works.map((w) => w.title), ['Journal Article']);
+  assert.equal(result.droppedByScope, 3);
+  const parsed = parseWork(good);
+  assert.equal(parsed.isCore, false, '假数据没给 is_core，不应臆造为 true');
+  assert.equal(parsed.venueKind, 'journal');
 });
 
 test('跳转链接：把各主题前几个词拼成一次查询（百度学术 / X-MOL / OpenAlex）', () => {

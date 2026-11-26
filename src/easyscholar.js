@@ -46,6 +46,22 @@ function cleanRankValue(key, value) {
   return raw;
 }
 
+// easyScholar 里属于 Web of Science Core Collection 的数据集：
+// SCI / SSCI / AHCI / ESCI（JCI、ESI）以及中科院/新锐的 SCI 分区衍生档。
+const WOS_RANK_KEYS = [
+  'sciUp', 'sciUpTop', 'sciUpSmall', 'sci', 'sciBase', 'sciif', 'sciif5',
+  'ssci', 'ahci', 'jci', 'esi',
+];
+
+/** easyScholar 原始返回里是否带有任一 WoS 核心收录标记（"否"/"无" 不算） */
+export function isWosCoreRank(data) {
+  const all = data?.officialRank?.all || {};
+  return WOS_RANK_KEYS.some((key) => {
+    const value = cleanRankValue(key, all[key]);
+    return value && !/^(否|无|不是|no|false|-|—|–|\/|n\/a|na)$/i.test(value);
+  });
+}
+
 const RANK_LEVEL_KEYS = ['', 'oneRankText', 'twoRankText', 'threeRankText', 'fourRankText', 'fiveRankText'];
 
 // ---------- 限速器（全局，每秒最多 2 次 → 550ms 间隔） ----------

@@ -58,6 +58,8 @@ import { ALL_JOURNALS, JOURNAL_SETS, JOURNAL_PRESETS, catalogFor, createTopJourn
 import { registerSpecialIssueRoutes } from './src/specialIssueRoutes.js';
 // v2.8.0 方向分析：主题检索（OpenAlex）→ 多选文献 → 大模型找研究空白与研究方向
 import { registerDirectionRoutes } from './src/directionRoutes.js';
+// v2.9.0 arXiv 分类浏览：按 cat: 抓 Atom feed，解析后按学科分组展示
+import { registerArxivRoutes } from './src/arxivRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -5574,6 +5576,7 @@ export function createApp({
     fetchImpl: modelFetch,
     logger: (msg) => console.log(msg),
   });
+  registerArxivRoutes(app, { fetchImpl: modelFetch, logger: (msg) => console.log(msg) });
 
   // 静态：上传目录（动态）+ 前端页面
   app.use('/uploads', (req, res, next) => express.static(currentUploadDir)(req, res, next));
