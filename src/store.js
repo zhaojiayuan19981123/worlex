@@ -151,6 +151,7 @@ const ALL_DATA_FILES = [
   'thesis-bigpaper.json', // 学位论文阅读：关联的「我的大论文」框架与阶段
   'knowledge-base.json', // v2.1.0 本地知识库索引 + 主题聚类 + 文献关系图
   'direction-analysis.json', // v2.8.0 方向分析：检索会话（主题 / 候选文献 / 分析报告）
+  'journal-favorites.json', // v3.2.0 期刊收藏：收藏的刊 + 等级缓存 + 我的评价 + 投稿经历
 ];
 
 export function dataFileNames() {

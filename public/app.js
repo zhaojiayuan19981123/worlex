@@ -203,6 +203,7 @@
     library: { name: '文献中心', sub: '你的全部文献与批量解析' },
     thesis: { name: '学位论文', sub: '学位论文库与精读' },
     topjournals: { name: '顶刊追踪', sub: '目标期刊动态与投稿窗口' },
+    journals: { name: '期刊收藏', sub: '收藏的刊、等级、我的评价与审稿周期' },
     specialissue: { name: 'SI 征稿', sub: '专刊征稿、截止日期与领域热点' },
     direction: { name: '方向分析', sub: '主题检索 → 多选文献 → 研究空白与方向' },
     arxiv: { name: 'arXiv 分类', sub: '按学科浏览最新预印本' },
@@ -13111,7 +13112,7 @@
   async function switchView(v) {
     view = v;
     document.querySelectorAll('.nav-item[data-view]').forEach((n) => n.classList.toggle('active', n.dataset.view === v));
-    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', specialissue: 'viewSpecialIssue', direction: 'viewDirection', arxiv: 'viewArxiv', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
+    const map = { home: 'viewHome', library: 'viewLibrary', thesis: 'viewThesis', achievements: 'viewAchievements', topjournals: 'viewTopJournals', journals: 'viewJournals', specialissue: 'viewSpecialIssue', direction: 'viewDirection', arxiv: 'viewArxiv', projects: 'viewProjects', tasks: 'viewTasks', papers: 'viewPapers', notes: 'viewNotes', markdown: 'viewMarkdown', ideas: 'viewIdeas', reviewer: 'viewReviewer', ai: 'viewAI', worldlib: 'viewWorldlib', mail: 'viewMail', graph: 'viewGraph' };
     for (const [key, id] of Object.entries(map)) $(id).classList.toggle('hidden', key !== v);
     // 切回文献中心 / 首页时先追一次服务端版本：arXiv 导入、另一个窗口的改动
     // 都能立刻反映到列表与统计上，不必重启应用（v3.1.1）
@@ -13143,6 +13144,7 @@
     if (v !== 'specialissue') window.SpecialIssueView?.close?.();
     if (v !== 'direction') window.DirectionView?.close?.();
     if (v !== 'arxiv') window.ArxivView?.close?.();
+    if (v !== 'journals') window.JournalView?.close?.();
     // 顶栏搜索已移入侧边栏（只对文献中心生效），这里改用 CSS 控制整块搜索区的显隐
     const searchBox = document.querySelector('.side-search');
     if (searchBox) searchBox.classList.toggle('hidden', !isLib);
@@ -13175,6 +13177,8 @@
     // 方向分析：DOM 由 direction.js 自建，首次进入挂载、之后仅刷新
     if (v === 'direction') await window.DirectionView?.mount?.($('viewDirection'));
     if (v === 'arxiv') await window.ArxivView?.mount?.($('viewArxiv'));
+    // 期刊收藏：DOM 由 journals.js 自建（抽屉 / 弹窗也挂在自己的容器里）
+    if (v === 'journals') await window.JournalView?.mount?.($('viewJournals'));
     if (v === 'ai') {
       renderChatMeta();
       if (!convLoaded) {

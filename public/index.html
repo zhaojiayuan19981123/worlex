@@ -216,6 +216,7 @@
         <div class="nav-item" data-view="library"><svg class="ico" aria-hidden="true"><use href="#i-library"/></svg><span class="nav-label">文献中心</span></div>
         <div class="nav-item" data-view="thesis"><svg class="ico" aria-hidden="true"><use href="#i-thesis"/></svg><span class="nav-label">学位论文</span></div>
         <div class="nav-item" data-view="topjournals"><svg class="ico" aria-hidden="true"><use href="#i-journal"/></svg><span class="nav-label">顶刊追踪</span><span id="navTopJournalBadge" class="nav-badge hidden">0</span></div>
+        <div class="nav-item" data-view="journals"><svg class="ico" aria-hidden="true"><use href="#i-bookmark"/></svg><span class="nav-label">期刊收藏</span><span id="navJournalBadge" class="nav-badge hidden">0</span></div>
         <div class="nav-item" data-view="specialissue"><svg class="ico" aria-hidden="true"><use href="#i-megaphone"/></svg><span class="nav-label">SI 征稿</span><span id="navSiBadge" class="nav-badge hidden">0</span></div>
         <div class="nav-item" data-view="direction"><svg class="ico" aria-hidden="true"><use href="#i-compass"/></svg><span class="nav-label">方向分析</span></div>
         <div class="nav-item" data-view="arxiv"><svg class="ico" aria-hidden="true"><use href="#i-brain"/></svg><span class="nav-label">arXiv 分类</span></div>
@@ -476,6 +477,11 @@
         </nav>
         <div id="topJournalContent" class="top-journal-content"></div>
       </section>
+
+      <!-- ===== 视图：期刊收藏（我关注的刊 + 等级 / 我的评价 / 审稿周期） ===== -->
+      <!-- 内部 DOM 由 journals.js 的 mount() 生成，这里只留挂载点 -->
+      <section id="viewJournals" class="view hidden"></section>
+
       <!-- ===== 视图：项目管理 ===== -->
       <section id="viewProjects" class="view hidden">
         <div class="view-toolbar">
@@ -2369,6 +2375,7 @@
   <script src="direction-viz.js"></script>
   <script src="direction.js"></script>
   <script src="arxiv.js"></script>
+  <script src="journals.js"></script>
   <script src="app.js"></script>
   <script src="interface.js"></script>
 </body>

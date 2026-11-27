@@ -47,6 +47,7 @@ import { registerPdfTranslateRoutes } from './src/pdfTranslate/routes.js';
 import { registerReadingRoutes } from './src/readingMode.js';
 import { registerThesisRoutes } from './src/thesisRoutes.js';
 import { registerAchievementRoutes } from './src/achievementRoutes.js';
+import { registerJournalRoutes } from './src/journalRoutes.js';
 import * as achievementStore from './src/achievementStore.js';
 import { DEFAULT_PDF_TRANSLATE_OPTIONS } from './src/pdfTranslate/index.js';
 import { pruneConnections } from './src/mail.js';
@@ -5562,6 +5563,16 @@ export function createApp({
     openPath,
     openWith,
     revealFile,
+    resolveRequestModel,
+    fetchModelCompletion,
+    readLLMResponse,
+  });
+
+  // ---------- 期刊收藏（v3.2.0） ----------
+  // 「我关注哪些刊」的个人清单：收藏 + easyScholar 等级（复用全站已有的查询通道）
+  // + 我自己的评分与投稿经历。数据存 data/journal-favorites.json，随备份一起走。
+  registerJournalRoutes(app, {
+    store,
     resolveRequestModel,
     fetchModelCompletion,
     readLLMResponse,
