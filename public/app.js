@@ -1687,6 +1687,7 @@
    * 所以按文本节点切分后逐段包裹（偏移口径不变，textContent 长度也不变）。
    */
   function wrapTextRange(root, start, end, makeEl) {
+    const out = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const segs = [];
     let pos = 0;
@@ -1708,12 +1709,21 @@
       const el = makeEl();
       target.parentNode.insertBefore(el, target);
       el.appendChild(target);
+      out.push(el);
     }
+    return out;
   }
 
   /** 拆掉某一块里的所有标注，恢复成纯文本（偏移不变，可以重新贴） */
   function clearFieldMarks(root) {
-    root.querySelectorAll('mark.anno').forEach((m) => m.replaceWith(document.createTextNode(m.textContent)));
+    // 批注的小圆点是 appended 的按钮，不是被包裹的文字，单独摘掉
+    root.querySelectorAll('.anno-cm-dot').forEach((b) => b.remove());
+    root.querySelectorAll('mark.anno, span.anno').forEach((m) => {
+      const p = m.parentNode;
+      if (!p) return;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+    });
     root.normalize();
   }
 
@@ -1743,6 +1753,27 @@
           start = at; end = at + quote.length;
         }
         if (!(end > start)) continue;
+        if (a.kind === 'comment') {
+          // 批注：不铺底色、不展开内容 —— 一条虚线 + 末尾一个小圆点，点开才看
+          const nodes = wrapTextRange(box, start, end, () => {
+            const sp = document.createElement('span');
+            sp.className = 'anno anno-comment';
+            sp.dataset.annoId = a.id || '';
+            return sp;
+          });
+          const last = nodes[nodes.length - 1];
+          if (last) {
+            const dot = document.createElement('button');
+            dot.type = 'button';
+            dot.className = 'anno-cm-dot';
+            dot.dataset.annoNote = a.id || '';
+            dot.title = '查看批注';
+            dot.setAttribute('aria-label', '查看批注');
+            dot.textContent = '!';
+            last.appendChild(dot);
+          }
+          continue;
+        }
         const cls = a.kind === 'text'
           ? `anno anno-c-${ANNO_TEXT_COLORS.includes(a.color) ? a.color : 'red'}`
           : `anno anno-hl-${ANNO_HL_COLORS.includes(a.color) ? a.color : 'yellow'}`;
@@ -1818,14 +1849,16 @@
     } catch (e) { toast('标注保存失败：' + e.message, 'error'); }
   }
 
-  /** 给选区加标注：同段落上重叠的旧标注先清掉，避免叠加出看不出本色的多层底色 */
-  async function applyAnnoToSelection(kind, color) {
+  /** 给选区加标注：同段落上重叠的**同类型**旧标注先清掉，避免叠加出看不出本色的多层底色 */
+  async function applyAnnoToSelection(kind, color, note = '') {
     const target = annoSelection;
     if (!target) return;
     const it = items.find((x) => x.id === currentId);
     if (!it) return;
+    // 只替换同类型的重叠：批注本来就该能加在高亮过的那句上，
+    // 一刀切会把用户刚标好的底色冲掉（反过来说，重新高亮也该覆盖旧高亮）
     const kept = (Array.isArray(it.annotations) ? it.annotations : []).filter((a) => !(
-      a && a.target === 'field' && a.field === target.field
+      a && a.target === 'field' && a.kind === kind && a.field === target.field
       && (Number(a.start) || 0) < target.end && target.start < (Number(a.end) || 0)
     ));
     kept.push({
@@ -1835,10 +1868,10 @@
       start: target.start,
       end: target.end,
       quote: target.quote,
-      kind,                       // 'highlight' 底色 | 'text' 字色
+      kind,                       // 'highlight' 底色 | 'text' 字色 | 'comment' 批注
       color,
       text: target.quote,         // 与阅读器批注保持同名字段，导出/笔记列表能复用
-      note: '',
+      note,
       createdAt: new Date().toISOString(),
     });
     await persistFieldAnnotations(it, kept);
@@ -1858,6 +1891,107 @@
     if (after.length === before.length) { toast('这段文字还没有标注'); return; }
     await persistFieldAnnotations(it, after);
     toast('已清除这处标注', 'success');
+  }
+
+  // ---------- 解析结果里的批注（v3.1.2）----------
+  // 与阅读器的「批注」同一套语义：正文里**不显示内容**，只在选区末尾留一个小圆点，
+  // 点开才看得到写了什么，可改可删。存储仍然复用 annotations（target:'field'）。
+
+  function hideAnnoCommentPop() {
+    $('annoCommentPop')?.classList.add('hidden');
+  }
+
+  /** 解析结果里的批注浮层：贴在划词工具条上方（放不下就翻到下方），并收进窗口 */
+  function showAnnoCommentPop(bodyHtml, buttons = []) {
+    const pop = $('annoCommentPop');
+    if (!pop) return;
+    pop.innerHTML = `
+      <div class="pr-popover-head"><span>批注</span><button class="modal-close" data-apop-close>✕</button></div>
+      <div class="pr-popover-body">${bodyHtml}</div>
+      <div class="pr-popover-foot">${buttons.map((b) => `<button class="btn ${b.cls || ''}" data-apop="${esc(b.text)}">${esc(b.text)}</button>`).join('')}</div>`;
+    // 先挂进布局量尺寸（此时还看不见），再定位 —— 否则会先闪在左上角
+    pop.style.visibility = 'hidden';
+    pop.classList.remove('hidden');
+    const tb = $('annoToolbar');
+    const r = tb && !tb.classList.contains('hidden')
+      ? tb.getBoundingClientRect()
+      : { left: window.innerWidth / 2 - 160, top: 160, bottom: 200, width: 0 };
+    const z = uiZoom();
+    const w = pop.offsetWidth || 320;
+    const h = pop.offsetHeight || 180;
+    let left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+    let top = r.top - h - 8;
+    if (top < 8) top = Math.min(window.innerHeight - h - 8, r.bottom + 8);
+    pop.style.left = (left / z) + 'px';
+    pop.style.top = (Math.max(8, top) / z) + 'px';
+    pop.style.visibility = '';
+    pop.querySelector('[data-apop-close]')?.addEventListener('click', hideAnnoCommentPop);
+    pop.querySelectorAll('[data-apop]').forEach((btn) => btn.addEventListener('click', () => {
+      const b = buttons.find((x) => x.text === btn.dataset.apop);
+      hideAnnoCommentPop();
+      b?.onClick?.();
+    }));
+  }
+
+  /** 划词 → 写批注 */
+  function addCommentToSelection() {
+    const target = annoSelection;
+    if (!target) return;
+    showAnnoCommentPop(
+      `<div class="pr-note-quote">${esc(target.quote.slice(0, 150))}</div>
+       <textarea id="annoCommentText" placeholder="写下批注内容…（正文只显示标记，不展开内容）"></textarea>`,
+      [{ text: '保存', cls: 'btn-primary', onClick: async () => {
+        const v = $('annoCommentText').value.trim();
+        if (!v) { toast('批注内容为空', 'error'); return; }
+        // 浮层打开期间用户可能点过正文，annoSelection 会被清掉 —— 用打开时抓到的选区
+        annoSelection = target;
+        await applyAnnoToSelection('comment', 'purple', v);
+        window.getSelection()?.removeAllRanges();
+        hideAnnoToolbar();
+        toast('已添加批注', 'success');
+      } }],
+    );
+  }
+
+  /** 点小圆点 → 看内容（不展开在正文里） */
+  function showFieldComment(annId) {
+    const it = items.find((x) => x.id === currentId);
+    const a = (Array.isArray(it?.annotations) ? it.annotations : []).find((x) => x && x.id === annId);
+    if (!a) return;
+    showAnnoCommentPop(
+      `<div class="pr-note-quote">${esc(String(a.quote || a.text || '').slice(0, 180))}</div>
+       <div class="pr-note-text">${esc(a.note || '')}</div>`,
+      [
+        { text: '编辑', onClick: () => editFieldComment(a) },
+        { text: '删除', cls: 'btn-danger', onClick: () => removeFieldComment(a) },
+      ],
+    );
+  }
+
+  function editFieldComment(a) {
+    showAnnoCommentPop(
+      `<div class="pr-note-quote">${esc(String(a.quote || a.text || '').slice(0, 150))}</div>
+       <textarea id="annoCommentText">${esc(a.note || '')}</textarea>`,
+      [{ text: '保存', cls: 'btn-primary', onClick: async () => {
+        const v = $('annoCommentText').value.trim();
+        if (!v) { toast('批注内容为空', 'error'); return; }
+        const it = items.find((x) => x.id === currentId);
+        if (!it) return;
+        const anns = (it.annotations || []).map((x) => (
+          x && x.id === a.id ? { ...x, note: v, updatedAt: new Date().toISOString() } : x
+        ));
+        await persistFieldAnnotations(it, anns);
+        toast('批注已更新', 'success');
+      } }],
+    );
+  }
+
+  async function removeFieldComment(a) {
+    const it = items.find((x) => x.id === currentId);
+    if (!it || !a) return;
+    const anns = (it.annotations || []).filter((x) => !(x && x.id === a.id));
+    await persistFieldAnnotations(it, anns);
+    toast('批注已删除', 'success');
   }
 
   // ============ 字段配置 ============
@@ -3338,9 +3472,10 @@
       // 工具条自身不能吃掉选区：按下鼠标时阻止默认行为，选区才不会在 click 之前被清掉
       annoTb.addEventListener('mousedown', (e) => e.preventDefault());
       annoTb.addEventListener('click', async (e) => {
-        const b = e.target.closest('[data-anno-hl],[data-anno-c],[data-anno-clear]');
+        const b = e.target.closest('[data-anno-hl],[data-anno-c],[data-anno-clear],[data-anno-note]');
         if (!b) return;
         if (b.hasAttribute('data-anno-clear')) await clearAnnoInSelection();
+        else if (b.hasAttribute('data-anno-note')) { addCommentToSelection(); return; }
         else if (b.dataset.annoHl) await applyAnnoToSelection('highlight', b.dataset.annoHl);
         else if (b.dataset.annoC) await applyAnnoToSelection('text', b.dataset.annoC);
         window.getSelection()?.removeAllRanges();
@@ -3348,10 +3483,15 @@
       });
     }
     document.addEventListener('mousedown', (e) => {
+      const pop = $('annoCommentPop');
+      if (pop && !pop.classList.contains('hidden') && !pop.contains(e.target)) hideAnnoCommentPop();
       if (annoTb && !annoTb.contains(e.target) && !el.drawerBody.contains(e.target)) hideAnnoToolbar();
     });
 
     el.drawerBody.addEventListener('click', async (e) => {
+      // 批注小圆点：点开看内容（按钮在标注文字末尾，别让它冒泡成「点正文」）
+      const cm = e.target.closest('[data-anno-note]');
+      if (cm) { e.preventDefault(); e.stopPropagation(); showFieldComment(cm.dataset.annoNote); return; }
       const ds = e.target.closest('[data-dstar]'); if (ds) { setRating(currentId, parseInt(ds.dataset.dstar, 10)); renderDrawer(); return; }
       if (e.target.closest('#btnSaveDrawerThoughts')) {
         const v = $('drawerThoughts').value.trim();
@@ -7054,6 +7194,8 @@
   };
   const CMP_RATIO_KEY = 'sciterminal.cmpRatios';
   const CMP_STYLE_KEY = 'sciterminal.cmpTransStyle';
+  /** 译文字号倍数（只影响译文栏）：用户在译文栏顶部调过就记住 */
+  const CMP_FONT_KEY = 'sciterminal.cmpTransFontScale';
 
   const cmp = {
     on: false,
@@ -7439,8 +7581,44 @@
       // 图表 / 表格 / 公式右上角的「看原图」图标
       onAsset: (id) => openCmpBlockImage(id),
       onZoom: (z) => setCmpZoomLabel(z),
+      // 译文块角上的批注小标：点开看内容（与 PDF 视图同一个浮层）
+      onComment: (annId) => openCmpComment(annId),
     });
     setCmpZoomLabel(window.CmpPages.getZoom?.() || 1);
+    // 字号倍数记在 localStorage：换篇、重开阅读器都沿用用户上次的偏好
+    const fs = getCmpFontScale();
+    window.CmpPages.setFontScale?.(fs);
+    applyCmpFlowFontScale(fs);
+    setCmpFontLabel(fs);
+  }
+
+  /** 译文字号倍数（0.8 ~ 1.8） */
+  function getCmpFontScale() {
+    const v = Number(localStorage.getItem(CMP_FONT_KEY));
+    return Number.isFinite(v) && v >= 0.8 && v <= 1.8 ? v : 1;
+  }
+
+  function setCmpFontLabel(k) {
+    const el = cmpEl('cmpFontLabel');
+    if (!el) return;
+    const n = Math.round((Number(k) || 1) * 100);
+    el.textContent = n + '%';
+    el.title = n === 100 ? '译文字号：与原版面字号一致' : `译文字号 ${n}%（只影响译文栏）`;
+  }
+
+  /** 文本重排（流式）也跟着改字号：两种读法共用同一个倍数，来回切不会忽大忽小 */
+  function applyCmpFlowFontScale(k) {
+    const mode = cmpEl('prCmpMode');
+    if (mode) mode.style.setProperty('--ctp-fs', String(Math.round((Number(k) || 1) * 100) / 100));
+  }
+
+  /** 步进调节译文字号（0.1 一档），版面还原要重排，文本重排只改一个 CSS 变量 */
+  function stepCmpFontScale(delta) {
+    const next = Math.max(0.8, Math.min(1.8, Math.round((getCmpFontScale() + delta) * 10) / 10));
+    try { localStorage.setItem(CMP_FONT_KEY, String(next)); } catch (_) { /* ignore */ }
+    window.CmpPages?.setFontScale?.(next);
+    applyCmpFlowFontScale(next);
+    setCmpFontLabel(next);
   }
 
   /** 译文页缩放百分比（只在「版面还原」下显示；点它回到适应宽度） */
@@ -7464,6 +7642,126 @@
       flash: true,
       translate: !!meta?.needTranslate,
     });
+  }
+
+  /** 译文块角上的批注小标 → 打开同一套批注浮层（内容仍然只在点开时出现） */
+  function openCmpComment(annId) {
+    const a = currentAnnotations().find((x) => x && x.id === annId);
+    if (!a) return;
+    const dot = cmpEl('cmpTransFlow')?.querySelector(`.ctp-cm[data-cm="${CSS.escape(String(annId))}"]`);
+    const r = dot?.getBoundingClientRect();
+    showCommentPopover(a, r ? r.left + 8 : window.innerWidth / 2, r ? r.bottom + 8 : 200);
+  }
+
+  // ==================== 标注同步（原文 ↔ 译文） ====================
+  //
+  // 一条 annotations 同时服务两侧：
+  //   · rect / rects  —— 原文 PDF 上的坐标（老字段，渲染方式不变）
+  //   · blockId + tr  —— 译文栏里「哪一块的第几个字到第几个字」
+  // 在译文里划词能拿到精确的 tr，原文矩形按块内比例反推；在原文划词能拿到精确的
+  // 矩形，tr 按矩形在块内的纵向比例反推。两侧都不做逐句对齐（对齐数据不存在），
+  // 所以长段落里会有一两行的偏差 —— 这是拿「一定能同步显示」换来的取舍。
+
+  /** 把当前文献的标注推进译文栏（两种读法各画各的） */
+  function syncAnnotationsToCmp() {
+    if (!cmp.on) return;
+    const anns = currentAnnotations();
+    window.CmpPages?.setAnnotations?.(anns);
+    applyCmpFlowMarks(anns);
+  }
+
+  /** 文本重排（流式段落）上的标记：与版面还原共用 blockId + tr */
+  function applyCmpFlowMarks(anns) {
+    const box = cmpEl('cmpTransHtml');
+    if (!box) return;
+    box.querySelectorAll('.ctp-cm').forEach((n) => n.remove());
+    for (const el of [...box.querySelectorAll('mark.ctp-hl, span.ctp-ul, span.ctp-cm-range')]) {
+      const p = el.parentNode;
+      if (!p) continue;
+      while (el.firstChild) p.insertBefore(el.firstChild, el);
+      p.removeChild(el);
+    }
+    box.querySelectorAll('.cmp-block-text').forEach((t) => t.normalize());
+    const wrap = window.CmpPages?.markRange;
+    if (!wrap) return;
+    for (const a of anns || []) {
+      if (!a || a.blockId == null || !a.tr) continue;
+      const holder = box.querySelector(`.cmp-block[data-block-id="${CSS.escape(String(a.blockId))}"]`);
+      const textEl = holder?.querySelector('.cmp-block-text');
+      if (!textEl) continue;
+      const total = (textEl.textContent || '').length;
+      const from = Math.max(0, Math.min(Math.round(Number(a.tr.from) || 0), total));
+      const to = Math.max(0, Math.min(Math.round(Number(a.tr.to) || 0), total));
+      if (!(to > from)) continue;
+      const color = a.color || 'yellow';
+      if (a.type === 'comment') {
+        wrap(textEl, from, to, () => {
+          const sp = document.createElement('span');
+          sp.className = 'ctp-cm-range';
+          return sp;
+        });
+        if (holder.querySelector('.ctp-cm')) continue;
+        holder.style.position = 'relative';
+        const dot = document.createElement('button');
+        dot.type = 'button';
+        dot.className = 'ctp-cm ctp-cm-inline';
+        dot.dataset.cm = a.id || '';
+        dot.title = '查看批注';
+        dot.textContent = '!';
+        dot.addEventListener('click', (e) => { e.stopPropagation(); openCmpComment(a.id); });
+        holder.appendChild(dot);
+      } else {
+        const isUl = a.type === 'underline';
+        wrap(textEl, from, to, () => {
+          const el = document.createElement(isUl ? 'span' : 'mark');
+          el.className = (isUl ? 'ctp-ul' : 'ctp-hl') + ' ctp-c-' + color
+            + (a.type === 'note' ? ' ctp-hl-note' : '');
+          return el;
+        });
+      }
+    }
+  }
+
+  /** 原文选区的矩形落在哪个版面块里（取面积最小者：小字块往往套在大块内） */
+  function cmpBlockAtRect(page, rect) {
+    const size = pr.pageSizes?.[page - 1];
+    if (!size?.w || !size?.h || !Array.isArray(rect)) return null;
+    const cx = (rect[0] + rect[2]) / 2;
+    const cy = (rect[1] + rect[3]) / 2;
+    let best = null;
+    let bestArea = Infinity;
+    for (const b of (cmp.data?.blocks || [])) {
+      if (b?.page !== page) continue;
+      const bx1 = b.x * size.w;
+      const bx2 = (b.x + b.width) * size.w;
+      const by1 = b.y * size.h;
+      const by2 = (b.y + b.height) * size.h;
+      if (cx < bx1 - 3 || cx > bx2 + 3 || cy < by1 - 3 || cy > by2 + 3) continue;
+      const area = (bx2 - bx1) * (by2 - by1);
+      if (area > 0 && area < bestArea) { bestArea = area; best = b; }
+    }
+    return best;
+  }
+
+  /**
+   * 原文划词 → 补上 blockId / tr。
+   * 纵向比例取「选区的上下沿在块内的相对位置」，换算成译文文本的字符区间。
+   */
+  function cmpLinkAnnotation(a) {
+    if (!cmp.on || !a || a.blockId != null || !Number.isFinite(a.page)) return a;
+    const b = cmpBlockAtRect(a.page, a.rect);
+    const tr = String(b?.translation || '').trim();
+    if (!b || !tr) return a;
+    const size = pr.pageSizes?.[a.page - 1];
+    if (!size?.h) return a;
+    const by1 = b.y * size.h;
+    const bh = Math.max(1, b.height * size.h);
+    const r1 = Math.max(0, Math.min(1, ((a.rect?.[1] ?? by1) - by1) / bh));
+    const r2 = Math.max(0, Math.min(1, ((a.rect?.[3] ?? by1 + bh) - by1) / bh));
+    const len = tr.length;
+    const from = Math.round(r1 * len);
+    const to = Math.max(from + 1, Math.round(r2 * len));
+    return { ...a, blockId: b.id, tr: { from, to }, trLen: len };
   }
 
   /**
@@ -7807,6 +8105,8 @@
     const blocks = Array.isArray(cmp.data?.blocks) ? cmp.data.blocks : [];
     window.CmpPages?.setBlocks(blocks);
     renderCmpHtml(blocks);
+    // 译文页刚重铺过：把已有的高亮 / 下划线 / 批注重新贴上去（原文划的词，译文也要看得见）
+    syncAnnotationsToCmp();
     refreshCmpCounts();
     // 数据换版（整篇翻译跑完）后，之前选中的块要重新点亮，否则页面上的框会「掉色」
     if (cmp.activeId && cmp.blockById.has(cmp.activeId)) {
@@ -7898,6 +8198,9 @@
       // 版面还原刚从 display:none 出来：宽度是 0 的时候铺过一版，必须按真实宽度重排
       requestAnimationFrame(() => window.CmpPages?.refit());
     }
+    // 两种读法共用字号倍数与同一份标注：切过去也要立刻长出来
+    applyCmpFlowFontScale(getCmpFontScale());
+    syncAnnotationsToCmp();
     if (cmp.activeId) markCmpBlockActive(cmp.activeId);
   }
 
@@ -8595,6 +8898,10 @@
 
     // 缩放百分比 → 回到适应宽度
     cmpEl('cmpTransZoom')?.addEventListener('click', () => window.CmpPages?.fitWidth?.());
+
+    // 译文字号：只影响译文栏（原文 PDF 的缩放是另一回事，用顶部那个 ±）
+    cmpEl('cmpFontDec')?.addEventListener('click', () => stepCmpFontScale(-0.1));
+    cmpEl('cmpFontInc')?.addEventListener('click', () => stepCmpFontScale(0.1));
 
     // 目录抽屉
     cmpEl('cmpOutlineToggle')?.addEventListener('click', () => toggleCmpDrawer());
@@ -10152,6 +10459,8 @@
     if (idx >= 0) items[idx] = updated;
     // 批注是 PDF 视图与阅读模式共用的唯一数据源：写入后两边都要重新呈现
     if (pr.reading.on) window.PrReading?.refreshHighlights?.();
+    // 对照精读的译文栏也是同一份数据源：改 / 删 / 新增都要立刻反映过去
+    syncAnnotationsToCmp();
   }
 
   /**
@@ -10170,11 +10479,51 @@
     return out;
   }
 
+  /**
+   * 译文选区 → 原文 PDF 坐标。
+   *
+   * 只做纵向比例：译文里选中的字在本块纯文本中的位置（from/to），映射回这一块在
+   * 页面上占的上下沿。横向直接铺满块宽 —— 译文一行装多少字与原文不同，精确到列
+   * 没有意义，硬算反而会画出一条歪掉的窄条。
+   */
+  function cmpTransRects(ts) {
+    const b = (cmp.data?.blocks || []).find((x) => String(x.id) === String(ts.blockId));
+    const size = pr.pageSizes?.[(b?.page || 1) - 1];
+    if (!b || !size?.w || !size?.h) return [];
+    const x1 = b.x * size.w;
+    const x2 = (b.x + b.width) * size.w;
+    const top = b.y * size.h;
+    const bh = Math.max(1, b.height * size.h);
+    const len = Math.max(1, ts.len || 1);
+    const r1 = Math.max(0, Math.min(1, ts.from / len));
+    const r2 = Math.max(0, Math.min(1, ts.to / len));
+    const y1 = top + r1 * bh;
+    const y2 = Math.max(y1 + 2, top + r2 * bh);
+    return [{ x1, y1, x2, y2 }];
+  }
+
   function captureSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return null;
     const text = selectionText(sel);
     if (!text) return null;
+    // 对照精读的译文栏：选区在按原坐标填回去的译文块里，拿到的是「块 id + 译文里的
+    // 字符区间」。原文侧没有真实文字可量，所以矩形按块内比例反推（见 cmpTransRects）。
+    if (cmp.on) {
+      const ts = window.CmpPages?.selection?.();
+      if (ts) {
+        return {
+          kind: 'trans',
+          text: ts.text,
+          pageNum: ts.page,
+          rects: cmpTransRects(ts),
+          clientRects: ts.clientRects,
+          blockId: ts.blockId,
+          tr: { from: ts.from, to: ts.to },
+          trLen: ts.len,
+        };
+      }
+    }
     // 阅读模式：选区在重排视图里，由它按「行 + 片段」的几何反推原始坐标。
     // 注意这里必须排在 .pr-page-wrap 判定之前 —— 重排视图里根本没有页容器。
     if (pr.reading.on) {
@@ -10530,6 +10879,11 @@
         note,
         createdAt: now,
         ...(sel.fromReading ? { fromReading: true } : {}),
+        // 译文栏划词：块 id + 译文里的字符区间，译文侧据此精确高亮；
+        // 原文侧的 rects 已在 captureSelection 里按比例反推好了
+        ...(sel.blockId != null
+          ? { blockId: sel.blockId, tr: sel.tr, trLen: sel.trLen, fromTrans: true }
+          : {}),
       };
     }).filter(Boolean);
   }
@@ -10657,7 +11011,10 @@
     const anns = (list || []).filter(Boolean);
     if (!anns.length) return;
     const it = items.find((x) => x.id === pr.recordId);
-    const next = [...(it?.annotations || []), ...anns];
+    // 原文划词得到的是 PDF 坐标：这里顺手反查它落在哪个版面块、译文里大致哪一段，
+    // 补上 blockId/tr —— 译文栏据此画出同一条高亮（译文划词的标注本来就有这两个字段）
+    const linked = anns.map((a) => (a.blockId != null ? a : cmpLinkAnnotation(a)));
+    const next = [...(it?.annotations || []), ...linked];
     await saveAnnotations(next);
     hideSelectionToolbar();
     hidePopover();
@@ -10671,6 +11028,8 @@
     }
     // 重排视图与 PDF 视图共用同一份批注：写完立刻在阅读模式里补上高亮
     if (pr.reading.on) window.PrReading?.refreshHighlights?.();
+    // 对照精读：译文栏也要立刻长出同一条高亮 / 批注
+    syncAnnotationsToCmp();
     renderNotesList();
     toast(anns.length > 1 ? `已保存 ${anns.length} 条（跨页选区按页拆分）` : '已保存', 'success');
   }
@@ -11151,7 +11510,30 @@
     if (!size?.w) return;
     pr.scale = Math.max(0.5, Math.min(4, avail / size.w));
     $('prZoomLabel').textContent = Math.round(pr.scale * 100) + '%';
+    // 「适宽」对两栏都成立：原文按自己的宽度铺满，译文页也回到它自己的适应宽度
+    if (cmp.on) window.CmpPages?.fitWidth?.();
     rescaleAllPages();
+  }
+
+  /**
+   * 改原文缩放。
+   *
+   * 对照精读下同时按**同比例**改译文页的缩放：顶部那个 ± 原来只动原文，译文栏仍
+   * 停在「适应宽度」，两边字号差一截，调起来像按钮坏了。同比例（而不是同一个百分比）
+   * 是因为两栏宽度本来就不同，各自适应宽度才是基线 100%。
+   */
+  function zoomPdfBy(delta) {
+    const prev = pr.scale;
+    pr.scale = Math.max(0.5, Math.min(4, prev + delta));
+    $('prZoomLabel').textContent = Math.round(pr.scale * 100) + '%';
+    syncCmpZoomRatio(pr.scale / Math.max(0.01, prev));
+  }
+
+  function syncCmpZoomRatio(ratio) {
+    if (!cmp.on || cmp.style !== 'page') return;
+    if (!(ratio > 0) || Math.abs(ratio - 1) < 0.001) return;
+    const z = window.CmpPages?.getZoom?.() || 1;
+    window.CmpPages?.setZoom?.(z * ratio);
   }
 
   function bindPdfReader() {
@@ -11295,8 +11677,8 @@
         if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
-    $('prZoomOut').addEventListener('click', () => { pr.scale = Math.max(0.5, pr.scale - 0.2); $('prZoomLabel').textContent = Math.round(pr.scale * 100) + '%'; rescaleAllPages(); });
-    $('prZoomIn').addEventListener('click', () => { pr.scale = Math.min(4, pr.scale + 0.2); $('prZoomLabel').textContent = Math.round(pr.scale * 100) + '%'; rescaleAllPages(); });
+    $('prZoomOut').addEventListener('click', () => { zoomPdfBy(-0.2); rescaleAllPages(); });
+    $('prZoomIn').addEventListener('click', () => { zoomPdfBy(0.2); rescaleAllPages(); });
     $('prFitWidth').addEventListener('click', fitWidth);
     $('prRotateLeft').addEventListener('click', () => rotateCurrentPage(-90));
     $('prRotateRight').addEventListener('click', () => rotateCurrentPage(90));
@@ -11349,8 +11731,10 @@
     $('prPages').addEventListener('wheel', (e) => {
       if (!pr.open || !(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
-      pr.scale = Math.max(0.5, Math.min(4, pr.scale + (e.deltaY > 0 ? -0.07 : 0.07)));
+      const prev = pr.scale;
+      pr.scale = Math.max(0.5, Math.min(4, prev + (e.deltaY > 0 ? -0.07 : 0.07)));
       $('prZoomLabel').textContent = Math.round(pr.scale * 100) + '%';
+      syncCmpZoomRatio(pr.scale / Math.max(0.01, prev));
       clearTimeout(zoomDebounce);
       zoomDebounce = setTimeout(() => {
         const c = $('prPages');
@@ -11408,7 +11792,9 @@
           showSelectionToolbar(sel.clientRects);
           // 笔记模式有自己的中栏：划完就填进去自动翻译。
           // 普通模式还原「划词翻译」页签：划完自动切过去并翻译。
-          if (pn.on) pnFillFromSelection(sel.text);
+          // 译文栏划词不自动翻译 —— 选中的本来就是译文，再翻一遍没有意义。
+          if (sel.kind === 'trans') { /* 只弹工具条 */ }
+          else if (pn.on) pnFillFromSelection(sel.text);
           else translateSelection(sel.text);
         } else {
           hideSelectionToolbar();
@@ -16064,6 +16450,8 @@ a { color: #176b87; }
   window.Worlex = {
     items: () => items,
     openLiterature: (id) => openPdfReader(id),
+    /** 打开某条文献的详情抽屉（解析结果 + 划词标注都在这里） */
+    openDrawer: (id, opts) => openDrawer(id, opts),
     setPrTab: (name) => switchPrTab(name),
     reveal: (id, mode) => revealLitFile(id, mode),
     toast, esc, api,

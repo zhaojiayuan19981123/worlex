@@ -1337,6 +1337,25 @@ mark.anno-c-purple { color: var(--primary); background: none; }
   background: none; border: none; border-radius: 5px; font-family: var(--font-ui);
 }
 .anno-clear:hover { color: var(--red); background: var(--red-soft); }
+/* 批注（v3.1.2）：正文只留一条虚线和末尾一个小圆点，内容点开才出现 */
+.anno-note {
+  padding: 2px 7px; cursor: pointer; font-size: 12px; color: var(--text-2);
+  background: none; border: 1px solid transparent; border-radius: 6px; font-family: var(--font-ui);
+}
+.anno-note:hover { color: var(--primary); background: var(--primary-soft); }
+.md-annotatable span.anno-comment {
+  border-bottom: 1px dashed color-mix(in srgb, var(--primary) 62%, transparent);
+  padding-bottom: 1px; cursor: help;
+}
+.anno-cm-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: 2px; padding: 0; vertical-align: super;
+  border: 0; border-radius: 50%; background: var(--primary); color: #fff;
+  font: 700 9px/14px -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+}
+.anno-cm-dot:hover { transform: scale(1.12); }
+#annoCommentPop { z-index: 300; }
 .anno-hint { margin: -2px 0 14px; color: var(--text-3); font-size: 11.5px; }
 
 /* ---------- 应用更新 ---------- */
@@ -4357,7 +4376,7 @@ body.pn-resizing * { cursor: col-resize !important; }
 .cmp-act:hover { background: var(--pill); border-color: var(--pill); color: var(--pill-text); }
 .cmp-act:disabled { opacity: .5; cursor: not-allowed; }
 
-.cmp-block-text { font-size: 13.5px; line-height: 1.85; color: var(--ink); white-space: pre-wrap; word-break: break-word;
+.cmp-block-text { font-size: calc(13.5px * var(--ctp-fs, 1)); line-height: 1.85; color: var(--ink); white-space: pre-wrap; word-break: break-word;
   /* 与「版面还原」同一套字：西文 Times New Roman、中文宋体（两种译文样式看起来才是一份文档） */
   font-family: 'Times New Roman', SimSun, 'Songti SC', 'Noto Serif CJK SC', 'Source Han Serif SC', serif; }
 /* 逐句配对：原文句在上（淡）、译文句在下，一一并列。请求仍按整段发。 */
@@ -4366,12 +4385,12 @@ body.pn-resizing * { cursor: col-resize !important; }
 .cmp-pair:last-child { border-bottom: 0; }
 .cmp-pair-src { font-size: 11.5px; line-height: 1.55; color: var(--ink-3); margin-bottom: 2px; }
 .cmp-pair-tr { font-size: 13.5px; line-height: 1.8; color: var(--ink); }
-.cmp-block[data-kind="title"] .cmp-block-text { font-size: 17px; font-weight: 700; line-height: 1.5; letter-spacing: .2px; }
-.cmp-block[data-kind="heading"] .cmp-block-text { font-size: 14.5px; font-weight: 700; line-height: 1.6; }
-.cmp-block[data-kind="caption"] .cmp-block-text { font-size: 12px; font-style: italic; color: var(--ink-2); }
+.cmp-block[data-kind="title"] .cmp-block-text { font-size: calc(17px * var(--ctp-fs, 1)); font-weight: 700; line-height: 1.5; letter-spacing: .2px; }
+.cmp-block[data-kind="heading"] .cmp-block-text { font-size: calc(14.5px * var(--ctp-fs, 1)); font-weight: 700; line-height: 1.6; }
+.cmp-block[data-kind="caption"] .cmp-block-text { font-size: calc(12px * var(--ctp-fs, 1)); font-style: italic; color: var(--ink-2); }
 /* 原文整块加粗（假设 H10. 这类、粗体术语段）：译文也用粗体，与原文的强调对得上 */
 .cmp-block.cmp-bold .cmp-block-text { font-weight: 700; }
-.cmp-block[data-kind="footnote"] .cmp-block-text { font-size: 12px; color: var(--ink-3); }
+.cmp-block[data-kind="footnote"] .cmp-block-text { font-size: calc(12px * var(--ctp-fs, 1)); color: var(--ink-3); }
 .cmp-block[data-kind="reference"] .cmp-block-text { font-size: 11.5px; line-height: 1.7; color: var(--ink-3); }
 .cmp-block-img { display: block; max-width: 100%; margin: 5px 0 2px; border: 1px solid var(--hair); border-radius: 6px; cursor: zoom-in; }
 .cmp-block-img[hidden] { display: none; }
@@ -4427,6 +4446,43 @@ body.pn-resizing * { cursor: col-resize !important; }
   /* break-word 而不是 anywhere：anywhere 会把 "ARTICLE INFO" 拆成 "ARTICLEINF / O"
      （块宽比字号小一点点就断在任何字符上）。break-word 只在整词放不下时才断，中英混排都更稳。 */
   white-space: pre-wrap; overflow-wrap: break-word; hyphens: none;
+}
+/* ---- 译文上的标注（与原文共用同一份 annotations，靠 blockId + 字符区间定位） ---- */
+.ctp-hl { border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.ctp-hl.ctp-c-yellow { background: rgba(255, 224, 138, .62); }
+.ctp-hl.ctp-c-green { background: rgba(167, 231, 190, .62); }
+.ctp-hl.ctp-c-blue { background: rgba(168, 208, 247, .62); }
+.ctp-hl.ctp-c-pink { background: rgba(247, 190, 214, .62); }
+.ctp-hl.ctp-hl-note { background: rgba(255, 224, 138, .30); }
+.ctp-ul { border-bottom: 1.5px solid currentColor; padding-bottom: 1px; }
+.ctp-ul.ctp-c-yellow { border-bottom-color: #d9a400; }
+.ctp-ul.ctp-c-green { border-bottom-color: #2f9e63; }
+.ctp-ul.ctp-c-blue { border-bottom-color: #2b7fd4; }
+.ctp-ul.ctp-c-pink { border-bottom-color: #d4518c; }
+/* 批注：正文只留一条虚线（不铺底色、不展开内容），句末一个可点上标 */
+.ctp-cm-range { border-bottom: 1px dashed currentColor; opacity: .92; }
+.ctp-cm {
+  position: absolute; z-index: 6; width: 15px; height: 15px; padding: 0;
+  /* 上标式落点：中心压在句末字符的右上角上方，不遮住正文 */
+  transform: translate(-45%, -80%);
+  border: 0; border-radius: 50%; background: var(--primary); color: #fff;
+  font: 700 10px/15px -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  cursor: pointer; box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+}
+.ctp-cm:hover { transform: translate(-45%, -80%) scale(1.15); }
+/* 译文字号控件（只影响译文栏，不动原文缩放） */
+.ctp-font-seg {
+  display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0;
+  padding: 1px 3px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface);
+}
+.ctp-font-seg button {
+  border: 0; background: transparent; color: var(--text-2); cursor: pointer;
+  font: 600 12px/1 inherit; padding: 3px 4px; border-radius: 5px;
+}
+.ctp-font-seg button:hover { background: var(--gray-soft); color: var(--primary); }
+.ctp-font-seg #cmpFontLabel {
+  min-width: 34px; text-align: center; font-size: 11.5px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 /* 放了最大可用字号仍装不下：白底长到「下一块的上沿」为止，剩下的截断（悬停看全文） */
 .ctp-block.ctp-grown { z-index: 3; }

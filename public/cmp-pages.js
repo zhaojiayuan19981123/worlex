@@ -55,6 +55,9 @@
   const DPR_BUDGET = 16e6;  // 单页画布像素预算，和主 PDF 视图同一口径
   const ZOOM_LO = 0.5;
   const ZOOM_HI = 3;
+  /** 译文字号倍数：版面还原的译文是「挤进原框」的，字号常被压到 7-9px，得留出放大空间 */
+  const FONT_LO = 0.8;
+  const FONT_HI = 1.8;
 
   const KIND_LABEL = {
     title: '大标题', heading: '小节标题', body: '正文', caption: '图题',
@@ -85,6 +88,8 @@
     zoomTimer: 0,           // 滚轮缩放的防抖句柄
     base: new Map(),        // page -> 本页统一字号
     wheelBound: false,
+    fontScale: 1,           // 译文字号倍数（1 = 按版面能放下的最大字号）
+    anns: [],               // 与原文同步的标注（只有带 blockId 的才在这里画）
   };
 
   function U() { return window.PdfReaderUtils; }
@@ -475,6 +480,8 @@
     const base = pickBase(usable);
     state.base.set(n, base);
     for (const j of usable) applySize(j, base);
+    // 字号定下来之后再贴高亮：先贴会被 applySize 的量高逻辑算进标记的内边距
+    applyMarks(n);
   }
 
   /**
@@ -716,7 +723,9 @@
   function applySize(j, base) {
     const isTitle = j.kind === 'title';
     const isHeading = isTitle || j.kind === 'heading';
-    const want = isTitle ? base * 1.35 : isHeading ? base * 1.15 : base;
+    // 用户调大字号时整页一起乘 —— 只放大正文不放大标题会立刻破坏层级
+    const k = state.fontScale || 1;
+    const want = (isTitle ? base * 1.35 : isHeading ? base * 1.15 : base) * k;
     const h = Math.round(j.el.clientHeight || 0);
     const room = Math.round(Math.max(0, j.grow || 0));
     const target = h + room;
@@ -790,6 +799,7 @@
       const base = state.base.get(b.page) || pickBase([job]);
       state.base.set(b.page, base);
       applySize(job, base);
+      applyMarks(b.page);
     }
     if (state.activeId === id) el.classList.add('active');
   }
@@ -804,6 +814,206 @@
     state.pending.delete(id);
     state.errors.set(id, String(message || '翻译失败'));
     refreshBlock(id);
+  }
+
+  // ==================== 字号 / 标注 / 选区 ====================
+
+  /**
+   * 译文字号倍数。
+   *
+   * 版面还原的译文要挤进原框，号常常被压到 7~9px（英文原版就是小字号，中文又要一行
+   * 塞更多字）。用户明确提出「字号有点小」——这里给一个倍数，把整页（含标题）一起乘，
+   * 放不下的块仍走「先长高、后降档、最后截断」那条老路，所以极端倍数下会有截断，
+   * 不是缺陷而是版面还原本身的物理限制。
+   */
+  function setFontScale(k) {
+    const next = clamp(Number(k) || 1, FONT_LO, FONT_HI);
+    if (Math.abs(next - (state.fontScale || 1)) < 0.001) return;
+    state.fontScale = Math.round(next * 100) / 100;
+    state.base.clear();          // 基准字号是「按原框算的」，倍数变了要重新量
+    refit();
+  }
+
+  function getFontScale() { return state.fontScale || 1; }
+
+  /** 外部（app.js）把当前文献的标注推进来；只有带 blockId + tr 区间的才画在译文上 */
+  function setAnnotations(list) {
+    const next = (Array.isArray(list) ? list : [])
+      .filter((a) => a && a.blockId != null && a.tr && Number.isFinite(Number(a.tr.from)));
+    state.anns = next;
+    for (const n of state.wraps.keys()) applyMarks(n);
+  }
+
+  const MARK_SEL = 'mark.ctp-hl, span.ctp-ul, span.ctp-cm-range';
+
+  /** 拆掉一页里所有标注，恢复成纯文本（不重排，偏移不变） */
+  function clearMarks(layer) {
+    layer.querySelectorAll('.ctp-cm').forEach((n) => n.remove());
+    for (const el of [...layer.querySelectorAll(MARK_SEL)]) {
+      const parent = el.parentNode;
+      if (!parent) continue;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    }
+    // 标记拆掉后每个块里会留下一串相邻文本节点，合并回去才能按 textContent 继续算偏移
+    layer.querySelectorAll('.ctp-text').forEach((t) => t.normalize());
+  }
+
+  /**
+   * 把 textEl 里 [from, to) 这段文字包成元素。
+   * 跨多个文本节点时每段包一个（一个元素不能同时出现在两个位置）。
+   */
+  function wrapRange(textEl, from, to, make) {
+    const out = [];
+    const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT);
+    const segs = [];
+    let pos = 0;
+    let node = walker.nextNode();
+    while (node) {
+      const len = node.nodeValue.length;
+      const a = Math.max(from - pos, 0);
+      const b = Math.min(to - pos, len);
+      if (b > a) segs.push({ node, a, b });
+      pos += len;
+      if (pos >= to) break;
+      node = walker.nextNode();
+    }
+    for (const seg of segs) {
+      let target = seg.node;
+      if (seg.a > 0) target = target.splitText(seg.a);
+      const keep = seg.b - seg.a;
+      if (keep < target.nodeValue.length) target.splitText(keep);
+      const el = make();
+      target.parentNode.insertBefore(el, target);
+      el.appendChild(target);
+      out.push(el);
+    }
+    return out;
+  }
+
+  /** 把某一页的译文标注贴回去（每次先清再贴，幂等） */
+  function applyMarks(n) {
+    const rec = state.wraps.get(n);
+    if (!rec?.layer) return;
+    clearMarks(rec.layer);
+    if (!state.anns.length) return;
+    for (const a of state.anns) {
+      if (a.page !== n) continue;
+      const blockEl = rec.layer.querySelector(`.ctp-block[data-id="${CSS.escape(String(a.blockId))}"]`);
+      const textEl = blockEl?.querySelector('.ctp-text');
+      if (!textEl) continue;
+      const total = (textEl.textContent || '').length;
+      if (!total) continue;
+      const from = clamp(Math.round(Number(a.tr.from) || 0), 0, total);
+      const to = clamp(Math.round(Number(a.tr.to) || 0), 0, total);
+      if (!(to > from)) continue;
+      const color = a.color || 'yellow';
+      if (a.type === 'comment') {
+        // 批注：正文里只留底纹 + 一个小标，内容点开才看（与 PDF 视图同一套语义）。
+        // 小标挂在 layer 上而不是块里 —— 块是 overflow:hidden，挂在里面会被裁掉一圈。
+        wrapRange(textEl, from, to, () => {
+          const sp = document.createElement('span');
+          sp.className = 'ctp-cm-range';
+          sp.dataset.ann = a.id || '';
+          return sp;
+        });
+        if (rec.layer.querySelector(`.ctp-cm[data-cm="${CSS.escape(String(a.id || ''))}"]`)) continue;
+        // 优先贴在这一句的末尾（读者顺着文字就能看到），量不到再退回块右上角
+        const marks = rec.layer.querySelectorAll(`.ctp-cm-range[data-ann="${CSS.escape(String(a.id || ''))}"]`);
+        const tail = marks[marks.length - 1];
+        const dot = document.createElement('button');
+        dot.type = 'button';
+        dot.className = 'ctp-cm';
+        dot.dataset.cm = a.id || '';
+        dot.title = '查看批注';
+        dot.setAttribute('aria-label', '查看批注');
+        dot.textContent = '!';
+        const lr = rec.layer.getBoundingClientRect();
+        const tr = tail?.getBoundingClientRect();
+        if (tr && lr.width && lr.height) {
+          dot.style.left = r2(((tr.right - lr.left) / lr.width) * 100) + '%';
+          dot.style.top = r2(((tr.top - lr.top) / lr.height) * 100) + '%';
+        } else {
+          const b = state.blocks.find((x) => String(x.id) === String(a.blockId));
+          const p = b ? blockPercent(b, pageSize(b.page)) : null;
+          if (p) {
+            dot.style.left = r2(p.left + p.width) + '%';
+            dot.style.top = r2(p.top) + '%';
+          }
+        }
+        rec.layer.appendChild(dot);
+      } else {
+        const isUl = a.type === 'underline';
+        wrapRange(textEl, from, to, () => {
+          const el = document.createElement(isUl ? 'span' : 'mark');
+          el.className = (isUl ? 'ctp-ul' : 'ctp-hl') + ' ctp-c-' + color
+            + (a.type === 'note' ? ' ctp-hl-note' : '');
+          el.dataset.ann = a.id || '';
+          return el;
+        });
+      }
+    }
+  }
+
+  /** (节点, 偏移) → 相对容器 textContent 的字符下标 */
+  function offsetWithin(root, node, nodeOffset) {
+    const r = document.createRange();
+    r.selectNodeContents(root);
+    try { r.setEnd(node, nodeOffset); } catch (_) { return 0; }
+    return r.toString().length;
+  }
+
+  /**
+   * 译文栏里的划词选区。
+   *
+   * 只认落在同一个 `.ctp-block` 里的选区（跨块选择没有统一的坐标系，硬算出来的
+   * 高亮会横跨两个段落）。返回的 from/to 是**译文纯文本**里的字符下标 —— 与
+   * `tr` 字段同口径，因此原文 / 译文两侧能对着同一份数据各画各的。
+   */
+  function selection() {
+    const host = state.host;
+    const sel = window.getSelection();
+    if (!host || !sel || sel.isCollapsed || !sel.rangeCount) return null;
+    const range = sel.getRangeAt(0);
+    const inside = (n) => !!n && (n === host || host.contains(n));
+    if (!inside(range.startContainer) || !inside(range.endContainer)) return null;
+    const blockOf = (n) => (n && (n.nodeType === 1 ? n : n.parentElement))?.closest?.('.ctp-block') || null;
+    const startBlock = blockOf(range.startContainer);
+    const endBlock = blockOf(range.endContainer);
+    if (!startBlock || startBlock !== endBlock) return null;
+    const textEl = startBlock.querySelector('.ctp-text');
+    if (!textEl) return null;
+    const from = offsetWithin(textEl, range.startContainer, range.startOffset);
+    const to = offsetWithin(textEl, range.endContainer, range.endOffset);
+    if (!(to > from)) return null;
+    const text = (textEl.textContent || '').slice(from, to);
+    if (!text.trim()) return null;
+    const clientRects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    const id = startBlock.dataset.id;
+    const b = state.blocks.find((x) => String(x.id) === String(id));
+    return {
+      kind: 'trans',
+      blockId: b?.id ?? id,
+      page: b?.page ?? parseInt(startBlock.closest('.ctp-page')?.dataset.page, 10),
+      from, to,
+      len: (textEl.textContent || '').length,
+      text,
+      clientRects,
+    };
+  }
+
+  /**
+   * 某一块在**原始 PDF 坐标**里的矩形（未旋转，与 annotations.rects 同口径）。
+   * 版面块的 x/y/width/height 本来就是未旋转页面的归一化值，直接乘页面尺寸即可。
+   */
+  function blockPageRect(id) {
+    const b = state.blocks.find((x) => String(x.id) === String(id));
+    if (!b) return null;
+    const size = pageSize(b.page);
+    return {
+      page: b.page,
+      rect: [b.x * size.w, b.y * size.h, (b.x + b.width) * size.w, (b.y + b.height) * size.h],
+    };
   }
 
   // ==================== 选中 / 定位 ====================
@@ -858,6 +1068,14 @@
 
   function onClick(event) {
     if (window.getSelection()?.toString().trim()) return;
+    // 批注小标：看内容，不要触发「选中块」
+    const cmBtn = event.target.closest?.('.ctp-cm');
+    if (cmBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      state.opts.onComment?.(cmBtn.dataset.cm);
+      return;
+    }
     // 「看原图」图标：弹出这一块的裁图。拦在块点击之前，否则点图标会变成「选中块」。
     const zoomBtn = event.target.closest?.('.ctp-zoom');
     if (zoomBtn) {
@@ -1078,6 +1296,13 @@
     setZoom,
     getZoom,
     fitWidth,
+    setFontScale,
+    getFontScale,
+    setAnnotations,
+    selection,
+    blockPageRect,
+    /** 给「文本重排」复用同一套按字符区间包元素的做法（两边标记才长得一样） */
+    markRange: wrapRange,
     destroy,
     /** 排查用：不暴露大对象 */
     debug: () => ({
@@ -1086,6 +1311,8 @@
       blocks: state.blocks.length,
       scale: state.scale,
       zoom: state.zoom,
+      fontScale: state.fontScale,
+      anns: state.anns.length,
       base: [...state.base.entries()],
       activeId: state.activeId,
       hasDoc: !!state.opts.getDoc?.(),

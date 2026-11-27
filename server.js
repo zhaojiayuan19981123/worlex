@@ -3217,7 +3217,9 @@ export function createApp({
             start: Math.max(0, Number(a.start) || 0),
             end: Math.max(0, Number(a.end) || 0),
             quote: String(a.quote || '').slice(0, 4000),
-            kind: a.kind === 'text' ? 'text' : 'highlight',
+            // 三种：底色高亮 / 字色 / 批注（v3.1.2 解析结果里的划词批注，正文只显示标记）
+            kind: a.kind === 'text' ? 'text' : a.kind === 'comment' ? 'comment' : 'highlight',
+            note: String(a.note || '').slice(0, 4000),
             color: String(a.color || ''),
           };
         })

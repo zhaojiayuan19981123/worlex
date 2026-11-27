@@ -1,3 +1,101 @@
+## v3.1.2：译文字号可调 + 缩放联动 + 原文↔译文双向高亮批注 + AI 解析结果可批注（2026-11-27）
+
+### 需求
+1. 文献阅读器的**版面还原**字号偏小，希望加大，或者让用户自己调；
+2. 顶部的版面缩放按钮**只能调原文**，希望也能调译文栏；
+3. 译文要能**高亮**，并且与原文**双向同步**（译文画→原文显示，原文画→译文显示）；
+4. 文献中心里 **AI 解析结果**目前无法添加批注。
+
+### 一、译文字号：给倍数，不给更大的基准
+
+版面还原（`public/cmp-pages.js`）要把译文**塞进 PDF 原来的文本框**，字号是算出来的：
+`fitPage → pickBase → applySize` 从大到小试档（`base` / `base-0.5` / `base-1`），
+量到不溢出为止；基准范围 `BASE_LO=7` ~ `BASE_HI=14`，多数正文段落最终落在 7~9px。
+
+> 所以「直接把基准调大」是错的方向：基准一高，长段落立刻超框，被截断的字比现在更难看。
+
+改成在**算好的基准上再乘一个倍数**：
+
+```js
+const k = state.fontScale || 1;
+const want = (isTitle ? base * 1.35 : isHeading ? base * 1.15 : base) * k;   // FONT_LO=0.8 / FONT_HI=1.8
+```
+
+- 换倍数时必须 `state.base.clear()` 再 `refit()`——基准是按**原框**量的，不清缓存会继续用旧的落笔值。
+- UI 是译文栏标题右侧的 `A－ 100% A＋`（`#cmpFontSeg`），0.1 一档，写 `localStorage['sciterminal.cmpTransFontScale']`。
+- 文本重排视图（`cmp-block-text`）用 CSS 变量接同一倍数：`font-size: calc(13.5px * var(--ctp-fs, 1))`，标题/小标题/图表题/脚注四处同步。
+- 超框仍然由 `pickBase` 退档兜底，所以放到 1.8 倍也不会出现「字出框外」。
+
+### 二、缩放联动：走比例，不走同一个百分比
+
+`pr.scale`（原文 pdf.js 缩放）与 `CmpPages.zoom` 是**两套独立状态**，且两栏宽度不同——
+把原文的 140% 直接写给译文，译文会变成一头大一头小。所以只同步**变化比例**：
+
+```js
+function syncCmpZoomRatio(ratio) {
+  if (!cmp.on || cmp.style !== 'page') return;            // 只在「对照精读 + 版面还原」时联动
+  if (!(ratio > 0) || Math.abs(ratio - 1) < 0.001) return;
+  window.CmpPages?.setZoom?.((window.CmpPages?.getZoom?.() || 1) * ratio);
+}
+```
+
+- `zoomPdfBy(delta)`（`－ % ＋` 与 Ctrl+滚轮共用）先记 `prev`，再 `syncCmpZoomRatio(scale/prev)`。
+- 「适宽」时两边各自回 1（`fitWidth()` 末尾调 `CmpPages.fitWidth()`），因为适宽对两栏而言本来就不是同一个数值。
+- 译文栏自己的缩放按钮照常可用，可与联动叠加微调。
+
+### 三、原文 ↔ 译文双向高亮与批注：一条标注，两端渲染
+
+没有逐句对齐数据（版面还原是按文本块铺的，不产出句级对齐），所以**不做逐句映射**，
+改用**块内纵向比例**互推：
+
+- 新增的字段挂在原标注上：`blockId`（文本块）+ `tr:{from,to}`（块内字符区间）+ `trLen`。
+- 原文 → 译文：`cmpLinkAnnotation(a)` 拿 `rect.y` 在块归一化坐标里求比例
+  `r=(rect.y-block.y)/block.height`，再 `from=round(r*len)`、`to=from+原选中字数`。
+- 译文 → 原文：`cmpTransRects(ts)` 反推，块上下沿之间按字符比例取一条矩形。
+- 代价写清楚：长段落可能差一两行；换来的是**任何一处标注在另一端一定看得到**。
+
+译文侧渲染在 `cmp-pages.js` 里：
+
+| 函数 | 作用 |
+| --- | --- |
+| `wrapRange(textEl, from, to, make)` | `TreeWalker` 走文本节点 + `splitText`，跨节点逐段包，返回包出的元素数组 |
+| `clearMarks(layer)` | 先摘 `.ctp-cm` 与 `MARK_SEL`，再 `normalize()` 合并文本节点——保证反复重贴不叠层 |
+| `applyMarks(n)` | 每页：清 → 按 `a.page / a.blockId / a.tr` 逐条画 `mark.ctp-hl` / `span.ctp-ul` / `span.ctp-cm-range` |
+| `selection()` | 只认**同一个块内**的选区，返回 `{blockId,page,from,to,len,text,clientRects}` |
+
+两个易踩的点：
+
+1. **先定字号再贴标记**。`applyMarks` 必须在 `fitPage()` 末尾和 `refreshBlock()` 里**之后**调用，
+   否则标记带来的内边距会被 `pickBase` 算进量高，字号被莫名退档。
+2. **批注小标挂 layer，不挂块内**。块是 `overflow:hidden`，挂里面会被裁掉一圈；
+   而且不往 `.ctp-text` 里插节点，`Range.toString()` 的字符偏移才不会被打乱。
+   位置取「该句最后一个 `.ctp-cm-range` 的右端 + 行顶」，用 `translate(-45%,-80%)` 做成上标，
+   量不到再退回块右上角。
+
+译文划词入口在 `captureSelection()` 最前面（必须在 `pr.reading.on` 之前判断），
+返回 `{kind:'trans', ...}`；工具条照常，但**译文划词不自动翻译**。
+
+### 四、AI 解析结果可批注
+
+文献中心详情抽屉的字段（`.md-annotatable[data-field]`）原来只支持高亮/下划线，这一版补 `comment`：
+
+- 工具条加「批注」（`[data-anno-note]`），选中后走 `addCommentToSelection()`，落库 `{target:'field', kind:'comment', start, end, quote, note}`。
+- 正文里只渲染 `span.anno-comment`（虚线下划）+ 句末 `button.anno-cm-dot`（14px 上标小点），**不展开内容**；点小点才 `showFieldComment()`，可编辑/删除。
+- `clearFieldMarks()` 里 `anno-cm-dot` 必须**先于**文本节点摘除再 `normalize()`，否则小点会被合并进正文。
+- **顺手修掉的 bug**：`applyAnnoToSelection()` 原来只按「范围重叠」替换，给已高亮的句子再加一次高亮会把同段上的批注一起冲掉；现在加 `a.kind === kind` 过滤，只替换**同类型**重叠。
+- **服务端坑**：`PATCH /api/literature/:id` 会把字段标注的 `kind` 规整成 `'text' | 'highlight'`，`comment` 被悄悄改回 `highlight`（表现为「加了批注却不显示小点」）。已改成三值并保存 `note`。改完必须重启服务端。
+
+### 验证
+
+- `test/v312-features.test.mjs` 新增 7 条：字号倍数与上下限、控件与 localStorage、缩放同比例与适宽复位、
+  译文标注按 `blockId+tr` 且「先清后贴」、原文↔译文同步链路（含 `kind:'trans'` 与「译文划词不自动翻译」）、
+  详情批注四件套 + 只替换同类型 + 渲染标记、服务端不吞 `comment`。
+- 全量 `node --test` **1047 条通过**。
+- `.debug/e2e-v312.mjs` 浏览器端到端 **19/19**：假 pdf.js doc 驱动真实 `CmpPages`，验证铺版与坐标换算、
+  14px → 19.5px 且能复原、译文里画出高亮/下划线/批注、译文划词拿到 `block=b2 2-9`、缩放 1 → 1.5、
+  「未进对照精读时不动译文」；再用真实详情抽屉验证批注按钮、只留标记、点开才看、可编辑可删除、与高亮共存、无 JS 报错。
+- 截图复核：`cmp-100.png` / `cmp-130.png` 对比确认字号确实变大且 `clips:0 / grown:0`（无截断、无溢出）。
+
 ## v3.1.1：文献中心实时刷新 + 启动/运行优化 + 阅读器批注 + 算法类「实验环境」（2026-11-27）
 
 ### 需求

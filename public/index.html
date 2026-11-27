@@ -1584,8 +1584,12 @@
     <button type="button" class="anno-letter" data-anno-c="green" title="绿字" style="color:var(--green)">A</button>
     <button type="button" class="anno-letter" data-anno-c="purple" title="紫字" style="color:var(--primary)">A</button>
     <span class="anno-sep"></span>
+    <button type="button" class="anno-note" data-anno-note title="添加批注（正文只显示标记，内容点开才看）">批注</button>
+    <span class="anno-sep"></span>
     <button type="button" class="anno-clear" data-anno-clear title="清除这处标注">清除</button>
   </div>
+  <!-- 解析结果里的批注浮层：写 / 看 / 改都在这里，正文只留一个小圆点 -->
+  <div id="annoCommentPop" class="pr-popover hidden"></div>
 
   <!-- AI 解析进度：解析接口是同步返回的，这里靠平行轮询 /api/parse/progress 实时显示
        「已经第几篇 / 共几篇」和当前这篇卡在哪个阶段（读正文 → AI 解析 → 查等级 → 写库） -->
@@ -1965,6 +1969,13 @@
               <button class="pn-seg-btn" data-cmpstyle="flow" title="把译文排成连续文本流：字号统一、不分栏，适合一口气读">文本重排</button>
             </div>
             <button class="ctp-zoom hidden" id="cmpTransZoom" title="点击回到「适应宽度」（Ctrl + 滚轮可缩放）">100%</button>
+            <!-- 译文字号：版面还原里的译文要挤进原框，字号常被压到 7-9px；这里单独给一个倍数，
+                 只影响译文栏，不动原文 PDF 的缩放（两者是不同的东西）。 -->
+            <div class="ctp-font-seg" id="cmpFontSeg" title="译文字号（只影响译文栏）">
+              <button type="button" id="cmpFontDec" aria-label="减小译文字号">A－</button>
+              <span id="cmpFontLabel">100%</span>
+              <button type="button" id="cmpFontInc" aria-label="增大译文字号">A＋</button>
+            </div>
           </div>
           <!-- 版面还原：底图 + 按原坐标覆盖的译文块 -->
           <div class="cmp-flow ctp-scroll" id="cmpTransFlow"></div>
