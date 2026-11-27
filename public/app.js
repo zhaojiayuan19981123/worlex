@@ -7210,7 +7210,8 @@
     view: 'split',          // pdf(仅原文) | split(原文+译文) | trans(仅译文)
     style: 'page',          // page(版面还原，译文填回原 PDF 页) | flow(文本重排，连续文本流)
     drawer: false,          // 目录抽屉是否展开（目录不再占一列）
-    transZoom: 1,           // 译文页缩放倍数（Ctrl + 滚轮）
+    transZoom: 1,           // 译文页缩放倍数（Ctrl + 滚轮，版面还原）
+    flowZoom: 1,            // 文本重排的等效缩放：跟随原文 ± 同比例变化，适宽回 1
     ratios: { outline: 0.15, src: 0.34, trans: 0.32, assist: 0.30 },
     activeId: null,
     transCache: new Map(),  // 单段翻译结果：blockId -> 译文（另有 localStorage 持久缓存）
@@ -7607,10 +7608,17 @@
     el.title = n === 100 ? '译文字号：与原版面字号一致' : `译文字号 ${n}%（只影响译文栏）`;
   }
 
-  /** 文本重排（流式）也跟着改字号：两种读法共用同一个倍数，来回切不会忽大忽小 */
+  /**
+   * 文本重排（流式）也跟着改字号：字号偏好 × 原文缩放同步过来的倍数。
+   * 分开存是为了让「译文字号 A±」仍只改偏好，而顶部缩放只改 flowZoom，
+   * 两边叠加后一次写进 CSS 变量，来回切两种排版不会忽大忽小。
+   */
   function applyCmpFlowFontScale(k) {
     const mode = cmpEl('prCmpMode');
-    if (mode) mode.style.setProperty('--ctp-fs', String(Math.round((Number(k) || 1) * 100) / 100));
+    if (!mode) return;
+    const fs = Math.round((Number(k) || 1) * 100) / 100;
+    const zoom = Number(cmp.flowZoom) || 1;
+    mode.style.setProperty('--ctp-fs', String(Math.round(fs * zoom * 100) / 100));
   }
 
   /** 步进调节译文字号（0.1 一档），版面还原要重排，文本重排只改一个 CSS 变量 */
@@ -10503,6 +10511,42 @@
     return [{ x1, y1, x2, y2 }];
   }
 
+  /** 文本重排里的选区 → 与版面还原同构的 blockId + tr，一条标注两端都能画 */
+  function cmpFlowSelection(sel) {
+    const box = cmpEl('cmpTransHtml');
+    if (!box || !sel?.anchorNode || !sel.focusNode) return null;
+    if (!box.contains(sel.anchorNode) || !box.contains(sel.focusNode)) return null;
+    const startEl = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+    const endEl = sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement;
+    const holder = startEl?.closest?.('.cmp-block');
+    if (!holder || holder !== endEl?.closest?.('.cmp-block')) return null;
+    const textEl = holder.querySelector('.cmp-block-text');
+    if (!textEl || !textEl.contains(sel.anchorNode) || !textEl.contains(sel.focusNode)) return null;
+
+    const range = sel.getRangeAt(0);
+    const pre = range.cloneRange();
+    pre.selectNodeContents(textEl);
+    pre.setEnd(range.startContainer, range.startOffset);
+    const from = pre.toString().length;
+    const text = range.toString();
+    const len = (textEl.textContent || '').length;
+    const to = from + text.length;
+    if (!text.trim() || !(to > from)) return null;
+    const id = holder.dataset.blockId;
+    const b = (cmp.data?.blocks || []).find((x) => String(x.id) === String(id));
+    const clientRects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    return {
+      kind: 'trans',
+      text,
+      pageNum: b?.page || 1,
+      rects: cmpTransRects({ blockId: id, from, to, len }),
+      clientRects,
+      blockId: id,
+      tr: { from, to },
+      trLen: len,
+    };
+  }
+
   function captureSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return null;
@@ -10511,6 +10555,9 @@
     // 对照精读的译文栏：选区在按原坐标填回去的译文块里，拿到的是「块 id + 译文里的
     // 字符区间」。原文侧没有真实文字可量，所以矩形按块内比例反推（见 cmpTransRects）。
     if (cmp.on) {
+      // 文本重排与版面还原是两套 DOM，先认流式段落，再认原坐标块
+      const fs = cmpFlowSelection(sel);
+      if (fs) return fs;
       const ts = window.CmpPages?.selection?.();
       if (ts) {
         return {
@@ -11495,6 +11542,9 @@
 
   function fitWidth() {
     if (!pr.doc) return;
+    // 「适宽」是两边的共同基线：文本重排的等效缩放也一起回位
+    cmp.flowZoom = 1;
+    applyCmpFlowFontScale(getCmpFontScale());
     const pages = $('prPages');
     if (!pages) return;
     // 可用宽度按「#prPages 当前所在的宿主」量 —— 它会随阅读形态被搬来搬去
@@ -11531,10 +11581,19 @@
   }
 
   function syncCmpZoomRatio(ratio) {
-    if (!cmp.on || cmp.style !== 'page') return;
+    if (!cmp.on) return;
     if (!(ratio > 0) || Math.abs(ratio - 1) < 0.001) return;
-    const z = window.CmpPages?.getZoom?.() || 1;
-    window.CmpPages?.setZoom?.(z * ratio);
+    if (cmp.style === 'page') {
+      const z = window.CmpPages?.getZoom?.() || 1;
+      window.CmpPages?.setZoom?.(z * ratio);
+      return;
+    }
+    // 文本重排没有「页」可缩放，用等效字号倍数跟着原文同比例走。
+    const prev = Number(cmp.flowZoom) || 1;
+    const next = Math.max(0.5, Math.min(4, Math.round(prev * ratio * 1000) / 1000));
+    if (Math.abs(next - prev) < 0.001) return;
+    cmp.flowZoom = next;
+    applyCmpFlowFontScale(getCmpFontScale());
   }
 
   function bindPdfReader() {
@@ -14725,6 +14784,21 @@
     })),
     prBlocks: window.PrBlocks?.debug?.() || null,
   });
+  // 自动化钩子：文本重排的选区与缩放都发生在 app.js 闭包里，外部造 DOM 后
+  // 用这两个只读/一次性入口验证链路（不改用户的真实状态）。
+  window.__cmpTest = {
+    flowSelection: () => cmpFlowSelection(window.getSelection()),
+    markFlow: (anns) => applyCmpFlowMarks(anns || []),
+    zoomFlow: (ratio) => {
+      const wasOn = cmp.on;
+      const wasStyle = cmp.style;
+      cmp.on = true;
+      cmp.style = 'flow';
+      try { syncCmpZoomRatio(ratio); } finally { cmp.on = wasOn; cmp.style = wasStyle; }
+      return cmp.flowZoom;
+    },
+    flowZoom: () => cmp.flowZoom,
+  };
   // 自动化定位：某块在屏幕上的中心点与它所在页的显示矩形。
   // 测试用它做**真实鼠标点击**（而不是直接调内部函数），这样走的是完整的事件链路。
   window.__cmpBlockPoint = (id) => {

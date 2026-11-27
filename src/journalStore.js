@@ -432,46 +432,18 @@ export function removeSubmission(id, submissionId) {
 }
 
 /**
- * 批量收藏（从文献库 / 顶刊追踪导入期刊名）。
- * 已存在的跳过而不是报错——用户点「导入」期望的是「补齐」，不是「全都失败」。
+ * 批量删除收藏：重复 id 只算一次，一次写盘；已不存在的记到 missing 而不是报错。
+ * 只删期刊收藏本身，不动文献中心里的任何记录。
  */
-export function importNames(names, meta = {}) {
+export function removeJournals(ids) {
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))];
+  if (!wanted.length) return { requested: 0, deleted: 0, missing: 0, ids: [] };
   const state = load();
-  const existing = new Set(state.items.map((j) => normalizeKey(j.name)));
-  const now = new Date().toISOString();
-  let added = 0;
-  let skipped = 0;
-  const created = [];
-  for (const raw of Array.isArray(names) ? names : []) {
-    const name = String(raw || '').trim();
-    const key = normalizeKey(name);
-    if (!key) continue;
-    if (existing.has(key)) { skipped += 1; continue; }
-    existing.add(key);
-    const record = {
-      id: newId(),
-      name: name.slice(0, 200),
-      nameCn: '', abbr: '', issn: '', publisher: '',
-      field: String(meta.field || '').slice(0, 60),
-      website: '', submitUrl: '',
-      tags: [], note: '',
-      rank: { summary: '', items: [], at: '', error: '' },
-      review: sanitizeReview({}),
-      cycle: sanitizeCycle({}),
-      submissions: [],
-      ai: { text: '', at: '', model: '' },
-      createdAt: now,
-      updatedAt: now,
-    };
-    state.items.push(record);
-    created.push(record);
-    added += 1;
-  }
-  if (added) save(state);
-  return { added, skipped, items: created.map(decorate) };
-}
-
-/** 当前库里出现的期刊名（供前端提示「哪些还没收藏」） */
-export function keysOf(list) {
-  return new Set((list || []).map((j) => normalizeKey(j.name)));
+  const existing = new Set(state.items.map((j) => j.id));
+  const doomed = wanted.filter((id) => existing.has(id));
+  if (!doomed.length) return { requested: wanted.length, deleted: 0, missing: wanted.length, ids: [] };
+  const kill = new Set(doomed);
+  state.items = state.items.filter((j) => !kill.has(j.id));
+  save(state);
+  return { requested: wanted.length, deleted: doomed.length, missing: wanted.length - doomed.length, ids: doomed };
 }

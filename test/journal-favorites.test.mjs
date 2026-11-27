@@ -8,6 +8,7 @@
 // 另外「收藏」这种清单最容易出的问题是重复：大小写、`&` 与 `and`、标点不同都算同一本。
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -162,13 +163,17 @@ test('等级档位打分：UTD24 > 中科院 1 区 Top > 2 区 > 未收录', () 
   assert.equal(js.tierScore([{ label: '中科院分区', value: '未收录' }]), null);
 });
 
-test('批量导入：按去重键跳过已收藏的，重复名字在那一批里也只收一次', async () => {
+test('批量删除：一次删多本，重复 id 只算一次，已不存在的记进 missing', async () => {
   await withDataDir(async () => {
-    js.createJournal({ name: 'Journal of Marketing' });
-    const res = js.importNames(['Journal of Marketing', 'MIS Quarterly', 'mis quarterly.', 'Journal of Finance']);
-    assert.equal(res.added, 2);
-    assert.equal(res.skipped, 2);
-    assert.equal(js.listJournals().length, 3);
+    const a = js.createJournal({ name: 'Journal of Marketing' }).journal.id;
+    const b = js.createJournal({ name: 'MIS Quarterly' }).journal.id;
+    const c = js.createJournal({ name: 'Journal of Finance' }).journal.id;
+    const res = js.removeJournals([a, a, b, 'not-exist']);
+    assert.equal(res.requested, 3, '去重后的请求数');
+    assert.equal(res.deleted, 2);
+    assert.equal(res.missing, 1);
+    assert.deepEqual(js.listJournals().map((j) => j.id), [c]);
+    assert.equal(js.removeJournals([]).deleted, 0);
   });
 });
 
@@ -282,34 +287,34 @@ test('HTTP：没配 easyScholar / 没配模型时，各自给明确提示而不�
   });
 });
 
-test('HTTP：从文献库导入期刊名，同一本刊只收一次', async () => {
+test('HTTP：勾选批量删除只删收藏，旧导入接口已下线', async () => {
   await withDataDir(async () => {
     store.upsertLiterature({ id: 'lit1', docType: 'empirical', title: 'A', journal: 'Journal of Finance' });
-    store.upsertLiterature({ id: 'lit2', docType: 'empirical', title: 'B', journal: 'journal of finance' });
-    store.upsertLiterature({ id: 'lit3', docType: 'empirical', title: 'C', journal: '' });
-    store.upsertLiterature({ id: 'lit4', docType: 'algorithm', title: 'D', journal: 'NeurIPS' });
-
     const { app } = createApp();
     const server = createServer(app);
     const base = await listen(server);
+    const post = (p, body) => fetch(base + p, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+    });
     try {
-      const res = await fetch(base + '/api/journals/import', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'literature', docType: 'empirical' }),
-      });
+      const a = (await (await post('/api/journals', { name: 'Journal of Marketing' })).json()).journal.id;
+      const b = (await (await post('/api/journals', { name: 'MIS Quarterly' })).json()).journal.id;
+      const c = (await (await post('/api/journals', { name: 'Journal of Finance' })).json()).journal.id;
+
+      const bad = await post('/api/journals/batch-delete', { ids: [] });
+      assert.equal(bad.status, 400);
+
+      const res = await post('/api/journals/batch-delete', { ids: [a, b, a, 'gone'] });
       assert.equal(res.status, 200);
       const data = await res.json();
-      assert.equal(data.added, 1, '两篇同刊只收一本，空期刊名跳过');
-      assert.equal(data.skipped, 1);
+      assert.equal(data.deleted, 2);
+      assert.equal(data.missing, 1);
+      const list = await (await fetch(base + '/api/journals')).json();
+      assert.equal(list.items[0].id, c);
+      assert.equal(list.counts.total, 1, '删收藏不影响别处');
+      assert.equal((await store.listLiterature()).length, 1, '文献中心的记录不能被带走');
 
-      // 再导一次：全都已收藏
-      const again = await (await fetch(base + '/api/journals/import', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'literature' }),
-      })).json();
-      assert.equal(again.added, 1, '这次不限制文库，NeurIPS 应该补进来');
-      // 文献库里 JoF 与 jof 两条撞同一本，都已收藏 → 各记一次跳过
-      assert.equal(again.skipped, 2);
+      assert.equal((await post('/api/journals/import', { source: 'literature' })).status, 404, '导入接口不该再存在');
     } finally {
       await close(server);
     }
@@ -385,6 +390,13 @@ test('前端接线：导航项、视图容器、脚本、路由映射与样式�
   assert.match(appJs, /journals:\s*\{\s*name:/, 'VIEW_META 要补标题');
   assert.match(css, /\.jr-row \{/, '列表行样式');
   assert.match(css, /\.jr-drawer \{/, '抽屉样式');
+  // 批量删除要在，导入要彻底下线（按钮、接口调用、后端路由都不能残留）
+  assert.match(jrJs, /id="jrBatchDelete"/);
+  assert.match(jrJs, /\/api\/journals\/batch-delete/);
+  assert.match(jrJs, /class="jr-check"/);
+  assert.doesNotMatch(jrJs, /jrImport|fromLibrary|journals\/import/);
+  assert.doesNotMatch(readFileSync(path.join(root, 'src/journalRoutes.js'), 'utf-8'), /journals\/import|importNames/);
+  assert.doesNotMatch(readFileSync(path.join(root, 'src/journalStore.js'), 'utf-8'), /export function importNames/);
   assert.match(jrJs, /window\.JournalView = \{ mount, close/, '模块导出约定');
   // 等级徽标必须按体系配色，不能全都一个颜色
   assert.match(css, /\.jr-badge-teal/);

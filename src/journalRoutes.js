@@ -8,8 +8,8 @@
 // 这个模块不出网除「查等级」和「让模型写一份投稿建议」两处，且都要求先配置好。
 
 import {
-  listJournals, getJournal, createJournal, patchJournal, removeJournal,
-  setRank, setAiReview, addSubmission, removeSubmission, importNames,
+  listJournals, getJournal, createJournal, patchJournal, removeJournal, removeJournals,
+  setRank, setAiReview, addSubmission, removeSubmission,
   REVIEW_DIMENSIONS, RESULTS, RESULT_LABELS, computeStats,
 } from './journalStore.js';
 import { queryPublicationRank, formatRank } from './easyscholar.js';
@@ -61,7 +61,7 @@ export function registerJournalRoutes(app, ctx = {}) {
     else if (sort === 'rating') items.sort((a, b) => byNum(b.review?.rating, a.review?.rating));
     else if (sort === 'cycle') items.sort((a, b) => byNum(a.cycleInfo?.days, b.cycleInfo?.days));
     else if (sort === 'name') items.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    // recent：默认按收藏时间倒序（importNames 用 push，createJournal 用 unshift，统一按字段排）
+    // recent：默认按收藏时间倒序，按字段排不依赖数组插入顺序
     else items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
     const tags = [...new Set(items.flatMap((j) => j.tags || []))].sort((a, b) => a.localeCompare(b));
@@ -109,25 +109,13 @@ export function registerJournalRoutes(app, ctx = {}) {
     }
   });
 
-  // ---------- 批量收藏：从文献库把出现过的期刊收进来 ----------
-  app.post('/api/journals/import', (req, res) => {
-    const body = req.body || {};
-    let names = [];
-    if (Array.isArray(body.names)) {
-      names = body.names;
-    } else if (body.source === 'literature') {
-      const docType = String(body.docType || '').trim();
-      const rows = store.listLiterature() || [];
-      names = rows
-        .filter((r) => (docType ? r.docType === docType : true))
-        .map((r) => String(r.journal || '').trim())
-        .filter(Boolean);
-    } else {
-      return res.status(400).json({ error: '请指定要导入的期刊名或数据来源' });
+  // ---------- 批量删除（列表里勾选后一次移除） ----------
+  app.post('/api/journals/batch-delete', (req, res) => {
+    const ids = req.body?.ids;
+    if (!Array.isArray(ids) || !ids.length) {
+      return res.status(400).json({ error: '请先勾选要删除的期刊' });
     }
-    if (!names.length) return res.status(400).json({ error: '没有可导入的期刊名' });
-    const result = importNames(names, { field: body.field || '' });
-    res.json(result);
+    res.json(removeJournals(ids));
   });
 
   // ---------- 批量刷新等级（限 BATCH_LIMIT 本，跳过一周内刚查过的） ----------

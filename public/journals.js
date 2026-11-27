@@ -33,6 +33,7 @@
     mounted: false, root: null,
     items: [], tags: [], counts: {}, total: 0,
     q: '', sort: 'recent', tag: '',
+    selected: new Set(),   // 勾选中待批量删除的 id（搜索/筛选一变就清空，避免误删看不见的刊）
     meta: null,
     current: null,     // 抽屉里正在看的期刊
     busy: false,
@@ -130,6 +131,10 @@
     const url = safeUrl(j.website);
     return `<article class="jr-row" data-id="${esc(j.id)}" tabindex="0" role="button"
       aria-label="${esc(j.name)} 详情">
+      <label class="jr-row-check" title="勾选以批量删除">
+        <input type="checkbox" class="jr-check" data-check="${esc(j.id)}"
+          aria-label="勾选《${esc(j.name)}》"${S.selected.has(j.id) ? ' checked' : ''}>
+      </label>
       <div class="jr-row-main">
         <div class="jr-row-title">
           <b>${esc(j.name)}</b>
@@ -165,7 +170,7 @@
     return S.items.length
       ? S.items.map(rowHtml).join('')
       : `<div class="jr-empty">${S.q || S.tag ? '没有匹配的期刊' : '还没有收藏期刊'}<br>
-          <span class="jr-muted">点右上「＋ 收藏期刊」手动加一本，或「从文献库导入」把读过的刊一次性收进来</span></div>`;
+          <span class="jr-muted">点右上「＋ 收藏期刊」手动加一本；收藏多了可以勾选后批量删除</span></div>`;
   }
 
   /**
@@ -179,6 +184,25 @@
     if (list) list.innerHTML = listHtml();
     const bar = $('.jr-head-title .jr-statbar');
     if (bar) bar.outerHTML = statsBar();
+    syncSelectionUI();
+  }
+
+  /** 勾选状态只活在 S.selected 里，重绘后靠它把按钮与复选框找回来 */
+  function syncSelectionUI() {
+    const n = S.selected.size;
+    const btn = $('#jrBatchDelete');
+    if (btn) {
+      btn.disabled = !n || Boolean(S.busy);
+      btn.textContent = n ? `批量删除（${n}）` : '批量删除';
+    }
+    const all = $('#jrCheckAll');
+    if (all) {
+      const ids = S.items.map((j) => j.id);
+      const picked = ids.filter((id) => S.selected.has(id)).length;
+      all.disabled = !ids.length;
+      all.checked = ids.length > 0 && picked === ids.length;
+      all.indeterminate = picked > 0 && picked < ids.length;
+    }
   }
 
   function render() {
@@ -203,7 +227,8 @@
             ${S.tags.map((t) => `<option value="${esc(t)}"${S.tag === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}
           </select>
           <button type="button" id="jrBatchRank" class="jr-btn" title="把这些刊的等级一次性查回来">刷新等级</button>
-          <button type="button" id="jrImport" class="jr-btn" title="把文献库里出现过的期刊收进来">从文献库导入</button>
+          <label class="jr-check-all" title="勾选 / 取消当前列表里的全部期刊"><input type="checkbox" id="jrCheckAll"> 全选</label>
+          <button type="button" id="jrBatchDelete" class="jr-btn danger" disabled title="删除勾选的期刊，不影响文献中心">批量删除</button>
           <button type="button" id="jrAdd" class="jr-btn primary">＋ 收藏期刊</button>
         </div>
       </div>
@@ -214,6 +239,7 @@
       <div id="jrModal" class="jr-modal hidden" role="dialog" aria-modal="true" aria-label="收藏期刊"></div>
     `;
     bind();
+    syncSelectionUI();
     if (S.current) renderDrawer();
     if (S.addOpen) renderAddModal();
   }
@@ -224,22 +250,45 @@
     const search = $('#jrSearch');
     search?.addEventListener('input', () => {
       S.q = search.value;
+      S.selected.clear();                   // 筛选变了就不保留看不见的勾选，免得误删
+      syncSelectionUI();
       clearTimeout(searchTimer);
       searchTimer = setTimeout(async () => { await load(); renderList(); }, 220);
     });
-    $('#jrSort')?.addEventListener('change', async (e) => { S.sort = e.target.value; await load(); renderList(); });
-    $('#jrTag')?.addEventListener('change', async (e) => { S.tag = e.target.value; await load(); renderList(); });
+    $('#jrSort')?.addEventListener('change', async (e) => {
+      S.sort = e.target.value; S.selected.clear(); syncSelectionUI();
+      await load(); renderList();
+    });
+    $('#jrTag')?.addEventListener('change', async (e) => {
+      S.tag = e.target.value; S.selected.clear(); syncSelectionUI();
+      await load(); renderList();
+    });
     $('#jrAdd')?.addEventListener('click', () => openAddModal());
-    $('#jrImport')?.addEventListener('click', importFromLibrary);
     $('#jrBatchRank')?.addEventListener('click', batchRank);
+    $('#jrBatchDelete')?.addEventListener('click', batchDelete);
+    $('#jrCheckAll')?.addEventListener('change', (e) => {
+      for (const j of S.items) {
+        if (e.target.checked) S.selected.add(j.id);
+        else S.selected.delete(j.id);
+      }
+      renderList();
+    });
 
+    $('.jr-list')?.addEventListener('change', (e) => {
+      const box = e.target.closest('.jr-check');
+      if (!box) return;
+      if (box.checked) S.selected.add(box.dataset.check);
+      else S.selected.delete(box.dataset.check);
+      syncSelectionUI();
+    });
     $('.jr-list')?.addEventListener('click', (e) => {
-      if (e.target.closest('a')) return;      // 官网链接自己跳
+      if (e.target.closest('a, .jr-row-check')) return;   // 官网链接 / 勾选框各管各的
       const row = e.target.closest('.jr-row');
       if (row?.dataset.id) openJournal(row.dataset.id);
     });
     $('.jr-list')?.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.target.closest('.jr-row-check')) return;
       const row = e.target.closest('.jr-row');
       if (row?.dataset.id) { e.preventDefault(); openJournal(row.dataset.id); }
     });
@@ -421,15 +470,30 @@
     return undefined;
   }
 
-  // ---------- 从文献库导入 ----------
-  async function importFromLibrary() {
+  // ---------- 批量删除 ----------
+  async function batchDelete() {
+    const ids = [...S.selected];
+    if (!ids.length) return toast('先勾选要删除的期刊', 'error');
+    if (S.busy) return undefined;
+    const picked = S.items.filter((j) => S.selected.has(j.id)).map((j) => j.name);
+    const names = picked.slice(0, 6).map((n) => `《${n}》`).join('、') + (picked.length > 6 ? ` 等 ${picked.length} 本` : '');
+    if (!window.confirm(`从收藏里移除 ${ids.length} 本期刊？\n${names}\n只删收藏，不影响文献中心。`)) return undefined;
+
+    S.busy = true;
+    syncSelectionUI();
     try {
-      const res = await api('/api/journals/import', { method: 'POST', body: { source: 'literature' } });
+      const res = await api('/api/journals/batch-delete', { method: 'POST', body: { ids } });
+      S.selected.clear();
+      if (S.current && ids.includes(S.current.id)) closeDrawer();
       await refreshAll();
-      toast(res.added ? `导入了 ${res.added} 本期刊${res.skipped ? `，${res.skipped} 本已收藏跳过` : ''}` : '文献库里的期刊都已经收藏过了');
+      toast(`已移除 ${res.deleted} 本${res.missing ? `，${res.missing} 本已不存在` : ''}`);
     } catch (e) {
       toast(e.message, 'error');
+    } finally {
+      S.busy = false;
+      syncSelectionUI();
     }
+    return undefined;
   }
 
   // ---------- 批量查等级 ----------
@@ -767,6 +831,7 @@
     if (!window.confirm('从收藏里移除这本期刊？只删收藏，不影响文献中心。')) return;
     try {
       await api(`/api/journals/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      S.selected.delete(id);
       closeDrawer();
       await refreshAll();
       toast('已移除');

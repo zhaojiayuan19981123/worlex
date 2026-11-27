@@ -51,14 +51,18 @@ test('缩放：顶部 ± 按同比例带动译文栏，适宽两边一起回位'
   assert.match(app, /function zoomPdfBy\(delta\)/, '缺少统一的缩放函数');
   assert.match(app, /function syncCmpZoomRatio\(ratio\)/, '缺少译文栏同比例缩放');
   const sync = app.slice(app.indexOf('function syncCmpZoomRatio(ratio)'), app.indexOf('function bindPdfReader()'));
-  assert.match(sync, /cmp\.style !== 'page'/, '只有版面还原才需要同步译文页缩放');
+  // v3.2.1：文本重排也接进同一条链路，不能再有「非 page 就 return」的早退
+  assert.doesNotMatch(sync, /cmp\.style !== 'page'/, '文本重排不能被排除在同步之外');
+  assert.match(sync, /cmp\.style === 'page'/, '版面还原仍走独立的译文页缩放');
+  assert.match(sync, /cmp\.flowZoom = next/, '文本重排要按同比例改等效缩放');
   assert.match(sync, /getZoom\?\.\(\) \|\| 1/, '同步时要基于译文栏当前倍数');
   assert.match(sync, /setZoom\?\.\(z \* ratio\)/, '译文栏缩放要按比例乘');
   // 按钮与 Ctrl+滚轮都走同一个函数，避免两条路径行为不一致
   assert.match(app, /\$\('prZoomIn'\)\.addEventListener\('click', \(\) => \{ zoomPdfBy\(0\.2\)/, '放大按钮没走 zoomPdfBy');
   assert.match(app, /\$\('prZoomOut'\)\.addEventListener\('click', \(\) => \{ zoomPdfBy\(-0\.2\)/, '缩小按钮没走 zoomPdfBy');
-  const fit = app.slice(app.indexOf('pr.scale = Math.max(0.5, Math.min(4, avail / size.w))'), app.indexOf('function bindPdfReader()'));
+  const fit = app.slice(app.indexOf('function fitWidth() {'), app.indexOf('function bindPdfReader()'));
   assert.match(fit, /CmpPages\?\.fitWidth/, '「适宽」没有把译文页一起复位');
+  assert.match(fit, /cmp\.flowZoom = 1/, '「适宽」也要把文本重排带回基线');
 });
 
 test('译文标注：按 blockId + 字符区间贴标记，先清后贴（幂等）', () => {
